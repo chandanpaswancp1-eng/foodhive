@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FOOD HIVE · Operations &amp; Sales Dashboard</title>
+<link rel="stylesheet" href="style.css?v=2.3">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.2.0/dist/chartjs-plugin-datalabels.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+</head>
+<body>
+<div class="app">
+
+  <!-- ============ SIDEBAR ============ -->
+  <aside class="side">
+    <div class="logo">foodhive</div>
+    <div class="logo-sub">OPERATIONS &amp; SALES</div>
+    <div class="side-icons">
+      <button class="ico-btn" id="btnPrev" title="Yesterday (Prior Day)"><img src="assets/prev.png" alt="Yesterday"></button>
+      <button class="ico-btn" id="btnAll" title="Reset All Filters"><img src="assets/all.png" alt="Reset All"></button>
+    </div>
+
+    <!-- Toggles placed above nav on Pages 1, 3, 4 -->
+    <div class="side-toggles" id="sideTogglesTop"></div>
+
+    <nav id="nav">
+      <a data-page="sales"><img src="assets/sales.png" alt=""><span>Order Details</span></a>
+      <a data-page="cancel"><img src="assets/cancel.png" alt=""><span>Cancellations</span></a>
+      <a data-page="prep"><img src="assets/prep.png" alt=""><span>Prep Time</span></a>
+      <a data-page="ratings"><img src="assets/ratings.png" alt=""><span>Ratings</span></a>
+      <a data-page="items"><img src="assets/items.png" alt=""><span>Items Detail</span></a>
+      <a data-page="delayed"><img src="assets/delayed.png" alt=""><span>Delayed Orders</span></a>
+    </nav>
+
+    <!-- Toggles placed below nav on Pages 1, 2, 5, 6 -->
+    <div class="side-toggles" id="sideTogglesBottom"></div>
+
+    <div class="side-foot">
+      <div id="srcBadge" class="src-badge live">● Live · GrubCENTER (2614)</div>
+      <button class="btn-dark" id="btnData">Data source</button>
+    </div>
+  </aside>
+
+  <!-- ============ MAIN CONTENT ============ -->
+  <main class="main">
+
+    <!-- PAGE 1 : SALES / ORDER DETAILS -->
+    <section class="page on" id="page-sales">
+      <header class="filters" id="filters-sales"></header>
+      <div class="kpis" id="kpi-sales">
+        <div class="kpi"><div class="kh">Net Sales</div><div class="kv">103.94K</div></div>
+        <div class="kpi"><div class="kh">Receipt Total</div><div class="kv">113.11K</div></div>
+        <div class="kpi"><div class="kh">Total Orders</div><div class="kv">2466</div></div>
+        <div class="kpi"><div class="kh">AOV</div><div class="kv">42.15</div></div>
+        <div class="kpi"><div class="kh">Total Discount</div><div class="kv">61.34K</div></div>
+        <div class="kpi"><div class="kh">Discount %</div><div class="kv">59.02%</div></div>
+        <div class="kpi"><div class="kh">Avg RunRate</div><div class="kv">2.17K</div></div>
+        <div class="kpi"><div class="kh">Projected RR</div><div class="kv">64.96K</div></div>
+        <div class="kpi wide"><div class="kh">Top Performing Brand</div><div class="kv">Manakeesh Corner Dine In</div></div>
+      </div>
+      <div class="grid g-sales">
+        <div class="panel a-brand">
+          <div class="ph" id="t-brand">Brands by Net Sales | Total Orders</div>
+          <div class="pb"><canvas id="c-brand"></canvas></div>
+        </div>
+        <div class="panel a-time">
+          <div class="seg" id="grainSeg"></div>
+          <div class="ph">Net Sales | Total Orders Over time</div>
+          <div class="pb"><canvas id="c-time"></canvas></div>
+        </div>
+        <div class="panel a-loc">
+          <div class="ph">Net Sales | Total Orders Location</div>
+          <div class="pb"><canvas id="c-loc"></canvas></div>
+        </div>
+        <div class="panel a-slot">
+          <div class="ph">Net Sales | Total Orders by Time-Slot</div>
+          <div class="pb"><canvas id="c-slot"></canvas></div>
+        </div>
+        <div class="panel a-chan">
+          <div class="ph">Net Sales | Total Orders by Channel</div>
+          <div class="pb"><canvas id="c-chan"></canvas></div>
+        </div>
+        <div class="panel a-tod">
+          <div class="ph">Net Sales | Total Orders by Date and Time of Day</div>
+          <div class="pb"><canvas id="c-tod"></canvas></div>
+        </div>
+        <div class="panel a-hour">
+          <div class="ph">Net Sales | Total Orders by Hours</div>
+          <div class="pb"><canvas id="c-hour"></canvas></div>
+        </div>
+        <div class="panel a-dow">
+          <div class="ph">Net Sales | Total Orders by Day of Week</div>
+          <div class="pb"><canvas id="c-dow"></canvas></div>
+        </div>
+        <div class="panel a-disc">
+          <div class="ph">Discount by Channel</div>
+          <div class="pb">
+            <canvas id="c-disc"></canvas>
+            <div class="donut-total">
+              <span>Total Discount</span>
+              <b id="discTotal">–</b>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- PAGE 2 : CANCELLATIONS -->
+    <section class="page" id="page-cancel">
+      <div class="top-row-flex">
+        <div class="kpis" id="kpi-cancel">
+          <div class="kpi"><div class="kh">Cancelled Orders Amount</div><div class="kv">6.74K</div></div>
+          <div class="kpi"><div class="kh">Total Orders</div><div class="kv">148</div></div>
+          <div class="kpi"><div class="kh">AOV</div><div class="kv">45.54</div></div>
+        </div>
+        <header class="filters" id="filters-cancel"></header>
+      </div>
+      <div class="grid g-cancel">
+        <div class="panel">
+          <div class="ph">Orders Value | Total Orders by Locations</div>
+          <div class="pb"><canvas id="c-cloc"></canvas></div>
+        </div>
+        <div class="panel">
+          <div class="ph">Orders Value | Total Orders by Channel</div>
+          <div class="pb"><canvas id="c-cchan"></canvas></div>
+        </div>
+        <div class="panel">
+          <div class="ph">Orders Value | Total Orders by Post Cancelled</div>
+          <div class="pb"><canvas id="c-cpost"></canvas></div>
+        </div>
+        <div class="panel">
+          <div class="ph" id="t-cbrand">Orders Value | Total Orders by Brand</div>
+          <div class="pb"><canvas id="c-cbrand"></canvas></div>
+        </div>
+        <div class="panel wide">
+          <div class="ph">Orders Value | Total Orders Trend</div>
+          <div class="pb"><canvas id="c-ctrend"></canvas></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- PAGE 3 : PREP TIME -->
+    <section class="page" id="page-prep">
+      <div class="kpis" id="kpi-prep">
+        <div class="kpi"><div class="kh">Acc → Started</div><div class="kv">2.54</div></div>
+        <div class="kpi"><div class="kh">Started → Prepared</div><div class="kv">14.37</div></div>
+        <div class="kpi"><div class="kh">Prepared → STD</div><div class="kv">1.27</div></div>
+        <div class="kpi"><div class="kh">STD → Dispatched</div><div class="kv">2.11</div></div>
+        <div class="kpi"><div class="kh">Receiving → Dispatched</div><div class="kv">20.06</div></div>
+        <div class="kpi"><div class="kh">Received → Delivered</div><div class="kv">43.36</div></div>
+        <div class="kpi wide"><div class="kh">Best vs Worst Brand Location</div><div class="kv">🏆 Best outlet The Manooshe Lab - Motor City – 13.6 min | 🚨 Underperforming: Furn Al-Dar - Motor City – 32.4 min</div></div>
+      </div>
+      <div class="prep-wrap">
+        <div class="range-col">
+          <div class="prep-filters" id="filters-prep"></div>
+          <div class="range-sliders" id="rangeCol"></div>
+        </div>
+        <div class="prep-main">
+          <div class="grid g-prep" id="prepCharts"></div>
+          <div class="grid g-prep2">
+            <div class="panel"><div class="tbl-wrap"><table id="prepTable"></table></div></div>
+            <div class="panel"><div class="ph">Count of Location by Location</div><div class="pb"><canvas id="c-ploc"></canvas></div></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- PAGE 4 : RATINGS -->
+    <section class="page" id="page-ratings">
+      <div class="top-row-flex">
+        <div class="kpis" id="kpi-ratings">
+          <div class="kpi"><div class="kh">Total Ratings</div><div class="kv">2458</div></div>
+          <div class="kpi"><div class="kh">Negative Ratings</div><div class="kv">285</div></div>
+          <div class="kpi"><div class="kh">Positive Ratings</div><div class="kv">2173</div></div>
+          <div class="kpi"><div class="kh">Negative Ratings %</div><div class="kv">11.59%</div></div>
+          <div class="kpi"><div class="kh">Polarity rate</div><div class="kv">88.41%</div></div>
+        </div>
+        <header class="filters" id="filters-ratings"></header>
+      </div>
+      <div class="rt-wrap">
+        <div class="grid g-ratings">
+          <div class="panel"><div class="ph">Best Locations By Rating</div><div class="pb"><canvas id="c-rbl"></canvas></div></div>
+          <div class="panel"><div class="ph">Worst Locations by Ratings</div><div class="pb"><canvas id="c-rwl"></canvas></div></div>
+          <div class="panel"><div class="ph" id="t-rbb">Best Brands By Rating</div><div class="pb"><canvas id="c-rbb"></canvas></div></div>
+          <div class="panel"><div class="ph" id="t-rwb">Worst Brands By Ratings</div><div class="pb"><canvas id="c-rwb"></canvas></div></div>
+          <div class="panel wide"><div class="ph">Ratings By Location And Vendor Area DrillThrough</div><div class="pb"><canvas id="c-rall"></canvas></div></div>
+          <div class="panel"><div class="ph">Avg. Order Rating Distribution</div><div class="pb"><canvas id="c-rdist"></canvas></div></div>
+        </div>
+        <div class="lists">
+          <div class="listbox"><div class="ph">Brand</div><input id="srchBrand" placeholder="Search"><ul id="lstBrand"></ul></div>
+          <div class="listbox"><div class="ph">Location</div><input id="srchLoc" placeholder="Search"><ul id="lstLoc"></ul></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- PAGE 5 : ITEMS DETAIL (86 ITEMS) -->
+    <section class="page" id="page-items">
+      <div class="top-row-flex">
+        <div class="kpis" id="kpi-items">
+          <div class="kpi"><div class="kh">86 Items</div><div class="kv">87</div></div>
+          <div class="kpi"><div class="kh">Brand with Most 86 Items</div><div class="kv">House Of Fatayer</div></div>
+          <div class="kpi"><div class="kh">Location with Most 86 Items</div><div class="kv">Motor City</div></div>
+        </div>
+        <header class="filters" id="filters-items"></header>
+      </div>
+      <div class="grid g-items">
+        <div class="panel i-brand"><div class="ph" id="t-ibrand">86 Items and %GT 86 Items by Brand</div><div class="pb"><canvas id="c-ibrand"></canvas></div></div>
+        <div class="panel i-loc"><div class="ph">86 Items and %GT 86 Items by Location</div><div class="pb"><canvas id="c-iloc"></canvas></div></div>
+        <div class="panel i-dist"><div class="ph">Total 86 Items Distribution</div><div class="pb"><canvas id="c-idist"></canvas></div></div>
+        <div class="panel i-src"><div class="ph">Distribution by Source</div><div class="pb"><canvas id="c-isrc"></canvas></div></div>
+        <div class="panel i-typ"><div class="ph">Distribution by Type</div><div class="pb"><canvas id="c-ityp"></canvas></div></div>
+        <div class="panel i-trend"><div class="ph">86 Items Trend</div><div class="pb"><canvas id="c-itrend"></canvas></div></div>
+      </div>
+    </section>
+
+    <!-- PAGE 6 : DELAYED ORDERS -->
+    <section class="page" id="page-delayed">
+      <div class="top-row-flex">
+        <div class="kpis" id="kpi-delayed">
+          <div class="kpi"><div class="kh">Total Orders</div><div class="kv">2458</div></div>
+          <div class="kpi"><div class="kh">Delayed Orders</div><div class="kv">11</div></div>
+          <div class="kpi"><div class="kh">&gt; 10 Minutes %</div><div class="kv">0.45%</div></div>
+        </div>
+        <header class="filters" id="filters-delayed"></header>
+      </div>
+      <div class="grid g-delayed">
+        <div class="panel"><div class="ph">Completed Orders and Orders Delayed more than 10 minutes</div><div class="pb"><canvas id="c-dbrand"></canvas></div></div>
+        <div class="panel"><div class="ph">Vendor Preparation Time &amp; Estimated Preparation Time By Vendor</div><div class="pb"><canvas id="c-dprep"></canvas></div></div>
+        <div class="panel"><div class="ph">Completed orders and delayed orders more than 10 minutes</div><div class="pb"><canvas id="c-dloc"></canvas></div></div>
+        <div class="panel"><div class="tbl-wrap"><table id="delayTable"></table></div></div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<!-- DATA SOURCE MODAL -->
+<div class="modal" id="modal" hidden>
+  <div class="modal-card">
+    <h3>Data source</h3>
+    <p id="mStatus" class="muted"></p>
+    <div class="row">
+      <button class="btn-dark" id="mLive">Load from GrubCENTER (live)</button>
+      <button class="btn-dark" id="mCached" style="background:#2A2830">Load Historical Exports (1,860+ Orders)</button>
+      <label class="btn-yellow">Import CSV / XLSX<input type="file" id="mFile" accept=".csv,.xlsx,.xls" multiple hidden></label>
+      <button class="btn-yellow" id="mDemo">Use demo data</button>
+    </div>
+    <p class="muted small">Live mode connects to GrubCENTER reporting endpoints. Historical exports load the 18 decrypted FoodHive files. Demo mode shows synthetic testing data.</p>
+    <pre id="mLog" class="log"></pre>
+    <div class="row end"><button class="btn-dark" id="mClose">Close</button></div>
+  </div>
+</div>
+
+<script src="normalize.js?v=2.3"></script>
+<script src="app.js?v=2.3"></script>
+</body>
+</html>
