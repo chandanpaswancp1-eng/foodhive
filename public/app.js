@@ -63,9 +63,11 @@ function destroyAllCharts() {
  * canvas during a heavy synchronous burst of chart creation (no error, no
  * event fires -- the canvas just stays blank). A forced redraw shortly
  * after creation, and periodically thereafter, reliably repaints it. */
-setInterval(() => {
+function repaintAllCharts() {
   Object.values(charts).forEach(c => { try { c.update('none'); } catch (_) {} });
-}, 2000);
+}
+setTimeout(repaintAllCharts, 600);
+setInterval(repaintAllCharts, 2000);
 function mk(id, cfg) {
   if (charts[id]) charts[id].destroy();
   const el = document.getElementById(id); if (!el) return;
