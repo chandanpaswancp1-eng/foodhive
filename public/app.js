@@ -56,6 +56,9 @@ const pbiTooltip = {
 
 // ---------------- charts ----------------
 const charts = {};
+function destroyAllCharts() {
+  Object.keys(charts).forEach(id => { charts[id].destroy(); delete charts[id]; });
+}
 function mk(id, cfg) {
   if (charts[id]) charts[id].destroy();
   const el = document.getElementById(id); if (!el) return;
@@ -844,6 +847,7 @@ function render() { RENDER[S.page](); }
 
 function show(page) {
   S.page = page;
+  destroyAllCharts();
   try { if (location.hash.slice(1) !== page) location.hash = page; } catch (_) {}
   $$('.page').forEach(p => p.classList.toggle('on', p.id === 'page-' + page));
   $$('#nav a').forEach(a => a.classList.toggle('on', a.dataset.page === page));
