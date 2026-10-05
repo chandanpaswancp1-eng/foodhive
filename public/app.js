@@ -102,6 +102,7 @@ const pbiTooltip = {
 
 // ---------------- charts ----------------
 const charts = {};
+window.charts = charts;
 function destroyAllCharts() {
   Object.keys(charts).forEach(id => { charts[id].destroy(); delete charts[id]; });
 }
@@ -504,6 +505,33 @@ const slotOf = h => (SLOTS.find(s => h >= s[1] && h <= s[2]) || SLOTS[5])[0];
 const todOf = h => (h >= 5 && h < 12 ? 'Morning' : h >= 12 && h < 17 ? 'Afternoon' : h >= 17 && h < 21 ? 'Evening' : 'Night');
 const grainKey = { Daily: t => dkey(t), Weekly: t => { const d = new Date(t); const x = new Date(d); x.setDate(d.getDate() - ((d.getDay() + 6) % 7)); return dkey(x); }, Monthly: t => dkey(t).slice(0, 7), Quarterly: t => { const d = new Date(t); return d.getFullYear() + ' Q' + (Math.floor(d.getMonth() / 3) + 1); }, Yearly: t => String(new Date(t).getFullYear()) };
 
+function timeRangeForGrain(key, grain) {
+  if (grain === 'Daily') return [key, key];
+  if (grain === 'Weekly') {
+    const start = new Date(key + 'T00:00:00');
+    const end = new Date(start);
+    end.setDate(end.getDate() + 6);
+    return [dkey(start), dkey(end)];
+  }
+  if (grain === 'Monthly') {
+    const [y, m] = key.split('-').map(Number);
+    const start = new Date(y, m - 1, 1);
+    const end = new Date(y, m, 0);
+    return [dkey(start), dkey(end)];
+  }
+  if (grain === 'Quarterly') {
+    const [y, qStr] = key.split(' Q');
+    const q = Number(qStr);
+    const start = new Date(+y, (q - 1) * 3, 1);
+    const end = new Date(+y, q * 3, 0);
+    return [dkey(start), dkey(end)];
+  }
+  if (grain === 'Yearly') {
+    return [`${key}-01-01`, `${key}-12-31`];
+  }
+  return [key, key];
+}
+
 function renderSales() {
   const all = base('sales'); const O = all.filter(o => !o.cancelled);
   const net = sum(O, o => o.netSales), rec = sum(O, o => o.receiptTotal), disc = sum(O, o => o.discount), n = O.length;
@@ -583,11 +611,71 @@ function renderSales() {
     b.onclick = () => { S.ui.grain = g; renderSales(); };
     gs.appendChild(b);
   });
-  const ts = salesAgg(O, o => grainKey[S.ui.grain](o.receivedAt)).sort((a, b) => (a.k < b.k ? -1 : 1));
+
+  const phTime = $('#t-time');
+  if (phTime) {
+    phTime.textContent = `${mname} Over time`;
+    phTime.style.cursor = 'pointer';
+    phTime.title = `Currently viewing ${mname}. Click to toggle Net Sales | Total Orders`;
+    phTime.onclick = () => {
+      S.ui.metric = (S.ui.metric === 'sales' ? 'orders' : 'sales');
+      buildToggles();
+      renderSales();
+    };
+  }
+  const f = S.f;
+  const timeOrders = S.orders.filter(o => {
+    if (o.cancelled) return false;
+    if (!eq(o.brand, f.brand) || !eq(o.location, f.location)) return false;
+    if (!eq(o.channel, f.channel) || !eq(o.payment, f.payment) || !eq(o.partner, f.partner)) return false;
+    if (f.day !== 'All' && dowOf(o.receivedAt) !== f.day) return false;
+    return true;
+  });
+  const ts = salesAgg(timeOrders, o => grainKey[S.ui.grain](o.receivedAt)).sort((a, b) => (a.k < b.k ? -1 : 1));
+
+  const timeBarColors = ts.map(r => {
+    const [f, t] = timeRangeForGrain(r.k, S.ui.grain);
+    const isActive = S.f.from === f && S.f.to === t;
+    return isActive ? '#1d1d1d' : Y;
+  });
+
+  const tOpts = baseOpts({
+    onHover: (e, el) => {
+      if (e.native && e.native.target) {
+        e.native.target.style.cursor = el && el.length ? 'pointer' : 'default';
+      }
+    },
+    onClick: (e, elements, chart) => {
+      if (!elements || !elements.length) return;
+      const idx = elements[0].index;
+      const label = chart ? chart.data.labels[idx] : ts[idx]?.k;
+      if (!label) return;
+      const [f, t] = timeRangeForGrain(label, S.ui.grain);
+      if (S.f.from === f && S.f.to === t) {
+        setDates(...fullRange());
+      } else {
+        setDates(f, t);
+      }
+      dateChanged();
+    },
+    scales: {
+      x: { ...gridless, ticks: { maxTicksLimit: 12, font: { size: 10 } } },
+      y: { beginAtZero: true, ticks: { callback: mf, maxTicksLimit: 5 }, grid: { color: '#eee' }, title: { display: true, text: mname } }
+    }
+  });
+
   mk('c-time', ts.length ? {
     type: 'bar',
-    data: { labels: ts.map(r => r.k), datasets: [{ label: mname, data: ts.map(r => metricOf(r, m)), backgroundColor: Y, datalabels: ts.length > 20 ? { display: false } : lbl(mf) }] },
-    options: baseOpts({ scales: { x: { ...gridless, ticks: { maxTicksLimit: 12, font: { size: 10 } } }, y: { beginAtZero: true, ticks: { callback: mf, maxTicksLimit: 5 }, grid: { color: '#eee' }, title: { display: true, text: mname } } } })
+    data: {
+      labels: ts.map(r => r.k),
+      datasets: [{
+        label: mname,
+        data: ts.map(r => metricOf(r, m)),
+        backgroundColor: timeBarColors,
+        datalabels: ts.length > 20 ? { display: false } : lbl(mf)
+      }]
+    },
+    options: tOpts
   } : { __empty: true });
 
   const loc = salesAgg(O, o => o.location).sort((a, b) => metricOf(b, m) - metricOf(a, m)).slice(0, 10).map(r => ({ k: r.k, v: metricOf(r, m), orders: r.orders }));
@@ -668,21 +756,56 @@ function renderCancel() {
   $('#t-cbrand').textContent = `Orders Value | Total Orders by ${S.ui.cgroup === 'brand' ? 'Brand' : 'Cuisine'}`;
   hbar('c-cbrand', salesAgg(C, o => gk(o, S.ui.cgroup)).map(r => ({ k: r.k, v: mv(r) })).sort((a, b) => b.v - a.v).slice(0, 14), { fmt: lbf, filterKey: S.ui.cgroup === 'brand' ? 'brand' : 'cuisine' });
 
-  const tr = salesAgg(C, o => dkey(o.receivedAt)).sort((a, b) => (a.k < b.k ? -1 : 1));
+  const timeCancel = S.orders.filter(o => {
+    if (!o.cancelled) return false;
+    if (!eq(o.brand, S.f.brand) || !eq(o.location, S.f.location)) return false;
+    if (!eq(o.channel, S.f.channel) || !eq(o.reason, S.f.reason)) return false;
+    if (S.f.post !== 'All' && (S.f.post === 'Yes') !== o.postCancelled) return false;
+    return true;
+  });
+  const tr = salesAgg(timeCancel, o => dkey(o.receivedAt)).sort((a, b) => (a.k < b.k ? -1 : 1));
   const tot = n || 1;
+  const cBarColors = tr.map(r => {
+    const isActive = S.f.from === r.k && S.f.to === r.k;
+    return isActive ? '#1d1d1d' : Y;
+  });
+
+  const cTrendOpts = baseOpts({
+    onHover: (e, el) => {
+      if (e.native && e.native.target) {
+        e.native.target.style.cursor = el && el.length ? 'pointer' : 'default';
+      }
+    },
+    onClick: (e, elements) => {
+      if (!elements || !elements.length) return;
+      const idx = elements[0].index;
+      const row = tr[idx];
+      if (!row) return;
+      if (S.f.from === row.k && S.f.to === row.k) {
+        setDates(...fullRange());
+      } else {
+        setDates(row.k, row.k);
+      }
+      dateChanged();
+    },
+    plugins: { legend: { display: true, position: 'top', align: 'start', labels: { boxWidth: 8, boxHeight: 8, font: { size: 10 } } } },
+    scales: {
+      x: { ...gridless, ticks: { maxTicksLimit: 31, font: { size: 10 } } },
+      y: { beginAtZero: true, ticks: { callback: lbf, maxTicksLimit: 5 }, grid: { color: '#eee' } },
+      y1: { position: 'right', beginAtZero: true, grid: { display: false }, ticks: { callback: v => v + '%', maxTicksLimit: 5 } }
+    }
+  });
+
   mk('c-ctrend', tr.length ? {
     type: 'bar',
     data: {
       labels: tr.map(r => r.k.slice(5)),
       datasets: [
-        { type: 'bar', label: val ? 'Orders Value' : 'Cancelled Orders', data: tr.map(mv), backgroundColor: Y, yAxisID: 'y', order: 2, datalabels: tr.length > 32 ? { display: false } : lbl(lbf) },
+        { type: 'bar', label: val ? 'Orders Value' : 'Cancelled Orders', data: tr.map(mv), backgroundColor: cBarColors, yAxisID: 'y', order: 2, datalabels: tr.length > 32 ? { display: false } : lbl(lbf) },
         { type: 'line', label: '%GT Cancelled Orders', data: tr.map(r => r.orders / tot * 100), borderColor: BLUE, backgroundColor: BLUE, borderWidth: 1.6, pointRadius: 2, tension: .35, yAxisID: 'y1', order: 1, datalabels: tr.length > 32 ? { display: false } : pctLbl() }
       ]
     },
-    options: baseOpts({
-      plugins: { legend: { display: true, position: 'top', align: 'start', labels: { boxWidth: 8, boxHeight: 8, font: { size: 10 } } } },
-      scales: { x: { ...gridless, ticks: { maxTicksLimit: 31, font: { size: 10 } } }, y: { beginAtZero: true, ticks: { callback: lbf, maxTicksLimit: 5 }, grid: { color: '#eee' } }, y1: { position: 'right', beginAtZero: true, grid: { display: false }, ticks: { callback: v => v + '%', maxTicksLimit: 5 } } }
-    })
+    options: cTrendOpts
   } : { __empty: true });
 }
 
@@ -1328,7 +1451,9 @@ function loadDemo() {
   window.S = S;
   window.show = show;
   window.render = render;
+  window.charts = charts;
+  window.timeRangeForGrain = timeRangeForGrain;
   window.syncFilterUI = syncFilterUI;
-  window.FoodHive = { S, show, render, setData, base, syncFilterUI };
+  window.FoodHive = { S, show, render, setData, base, syncFilterUI, charts };
 })();
 })();
