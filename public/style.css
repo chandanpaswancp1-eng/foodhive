@@ -1,6 +1,6 @@
 :root {
-  --y: #EDAE00;
-  --y2: #F1C038;
+  --y: #F5BC1D;
+  --y2: #F7CB4F;
   --k: #1d1d1d;
   --g: #5f5f5f;
   --bg: #EEF3F4;
@@ -31,12 +31,19 @@ body {
   height: 100vh;
   overflow-y: auto;
 }
+.logo-card {
+  background: #fff;
+  border-radius: 10px;
+  padding: 10px 10px 8px;
+  margin: 4px 0 8px;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.14);
+}
 .logo-img {
   display: block;
   width: 100%;
   max-width: 150px;
   height: auto;
-  margin: 6px auto 2px;
+  margin: 0 auto;
 }
 .logo-sub {
   font-size: 8.5px;

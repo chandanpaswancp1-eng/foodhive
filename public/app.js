@@ -21,7 +21,7 @@ Chart.defaults.plugins.datalabels.display = false;
 // other charts queued in the same shared animation frame, leaving them blank.
 Chart.defaults.animation = false;
 
-const Y = '#EDAE00', K = '#1d1d1d', GREY = '#666', BLUE = '#1b2a9b', LIGHT = '#F6D680';
+const Y = '#F5BC1D', K = '#1d1d1d', GREY = '#666', BLUE = '#1b2a9b', LIGHT = '#FADE8E';
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const sum = (a, f) => a.reduce((s, x) => s + f(x), 0);
@@ -48,7 +48,7 @@ const gk = (o, g) => (g === 'brand' ? o.brand : o.cuisine);
 // ---------------- tooltip styling (Power BI Dark) ----------------
 const pbiTooltip = {
   backgroundColor: '#1d1d1d',
-  titleColor: '#EDAE00',
+  titleColor: '#F5BC1D',
   titleFont: { weight: 'bold', size: 12 },
   bodyColor: '#ffffff',
   bodyFont: { size: 11 },
@@ -106,7 +106,7 @@ function combo(id, rows, { vk = 'v', name = 'Value', pctName = '%GT', fmt = mone
   const total = sum(rows, r => r[vk]) || 1;
   const many = rows.length > 26;
   const curF = filterKey ? S.f[filterKey] : 'All';
-  const colors = rows.map(r => (curF !== 'All' && r.k !== curF ? '#F7DB8C' : color));
+  const colors = rows.map(r => (curF !== 'All' && r.k !== curF ? '#FAE199' : color));
 
   const ds = [{
     type: 'bar', label: name, data: rows.map(r => r[vk]), backgroundColor: colors, order: 2, yAxisID: 'y',
@@ -136,7 +136,7 @@ function combo(id, rows, { vk = 'v', name = 'Value', pctName = '%GT', fmt = mone
 function hbar(id, rows, { fmt = money, color = Y, name = 'Value', filterKey } = {}) {
   if (!rows.length) return mk(id, { __empty: true });
   const curF = filterKey ? S.f[filterKey] : 'All';
-  const colors = rows.map(r => (curF !== 'All' && r.k !== curF ? '#F7DB8C' : color));
+  const colors = rows.map(r => (curF !== 'All' && r.k !== curF ? '#FAE199' : color));
   const opts = baseOpts({
     indexAxis: 'y', layout: { padding: { right: 38, top: 2 } },
     scales: { y: { ...gridless, ticks: { font: { size: 10 }, autoSkip: false, callback(v) { return trunc(this.getLabelForValue(v), 20); } } }, x: { beginAtZero: true, ticks: { callback: fmt, maxTicksLimit: 5 }, grid: { color: '#eee' } } }
@@ -147,7 +147,7 @@ function hbar(id, rows, { fmt = money, color = Y, name = 'Value', filterKey } = 
 
 function donut(id, rows, { fmt = money, colors, legend = 'right', pctLabels = true, filterKey } = {}) {
   if (!rows.length) return mk(id, { __empty: true });
-  const pal = colors || ['#EDAE00', '#3a3a3a', '#1e88e5', '#ff7043', '#8e24aa', '#ec407a', '#26a69a', '#7cb342', '#795548', '#9e9e9e'];
+  const pal = colors || ['#F5BC1D', '#3a3a3a', '#1e88e5', '#ff7043', '#8e24aa', '#ec407a', '#26a69a', '#7cb342', '#795548', '#9e9e9e'];
   const tot = sum(rows, r => r.v) || 1;
   const opts = baseOpts({
     cutout: '58%', layout: { padding: 6 },
@@ -207,7 +207,7 @@ function lineChart(id, labels, series, { fmt = money, smooth = true, fill = fals
 function barsPlain(id, rows, { color = Y, fmt = v => v.toFixed(1), name = 'Value', filterKey } = {}) {
   if (!rows.length) return mk(id, { __empty: true });
   const curF = filterKey ? S.f[filterKey] : 'All';
-  const colors = rows.map(r => (curF !== 'All' && r.k !== curF ? '#F7DB8C' : color));
+  const colors = rows.map(r => (curF !== 'All' && r.k !== curF ? '#FAE199' : color));
   const opts = baseOpts({
     scales: { x: { ...gridless, ticks: { maxRotation: 70, minRotation: 55, autoSkip: false, font: { size: 9 }, callback(v) { return trunc(this.getLabelForValue(v), 16); } } }, y: { display: false, beginAtZero: true } }
   });
