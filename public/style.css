@@ -292,23 +292,6 @@ nav a.on { background: #fff; border-color: var(--k); }
   background: #e6b800;
   color: #000;
 }
-.kpi .click-hint {
-  position: absolute;
-  top: 3px;
-  right: 5px;
-  font-size: 8px;
-  font-weight: 800;
-  letter-spacing: 0.4px;
-  color: #665200;
-  background: rgba(255, 255, 255, 0.6);
-  padding: 1px 4px;
-  border-radius: 2px;
-  pointer-events: none;
-}
-.kpi.active .click-hint {
-  background: #1d1d1d;
-  color: #FDCB3C;
-}
 .kpi.wide { flex: 2.2; }
 .kpi .kh {
   background: var(--y);

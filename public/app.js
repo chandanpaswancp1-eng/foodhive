@@ -478,11 +478,9 @@ function kpis(id, list) {
   container.innerHTML = list.map(([h, v, wide, , isActive, tooltip], idx) => {
     const act = isActive ? ' active' : '';
     const tip = tooltip ? ` title="${esc(tooltip)}"` : ' title="Click to filter/reflect data"';
-    const hint = isActive ? 'ACTIVE' : 'FILTER';
     return `<div class="kpi${wide ? ' wide' : ''}${act}" data-idx="${idx}"${tip} role="button" tabindex="0">
       <div class="kh">${h}</div>
       <div class="kv">${v}</div>
-      <div class="click-hint">${hint}</div>
     </div>`;
   }).join('');
 
