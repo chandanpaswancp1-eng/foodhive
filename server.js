@@ -99,10 +99,8 @@ async function gt(method, base, p, query, body) {
 const rowsOf = d => Array.isArray(d) ? d : (d && (d.rows || d.data || d.items || d.content || d.results || d.orders || d.records)) || [];
 const bounds = (from, to) => ({ timezone: CFG.timezone, from: `${from}T00:00:00.000Z`, to: `${to}T23:59:59.999Z` });
 
-// Fast parallelized paging
-async function fetchPaged(pathPart, from, to, maxPages = 20) {
-  const s = await ensureSession();
-  const pid = findPartnerId(s.claims);
+// Fetch one single-day range, with offset pagination for busy days.
+async function fetchPagedOneRange(pathPart, from, to, maxPages, s, pid) {
   let lastErr;
   for (const base of CFG.apiBases) {
     try {
@@ -132,6 +130,37 @@ async function fetchPaged(pathPart, from, to, maxPages = 20) {
     } catch (e) { lastErr = e; if (e.status && ![404, 405].includes(e.status)) throw e; }
   }
   throw lastErr;
+}
+
+// GrubCENTER's order-details endpoint silently caps a wide [from, to] range
+// to roughly one page's worth of (apparently most-recent) rows instead of
+// paginating through the whole range -- confirmed experimentally: a single
+// day returns its true, complete count (e.g. matches GrubCENTER's own
+// "Yesterday" dashboard figure exactly), but a 3-day range returns FEWER
+// total rows than that single busiest day alone returns by itself. Querying
+// day-by-day and merging is the only way to get a complete pull.
+function dayChunks(from, to) {
+  const days = [];
+  for (let d = new Date(from + 'T00:00:00Z'); d <= new Date(to + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + 1)) {
+    days.push(d.toISOString().slice(0, 10));
+  }
+  return days;
+}
+
+async function fetchPaged(pathPart, from, to, maxPages = 20) {
+  const s = await ensureSession();
+  const pid = findPartnerId(s.claims);
+  const days = dayChunks(from, to);
+  const CONCURRENCY = 5;
+  const all = [];
+  for (let i = 0; i < days.length; i += CONCURRENCY) {
+    const batch = days.slice(i, i + CONCURRENCY);
+    const results = await Promise.all(batch.map(day =>
+      fetchPagedOneRange(pathPart, day, day, maxPages, s, pid).catch(() => [])
+    ));
+    results.forEach(rows => all.push(...rows));
+  }
+  return all;
 }
 
 // ---------- IN-MEMORY HIGH PERFORMANCE CACHE ----------

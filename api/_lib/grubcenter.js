@@ -80,8 +80,7 @@ async function gt(method, base, p, query, body, session) {
 const rowsOf = d => Array.isArray(d) ? d : (d && (d.rows || d.data || d.items || d.content || d.results || d.orders || d.records)) || [];
 const bounds = (from, to) => ({ timezone: CFG.timezone, from: `${from}T00:00:00.000Z`, to: `${to}T23:59:59.999Z` });
 
-async function fetchPaged(pathPart, from, to, maxPages, session) {
-  const pid = findPartnerId(session.claims);
+async function fetchPagedOneRange(pathPart, from, to, maxPages, session, pid) {
   let lastErr;
   for (const base of CFG.apiBases) {
     try {
@@ -110,6 +109,40 @@ async function fetchPaged(pathPart, from, to, maxPages, session) {
     } catch (e) { lastErr = e; if (e.status && ![404, 405].includes(e.status)) throw e; }
   }
   throw lastErr;
+}
+
+// GrubCENTER's order-details endpoint silently caps a wide [from, to] range
+// to roughly one page's worth of (apparently most-recent) rows instead of
+// paginating through the whole range -- confirmed experimentally against
+// the live API: a single day returns its true, complete count (matches
+// GrubCENTER's own dashboard exactly), but a multi-day range returns FEWER
+// total rows than that range's single busiest day returns by itself.
+// Querying day-by-day and merging is the only way to get a complete pull.
+// Note: on Vercel this means sync duration scales with the day count in
+// [from, to] -- keep the window reasonable (the default 45 days is already
+// chunked into CONCURRENCY-sized batches below) or it may hit the
+// function's max execution duration.
+function dayChunks(from, to) {
+  const days = [];
+  for (let d = new Date(from + 'T00:00:00Z'); d <= new Date(to + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + 1)) {
+    days.push(d.toISOString().slice(0, 10));
+  }
+  return days;
+}
+
+async function fetchPaged(pathPart, from, to, maxPages, session) {
+  const pid = findPartnerId(session.claims);
+  const days = dayChunks(from, to);
+  const CONCURRENCY = 5;
+  const all = [];
+  for (let i = 0; i < days.length; i += CONCURRENCY) {
+    const batch = days.slice(i, i + CONCURRENCY);
+    const results = await Promise.all(batch.map(day =>
+      fetchPagedOneRange(pathPart, day, day, maxPages, session, pid).catch(() => [])
+    ));
+    results.forEach(rows => all.push(...rows));
+  }
+  return all;
 }
 
 const today = () => new Date().toISOString().slice(0, 10);
