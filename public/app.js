@@ -12,7 +12,14 @@ Chart.register(ChartDataLabels);
 Chart.defaults.font.family = "'Segoe UI', Inter, Arial, sans-serif";
 Chart.defaults.font.size = 11;
 Chart.defaults.plugins.datalabels.display = false;
-Chart.defaults.animation = { duration: 200 };
+// Animations off: Chart.js only builds its per-property Animation object when
+// duration is truthy (see Animations._createAnimations); with it on, any
+// property whose from/to/current value resolves to `undefined` (e.g. an
+// element present in one render but not the next) hits
+// `interpolators[cfg.type || typeof from]` with no matching key and throws
+// "this._fn is not a function", aborting that paint -- which can also starve
+// other charts queued in the same shared animation frame, leaving them blank.
+Chart.defaults.animation = false;
 
 const Y = '#FDCB3C', K = '#1d1d1d', GREY = '#666', BLUE = '#1b2a9b', LIGHT = '#FFE79A';
 const $ = (s, r = document) => r.querySelector(s);
@@ -59,15 +66,6 @@ const charts = {};
 function destroyAllCharts() {
   Object.keys(charts).forEach(id => { charts[id].destroy(); delete charts[id]; });
 }
-/** Some WebKit/Safari builds silently drop the paint of a freshly-created
- * canvas during a heavy synchronous burst of chart creation (no error, no
- * event fires -- the canvas just stays blank). A forced redraw shortly
- * after creation, and periodically thereafter, reliably repaints it. */
-function repaintAllCharts() {
-  Object.values(charts).forEach(c => { try { c.update('none'); } catch (_) {} });
-}
-setTimeout(repaintAllCharts, 600);
-setInterval(repaintAllCharts, 2000);
 function mk(id, cfg) {
   if (charts[id]) charts[id].destroy();
   const el = document.getElementById(id); if (!el) return;
