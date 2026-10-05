@@ -293,21 +293,25 @@ const salesAgg = (arr, kf) => groupBy(arr, kf).map(g => {
     disc,
     receipt,
     aov: orders ? sales / orders : 0,
-    discPct: sales ? (disc / sales) * 100 : 0
+    discPctGross: receipt ? (disc / receipt) * 100 : 0,
+    discPctNet: sales ? (disc / sales) * 100 : 0,
+    discPct: receipt ? (disc / receipt) * 100 : 0
   };
 });
 const metricOf = (r, metric) => {
-  if (metric === 'sales') return r.sales;
+  if (metric === 'gross' || metric === 'receipt') return r.receipt;
+  if (metric === 'sales' || metric === 'net') return r.sales;
   if (metric === 'orders') return r.orders;
-  if (metric === 'receipt') return r.receipt;
   if (metric === 'aov') return r.aov;
   if (metric === 'disc') return r.disc;
-  if (metric === 'discPct') return r.discPct;
+  if (metric === 'discPctGross') return r.discPctGross;
+  if (metric === 'discPctNet') return r.discPctNet;
+  if (metric === 'discPct') return r.discPctGross;
   return r.sales;
 };
 const metricFmt = metric => {
   if (metric === 'orders') return cnt;
-  if (metric === 'discPct') return n => n.toFixed(1) + '%';
+  if (metric === 'discPct' || metric === 'discPctGross' || metric === 'discPctNet') return n => n.toFixed(1) + '%';
   return money;
 };
 
@@ -471,7 +475,7 @@ function buildToggles() {
 
   switch (S.page) {
     case 'sales':
-      add(top, 'Net Sales | Total Orders', 'metric', [['sales', 'Net Sales'], ['orders', 'Total Orders']]);
+      add(top, 'Sales Metric', 'metric', [['gross', 'Gross Sales'], ['sales', 'Net Sales'], ['orders', 'Total Orders']]);
       add(btm, 'Brand | Cuisine', 'group', [['cuisine', 'Cuisine'], ['brand', 'Brand']]);
       break;
     case 'cancel':
@@ -554,6 +558,121 @@ function timeRangeForGrain(key, grain) {
   return [key, key];
 }
 
+function openDailyBreakdownModal() {
+  S.ui.grain = 'Daily';
+  renderSales();
+  const modal = $('#dailyModal');
+  if (modal) {
+    renderDailyBreakdownTable();
+    modal.hidden = false;
+  }
+  const el = document.getElementById('c-time');
+  if (el) {
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    const p = el.closest('.panel') || el;
+    p.style.transition = 'all 0.3s ease';
+    p.style.outline = '3px solid #FDCB3C';
+    p.style.boxShadow = '0 0 16px rgba(253, 203, 60, 0.6)';
+    setTimeout(() => { p.style.outline = ''; p.style.boxShadow = ''; }, 1600);
+  }
+}
+
+function renderDailyBreakdownTable() {
+  const all = base('sales'); const O = all.filter(o => !o.cancelled);
+  const byDay = groupBy(O, o => dkey(o.receivedAt)).map(g => {
+    const gross = sum(g.rows, o => o.receiptTotal);
+    const net = sum(g.rows, o => o.netSales);
+    const disc = sum(g.rows, o => o.discount);
+    const count = g.rows.length;
+    const aov = count ? net / count : 0;
+    const discPctGross = gross ? (disc / gross) * 100 : 0;
+    const discPctNet = net ? (disc / net) * 100 : 0;
+    return {
+      date: g.k,
+      dow: dowOf(g.rows[0].receivedAt),
+      gross,
+      net,
+      disc,
+      count,
+      aov,
+      discPctGross,
+      discPctNet
+    };
+  }).sort((a, b) => (a.date < b.date ? 1 : -1));
+
+  const tbl = $('#dailyBreakdownTable');
+  if (!tbl) return;
+
+  const totalGross = sum(byDay, d => d.gross);
+  const totalNet = sum(byDay, d => d.net);
+  const totalOrders = sum(byDay, d => d.count);
+  const totalDisc = sum(byDay, d => d.disc);
+  const totalAov = totalOrders ? totalNet / totalOrders : 0;
+  const totDiscGross = totalGross ? (totalDisc / totalGross) * 100 : 0;
+  const totDiscNet = totalNet ? (totalDisc / totalNet) * 100 : 0;
+
+  tbl.innerHTML = `
+    <thead>
+      <tr>
+        <th style="text-align:left;position:sticky;top:0;background:#FCD258;color:#000;padding:6px;z-index:2">Trading Date</th>
+        <th style="text-align:left;position:sticky;top:0;background:#FCD258;color:#000;padding:6px;z-index:2">Day</th>
+        <th style="text-align:right;position:sticky;top:0;background:#FCD258;color:#000;padding:6px;z-index:2">Gross Sales</th>
+        <th style="text-align:right;position:sticky;top:0;background:#FCD258;color:#000;padding:6px;z-index:2">Net Sales</th>
+        <th style="text-align:right;position:sticky;top:0;background:#FCD258;color:#000;padding:6px;z-index:2">Orders</th>
+        <th style="text-align:right;position:sticky;top:0;background:#FCD258;color:#000;padding:6px;z-index:2">AOV</th>
+        <th style="text-align:right;position:sticky;top:0;background:#FCD258;color:#000;padding:6px;z-index:2">Discount</th>
+        <th style="text-align:right;position:sticky;top:0;background:#FCD258;color:#000;padding:6px;z-index:2">Disc % (Gross)</th>
+        <th style="text-align:right;position:sticky;top:0;background:#FCD258;color:#000;padding:6px;z-index:2">Disc % (Net)</th>
+        <th style="text-align:center;position:sticky;top:0;background:#FCD258;color:#000;padding:6px;z-index:2">Cross-Filter</th>
+      </tr>
+      <tr style="background:#1d1d1d;color:#FCD258;font-weight:700">
+        <td style="text-align:left;padding:6px">TOTAL (${byDay.length} Days)</td>
+        <td style="padding:6px">–</td>
+        <td style="text-align:right;padding:6px">${money(totalGross)}</td>
+        <td style="text-align:right;padding:6px">${money(totalNet)}</td>
+        <td style="text-align:right;padding:6px">${cnt(totalOrders)}</td>
+        <td style="text-align:right;padding:6px">${money(totalAov)}</td>
+        <td style="text-align:right;padding:6px">${money(totalDisc)}</td>
+        <td style="text-align:right;padding:6px">${totDiscGross.toFixed(1)}%</td>
+        <td style="text-align:right;padding:6px">${totDiscNet.toFixed(1)}%</td>
+        <td style="text-align:center;padding:6px">–</td>
+      </tr>
+    </thead>
+    <tbody>
+      ${byDay.map((d, i) => {
+        const isSlice = S.f.from === d.date && S.f.to === d.date;
+        return `
+          <tr class="daily-row" data-date="${d.date}" style="cursor:pointer;background:${isSlice ? '#FFFDF2' : (i % 2 ? '#fafafa' : '#fff')};outline:${isSlice ? '2px solid #b38600' : 'none'}">
+            <td style="font-weight:600;color:${isSlice ? '#b38600' : '#1d1d1d'};padding:6px">${isSlice ? '● ' : ''}${d.date}</td>
+            <td style="padding:6px">${d.dow}</td>
+            <td style="text-align:right;font-weight:600;padding:6px">${money(d.gross)}</td>
+            <td style="text-align:right;font-weight:700;color:#000;padding:6px">${money(d.net)}</td>
+            <td style="text-align:right;padding:6px">${cnt(d.count)}</td>
+            <td style="text-align:right;padding:6px">${money(d.aov)}</td>
+            <td style="text-align:right;color:#777;padding:6px">${money(d.disc)}</td>
+            <td style="text-align:right;font-weight:600;color:#2e7d32;padding:6px">${d.discPctGross.toFixed(1)}%</td>
+            <td style="text-align:right;font-weight:600;color:${d.discPctNet > 50 ? '#ee2a5c' : '#555'};padding:6px">${d.discPctNet.toFixed(1)}%</td>
+            <td style="text-align:center;padding:6px"><button class="btn-yellow" style="padding:2px 8px;font-size:10px">${isSlice ? 'Clear' : 'Slice'}</button></td>
+          </tr>
+        `;
+      }).join('')}
+    </tbody>
+  `;
+
+  tbl.querySelectorAll('.daily-row').forEach(tr => {
+    const dt = tr.dataset.date;
+    tr.onclick = () => {
+      if (S.f.from === dt && S.f.to === dt) {
+        setDates(...fullRange());
+      } else {
+        setDates(dt, dt);
+      }
+      dateChanged();
+      renderDailyBreakdownTable();
+    };
+  });
+}
+
 function renderSales() {
   const all = base('sales'); const O = all.filter(o => !o.cancelled);
   const net = sum(O, o => o.netSales), rec = sum(O, o => o.receiptTotal), disc = sum(O, o => o.discount), n = O.length;
@@ -563,21 +682,45 @@ function renderSales() {
 
   const m = S.ui.metric;
   const mnameMap = {
+    gross: 'Gross Sales',
     sales: 'Net Sales',
     orders: 'Total Orders',
-    receipt: 'Receipt Total',
+    receipt: 'Gross Sales',
     aov: 'Average Order Value (AOV)',
     disc: 'Total Discount',
-    discPct: 'Discount %'
+    discPct: 'Discount % (Gross)',
+    discPctGross: 'Discount % (Gross)',
+    discPctNet: 'Discount % (Net)'
   };
-  const mname = mnameMap[m] || 'Net Sales';
+  const mname = mnameMap[m] || (m === 'gross' ? 'Gross Sales' : 'Net Sales');
   const mf = metricFmt(m);
+  const isDailyActive = S.ui.grain === 'Daily';
 
   kpis('kpi-sales', [
-    ['Net Sales', money(net), false, () => { S.ui.metric = 'sales'; buildToggles(); renderSales(); }, m === 'sales', 'Click to view Net Sales across all charts'],
-    ['Receipt Total', money(rec), false, () => { S.ui.metric = (m === 'receipt' ? 'sales' : 'receipt'); buildToggles(); renderSales(); }, m === 'receipt', 'Click to view Receipt Total (Gross) across all charts'],
-    ['Total Orders', cnt(n), false, () => { S.ui.metric = 'orders'; buildToggles(); renderSales(); }, m === 'orders', 'Click to view Order Volume counts across all charts'],
-    ['AOV', n ? (net / n).toFixed(2) : '0', false, () => { S.ui.metric = (m === 'aov' ? 'sales' : 'aov'); buildToggles(); renderSales(); }, m === 'aov', 'Click to view Average Order Value (AOV) across all charts'],
+    ['Gross Sales', money(rec), false, () => {
+      S.ui.metric = (m === 'gross' || m === 'receipt' ? 'sales' : 'gross');
+      buildToggles();
+      renderSales();
+    }, m === 'gross' || m === 'receipt', 'Click to switch all dashboard charts and metrics to Gross Sales (GMV before discount)'],
+
+    ['Net Sales', money(net), false, () => {
+      S.ui.metric = 'sales';
+      buildToggles();
+      renderSales();
+    }, m === 'sales', 'Click to switch all dashboard charts and metrics to Net Sales (after discount)'],
+
+    ['Total Orders', cnt(n), false, () => {
+      S.ui.metric = 'orders';
+      buildToggles();
+      renderSales();
+    }, m === 'orders', 'Click to view Order Volume counts across all charts'],
+
+    ['AOV', n ? (net / n).toFixed(2) : '0', false, () => {
+      S.ui.metric = (m === 'aov' ? 'sales' : 'aov');
+      buildToggles();
+      renderSales();
+    }, m === 'aov', 'Click to view Average Order Value (AOV) across all charts'],
+
     ['Total Discount', money(disc), false, () => {
       S.ui.metric = (m === 'disc' ? 'sales' : 'disc');
       buildToggles();
@@ -585,19 +728,23 @@ function renderSales() {
       const el = document.getElementById('c-disc');
       if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
     }, m === 'disc', 'Click to view Total Discounts across all charts'],
-    ['Discount %', net ? pc(disc / net, 2) : '0%', false, () => { S.ui.metric = (m === 'discPct' ? 'sales' : 'discPct'); buildToggles(); renderSales(); }, m === 'discPct', 'Click to view Discount % burn across all charts'],
-    ['Avg RunRate', money(run), false, () => {
-      S.ui.grain = (S.ui.grain === 'Daily' ? 'Monthly' : 'Daily');
+
+    ['Disc % (Gross)', rec ? pc(disc / rec, 1) : '0%', false, () => {
+      S.ui.metric = (m === 'discPctGross' ? 'sales' : 'discPctGross');
+      buildToggles();
       renderSales();
-      const el = document.getElementById('c-time');
-      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    }, false, 'Click to toggle Daily vs Monthly run-rate in trend chart'],
-    ['Projected RR', money(run * 30), false, () => {
-      S.ui.grain = (S.ui.grain === 'Monthly' ? 'Daily' : 'Monthly');
+    }, m === 'discPctGross', 'Click to view Discount as % of Gross Sales: Total Discount / Gross Sales'],
+
+    ['Disc % (Net)', net ? pc(disc / net, 1) : '0%', false, () => {
+      S.ui.metric = (m === 'discPctNet' ? 'sales' : 'discPctNet');
+      buildToggles();
       renderSales();
-      const el = document.getElementById('c-time');
-      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    }, false, 'Click to toggle 30-day projected run-rate view'],
+    }, m === 'discPctNet', 'Click to view Discount as % of Net Sales: Total Discount / Net Sales'],
+
+    ['Daily Sales Breakdown', `${money(run)}/d`, false, () => {
+      openDailyBreakdownModal();
+    }, isDailyActive, `Click to open interactive Daily Sales Breakdown table and switch charts to Daily grain (Avg ${money(run)}/day over ${days} days)`],
+
     ['Top Performing Brand', top ? esc(top.k) : '–', true, () => {
       if (!top) return;
       if (S.f.brand === top.k) {
@@ -640,9 +787,11 @@ function renderSales() {
   if (phTime) {
     phTime.textContent = `${mname} Over time`;
     phTime.style.cursor = 'pointer';
-    phTime.title = `Currently viewing ${mname}. Click to toggle Net Sales | Total Orders`;
+    phTime.title = `Currently viewing ${mname}. Click to toggle Gross Sales | Net Sales | Total Orders`;
     phTime.onclick = () => {
-      S.ui.metric = (S.ui.metric === 'sales' ? 'orders' : 'sales');
+      if (S.ui.metric === 'gross') S.ui.metric = 'sales';
+      else if (S.ui.metric === 'sales') S.ui.metric = 'orders';
+      else S.ui.metric = 'gross';
       buildToggles();
       renderSales();
     };
@@ -743,7 +892,9 @@ function renderSales() {
 
   const dc = salesAgg(O, o => o.channel).filter(r => r.disc > 0).sort((a, b) => b.disc - a.disc).map(r => ({ k: r.k, v: r.disc }));
   donut('c-disc', dc, { legend: 'left', filterKey: 'channel' });
-  $('#discTotal').textContent = money(disc);
+  const discGrossPct = rec ? pc(disc / rec, 1) : '0%';
+  const discNetPct = net ? pc(disc / net, 1) : '0%';
+  $('#discTotal').innerHTML = `${money(disc)}<div style="font-size:9.5px;font-weight:600;color:#555;margin-top:2px;">${discGrossPct} Gross · ${discNetPct} Net</div>`;
 }
 
 function patchPct(id, rows, totalOrders) {
@@ -1435,6 +1586,14 @@ $('#mLive').onclick = async () => { const ok = await loadLive(); if (ok) $('#mod
 if ($('#mCached')) $('#mCached').onclick = async () => { await loadCached(); };
 $('#btnData').onclick = () => { $('#modal').hidden = false; $('#mStatus').textContent = $('#srcBadge').textContent; };
 $('#mClose').onclick = () => { $('#modal').hidden = true; };
+if ($('#dailyModalClose')) $('#dailyModalClose').onclick = () => { $('#dailyModal').hidden = true; };
+if ($('#dailyModalClose2')) $('#dailyModalClose2').onclick = () => { $('#dailyModal').hidden = true; };
+if ($('#dailyModalReset')) $('#dailyModalReset').onclick = () => { setDates(...fullRange()); dateChanged(); renderDailyBreakdownTable(); };
+if ($('#dailyModal')) {
+  $('#dailyModal').onclick = e => {
+    if (e.target === $('#dailyModal')) $('#dailyModal').hidden = true;
+  };
+}
 
 async function loadCached() {
   log('Loading FoodHive decrypted exports…');

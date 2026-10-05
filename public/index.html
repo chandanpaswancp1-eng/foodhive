@@ -52,14 +52,14 @@
     <section class="page on" id="page-sales">
       <header class="filters" id="filters-sales"></header>
       <div class="kpis" id="kpi-sales">
+        <div class="kpi"><div class="kh">Gross Sales</div><div class="kv">113.11K</div></div>
         <div class="kpi"><div class="kh">Net Sales</div><div class="kv">103.94K</div></div>
-        <div class="kpi"><div class="kh">Receipt Total</div><div class="kv">113.11K</div></div>
         <div class="kpi"><div class="kh">Total Orders</div><div class="kv">2466</div></div>
         <div class="kpi"><div class="kh">AOV</div><div class="kv">42.15</div></div>
         <div class="kpi"><div class="kh">Total Discount</div><div class="kv">61.34K</div></div>
         <div class="kpi"><div class="kh">Discount %</div><div class="kv">59.02%</div></div>
-        <div class="kpi"><div class="kh">Avg RunRate</div><div class="kv">2.17K</div></div>
-        <div class="kpi"><div class="kh">Projected RR</div><div class="kv">64.96K</div></div>
+        <div class="kpi"><div class="kh">Daily Sales Breakdown</div><div class="kv">2.17K/d</div></div>
+        <div class="kpi"><div class="kh">Projected RR (30d)</div><div class="kv">64.96K</div></div>
         <div class="kpi wide"><div class="kh">Top Performing Brand</div><div class="kv">Manakeesh Corner Dine In</div></div>
       </div>
       <div class="grid g-sales">
@@ -251,6 +251,24 @@
     <p class="muted small">Live mode connects to GrubCENTER reporting endpoints. Historical exports load the 18 decrypted FoodHive files. Demo mode shows synthetic testing data.</p>
     <pre id="mLog" class="log"></pre>
     <div class="row end"><button class="btn-dark" id="mClose">Close</button></div>
+  </div>
+</div>
+
+<!-- DAILY SALES BREAKDOWN MODAL -->
+<div class="modal" id="dailyModal" hidden>
+  <div class="modal-card" style="max-width: 900px; max-height: 88vh; display: flex; flex-direction: column;">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 8px;">
+      <h3 style="margin:0; font-size:18px;">📅 Daily Sales Breakdown & Cross-Filtering</h3>
+      <button class="btn-dark" id="dailyModalClose" style="padding:4px 10px; font-size:12px;">✕ Close</button>
+    </div>
+    <p class="muted small" style="margin:0 0 10px 0;">Click on any day to instantly slice all dashboard KPIs and visualizers by that trading date.</p>
+    <div class="tbl-wrap" style="flex:1; overflow-y:auto; max-height: 58vh; border:1px solid #ced5d7; border-radius: 4px;">
+      <table id="dailyBreakdownTable" style="width:100%; border-collapse:collapse; font-size:12px;"></table>
+    </div>
+    <div class="row end" style="margin-top:12px; gap:8px;">
+      <button class="btn-yellow" id="dailyModalReset" style="font-size:12px; padding:6px 12px;">Reset to All Dates</button>
+      <button class="btn-dark" id="dailyModalClose2" style="font-size:12px; padding:6px 12px;">Done</button>
+    </div>
   </div>
 </div>
 
