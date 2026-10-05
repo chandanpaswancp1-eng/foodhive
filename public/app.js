@@ -448,7 +448,7 @@ function renderSales() {
     options: baseOpts({ scales: { x: { ...gridless, ticks: { maxTicksLimit: 12, font: { size: 10 } } }, y: { beginAtZero: true, ticks: { callback: mf, maxTicksLimit: 5 }, grid: { color: '#eee' }, title: { display: true, text: mname } } } })
   } : { __empty: true });
 
-  const loc = salesAgg(O, o => o.location).sort((a, b) => b.sales - a.sales).slice(0, 10).map(r => ({ k: r.k, v: r.sales, o: r.orders }));
+  const loc = salesAgg(O, o => o.location).sort((a, b) => b.sales - a.sales).slice(0, 10).map(r => ({ k: r.k, v: r.sales, orders: r.orders }));
   combo('c-loc', loc, { name: 'Net Sales', pctName: '%GT Total Orders', filterKey: 'location' });
   patchPct('c-loc', loc, n);
 
