@@ -78,8 +78,17 @@ function orderRating(o) {
 // ---------------- state ----------------
 const S = {
   orders: [], items: [], source: 'none', page: 'sales', loadedRange: null,
-  f: { from: '', to: '', channel: 'All', brand: 'All', location: 'All', payment: 'All', day: 'All', partner: 'All', reason: 'All', post: 'All', ratingFilter: 'all', onlyDelayed: false },
-  ui: { metric: 'sales', group: 'cuisine', grain: 'Daily', cmetric: 'orders', cgroup: 'brand', pgroup: 'brand', rgroup: 'cuisine', igroup: 'brand', dgroup: 'brand', rmode: 'estimated' },
+  f: {
+    from: '', to: '', channel: 'All', brand: 'All', location: 'All', payment: 'All',
+    day: 'All', partner: 'All', reason: 'All', post: 'All', ratingFilter: 'all',
+    onlyDelayed: false, slot: 'All', hour: 'All', star: 'All', item: 'All',
+    source: 'All', type: 'All'
+  },
+  ui: {
+    metric: 'sales', group: 'cuisine', grain: 'Daily', cmetric: 'orders',
+    cgroup: 'brand', pgroup: 'brand', rgroup: 'cuisine', igroup: 'brand',
+    dgroup: 'brand', rmode: 'estimated', activeStage: null
+  },
   rng: {}, selBrands: new Set(), selLocs: new Set()
 };
 const gk = (o, g) => (g === 'brand' ? o.brand : o.cuisine);
@@ -127,13 +136,18 @@ const gridless = { grid: { display: false } };
 
 /** Cross-filter on bar click */
 function addBarClick(opts, kf, filterKey) {
+  opts.onHover = (e, el) => {
+    if (e.native && e.native.target) {
+      e.native.target.style.cursor = el && el.length ? 'pointer' : 'default';
+    }
+  };
   opts.onClick = (e, elements, chart) => {
     if (!elements || !elements.length) return;
     const idx = elements[0].index;
-    const label = chart.data.labels[idx];
-    if (!label) return;
+    const label = chart ? chart.data.labels[idx] : null;
+    if (label == null) return;
     const cur = S.f[filterKey];
-    S.f[filterKey] = (cur === label ? 'All' : label);
+    S.f[filterKey] = (String(cur) === String(label) ? 'All' : String(label));
     syncFilterUI();
     render();
   };
@@ -146,7 +160,7 @@ function combo(id, rows, { vk = 'v', name = 'Value', pctName = '%GT', fmt = mone
   const total = sum(rows, r => r[vk]) || 1;
   const many = rows.length > 26;
   const curF = filterKey ? S.f[filterKey] : 'All';
-  const colors = rows.map(r => (curF !== 'All' && r.k !== curF ? '#FEEBB4' : color));
+  const colors = rows.map(r => (curF !== 'All' ? (String(r.k) === String(curF) ? '#1d1d1d' : '#FEEBB4') : color));
 
   const ds = [{
     type: 'bar', label: name, data: rows.map(r => r[vk]), backgroundColor: colors, order: 2, yAxisID: 'y',
@@ -176,7 +190,7 @@ function combo(id, rows, { vk = 'v', name = 'Value', pctName = '%GT', fmt = mone
 function hbar(id, rows, { fmt = money, color = Y, name = 'Value', filterKey } = {}) {
   if (!rows.length) return mk(id, { __empty: true });
   const curF = filterKey ? S.f[filterKey] : 'All';
-  const colors = rows.map(r => (curF !== 'All' && r.k !== curF ? '#FEEBB4' : color));
+  const colors = rows.map(r => (curF !== 'All' ? (String(r.k) === String(curF) ? '#1d1d1d' : '#FEEBB4') : color));
   const opts = baseOpts({
     indexAxis: 'y', layout: { padding: { right: 38, top: 2 } },
     scales: { y: { ...gridless, ticks: { font: { size: 10 }, autoSkip: false, callback(v) { return trunc(this.getLabelForValue(v), 20); } } }, x: { beginAtZero: true, ticks: { callback: fmt, maxTicksLimit: 5 }, grid: { color: '#eee' } } }
@@ -189,6 +203,8 @@ function donut(id, rows, { fmt = money, colors, legend = 'right', pctLabels = tr
   if (!rows.length) return mk(id, { __empty: true });
   const pal = colors || ['#FCD258', '#3a3a3a', '#1e88e5', '#ff7043', '#8e24aa', '#ec407a', '#26a69a', '#7cb342', '#795548', '#9e9e9e'];
   const tot = sum(rows, r => r.v) || 1;
+  const curF = filterKey ? S.f[filterKey] : 'All';
+  const sliceColors = rows.map((r, i) => curF !== 'All' ? (String(r.k) === String(curF) ? pal[i % pal.length] : '#dedede') : pal[i % pal.length]);
   const opts = baseOpts({
     cutout: '58%', layout: { padding: 6 },
     plugins: {
@@ -211,7 +227,7 @@ function donut(id, rows, { fmt = money, colors, legend = 'right', pctLabels = tr
       labels: rows.map(r => r.k),
       datasets: [{
         data: rows.map(r => r.v),
-        backgroundColor: rows.map((r, i) => pal[i % pal.length]),
+        backgroundColor: sliceColors,
         borderWidth: 1, borderColor: '#fff',
         datalabels: {
           display: pctLabels,
@@ -247,7 +263,7 @@ function lineChart(id, labels, series, { fmt = money, smooth = true, fill = fals
 function barsPlain(id, rows, { color = Y, fmt = v => v.toFixed(1), name = 'Value', filterKey } = {}) {
   if (!rows.length) return mk(id, { __empty: true });
   const curF = filterKey ? S.f[filterKey] : 'All';
-  const colors = rows.map(r => (curF !== 'All' && r.k !== curF ? '#FEEBB4' : color));
+  const colors = rows.map(r => (curF !== 'All' ? (String(r.k) === String(curF) ? '#1d1d1d' : '#FEEBB4') : color));
   const opts = baseOpts({
     scales: { x: { ...gridless, ticks: { maxRotation: 70, minRotation: 55, autoSkip: false, font: { size: 9 }, callback(v) { return trunc(this.getLabelForValue(v), 16); } } }, y: { display: false, beginAtZero: true } }
   });
@@ -303,7 +319,13 @@ function base(page) {
   return S.orders.filter(o => {
     if (!dateOk(o.receivedAt)) return false;
     if (!eq(o.brand, f.brand) || !eq(o.location, f.location)) return false;
-    if (page === 'sales') return eq(o.channel, f.channel) && eq(o.payment, f.payment) && eq(o.partner, f.partner) && (f.day === 'All' || dowOf(o.receivedAt) === f.day);
+    if (page === 'sales') {
+      if (!eq(o.channel, f.channel) || !eq(o.payment, f.payment) || !eq(o.partner, f.partner)) return false;
+      if (f.day !== 'All' && dowOf(o.receivedAt) !== f.day) return false;
+      if (f.slot && f.slot !== 'All' && slotOf(dubaiHour(o.receivedAt)) !== f.slot) return false;
+      if (f.hour != null && f.hour !== 'All' && String(dubaiHour(o.receivedAt)) !== String(f.hour)) return false;
+      return true;
+    }
     if (page === 'cancel') return eq(o.channel, f.channel) && eq(o.reason, f.reason) && (f.post === 'All' || (f.post === 'Yes') === o.postCancelled);
     return true;
   });
@@ -592,13 +614,15 @@ function renderSales() {
   $('#t-brand').textContent = `${grpName} by ${mname}`;
   const br = salesAgg(O, o => gk(o, S.ui.group)).map(r => ({ k: r.k, v: metricOf(r, m) })).sort((a, b) => b.v - a.v).slice(0, 14);
   
+  const curBrand = S.f[S.ui.group === 'brand' ? 'brand' : 'cuisine'];
+  const bColors = br.map(r => (curBrand !== 'All' ? (String(r.k) === String(curBrand) ? '#1d1d1d' : '#FEEBB4') : Y));
   const bOpts = baseOpts({
     scales: { x: { ...gridless, ticks: { autoSkip: false, maxRotation: 0, font: { size: 10 }, callback(v) { return trunc(this.getLabelForValue(v), 12); } } }, y: { display: false, beginAtZero: true } }
   });
   addBarClick(bOpts, r => r.k, S.ui.group === 'brand' ? 'brand' : 'cuisine');
   mk('c-brand', br.length ? {
     type: 'bar',
-    data: { labels: br.map(r => r.k), datasets: [{ label: mname, data: br.map(r => r.v), backgroundColor: Y, datalabels: lbl(mf) }] },
+    data: { labels: br.map(r => r.k), datasets: [{ label: mname, data: br.map(r => r.v), backgroundColor: bColors, datalabels: lbl(mf) }] },
     options: bOpts
   } : { __empty: true });
 
@@ -683,7 +707,7 @@ function renderSales() {
   patchPct('c-loc', loc, n);
 
   const sl = salesAgg(O, o => slotOf(dubaiHour(o.receivedAt))).sort((a, b) => metricOf(b, m) - metricOf(a, m));
-  combo('c-slot', sl.map(r => ({ k: r.k, v: metricOf(r, m) })), { name: mname, pctName: '%GT Total Orders', fmt: mf });
+  combo('c-slot', sl.map(r => ({ k: r.k, v: metricOf(r, m) })), { name: mname, pctName: '%GT Total Orders', filterKey: 'slot', fmt: mf });
   patchPct('c-slot', sl, n);
 
   hbar('c-chan', salesAgg(O, o => o.channel).map(r => ({ k: r.k, v: metricOf(r, m) })).sort((a, b) => b.v - a.v), { fmt: mf, name: mname, filterKey: 'channel' });
@@ -705,7 +729,7 @@ function renderSales() {
     hr[h].v += (m === 'orders' ? 1 : m === 'receipt' ? o.receiptTotal : m === 'disc' ? o.discount : o.netSales);
     hr[h].o++;
   });
-  combo('c-hour', hr, { name: mname, pctName: '%GT Total Orders', fmt: mf });
+  combo('c-hour', hr, { name: mname, pctName: '%GT Total Orders', filterKey: 'hour', fmt: mf });
   patchPct('c-hour', hr.map(h => ({ orders: h.o })), n);
 
   const dw = DOW.map(d => ({ k: d, v: 0, o: 0 }));
@@ -913,6 +937,7 @@ function renderPrep() {
   };
 
   const focusStage = (k) => {
+    S.ui.activeStage = (S.ui.activeStage === k ? null : k);
     const tid = stageTarget[k] || 'prepTable';
     const targetEl = document.getElementById(tid);
     if (targetEl) {
@@ -926,6 +951,7 @@ function renderPrep() {
         parentPanel.style.boxShadow = '';
       }, 1600);
     }
+    renderPrep();
   };
 
   const kp = STAGES.map(([k, l]) => [
@@ -933,8 +959,8 @@ function renderPrep() {
     avgOf(O, k).toFixed(2),
     false,
     () => focusStage(k),
-    false,
-    `Click to scroll and spotlight ${l} Best & Worst charts`
+    S.ui.activeStage === k,
+    `Click to spotlight and sort by ${l}`
   ]);
   
   // best vs worst outlet
@@ -966,6 +992,44 @@ function renderPrep() {
     isBestActive ? `Currently showing Best Brand: "${bBrand}" (click for Worst)` : isWorstActive ? `Currently showing Worst Brand: "${wBrand}" (click to reset)` : `Click to filter Best Brand: "${bBrand}"`
   ]);
   kpis('kpi-prep', kp);
+
+  const g = S.ui.pgroup, gname = g === 'brand' ? 'Brand' : 'Cuisine';
+  const grp = groupBy(O, x => gk(x.o, g));
+  const wrap = $('#prepCharts');
+  if (wrap) {
+    if (!wrap.children.length) {
+      const sel = [['acc', 'Accepted To Started_Min'], ['prep', 'Started To Prepared_Min'], ['std', 'Prepared To Sent To Dispatch_Min'], ['recDisp', 'Receiving To Dispatched_Min']];
+      wrap.innerHTML = sel.map(([k, t]) => `<div class="panel"><div class="ph" data-t="Best ${t}"></div><div class="pb"><canvas id="c-pb-${k}"></canvas></div></div>`).join('') + sel.map(([k, t]) => `<div class="panel"><div class="ph dark" data-t="Worst ${t}"></div><div class="pb"><canvas id="c-pw-${k}"></canvas></div></div>`).join('');
+      const kids = [...wrap.children]; wrap.innerHTML = '';
+      [0, 4, 1, 5, 2, 6, 3, 7].forEach(i => wrap.appendChild(kids[i]));
+    }
+    $$('.ph[data-t]', wrap).forEach(h => h.textContent = h.dataset.t.replace('_Min', `_Min by ${gname}`));
+    ['acc', 'prep', 'std', 'recDisp'].forEach(k => {
+      const rows = grp.map(gr => ({ k: gr.k, v: avgOf(gr.rows, k), n: gr.rows.filter(x => x.v[k] != null).length })).filter(r => r.n);
+      barsPlain('c-pb-' + k, rows.slice().sort((a, b) => a.v - b.v).slice(0, 10), { color: Y, filterKey: g === 'brand' ? 'brand' : 'cuisine' });
+      barsPlain('c-pw-' + k, rows.slice().sort((a, b) => b.v - a.v).slice(0, 10), { color: GREY, filterKey: g === 'brand' ? 'brand' : 'cuisine' });
+    });
+  }
+
+  // matrix table
+  const t = $('#prepTable');
+  if (t) {
+    const sortKey = S.ui.activeStage || 'recDisp';
+    const sortedGrp = grp.slice().sort((a, b) => {
+      if (S.ui.activeStage) {
+        return avgOf(a.rows, sortKey) - avgOf(b.rows, sortKey);
+      }
+      return (a.k < b.k ? -1 : 1);
+    });
+    t.innerHTML = `<thead><tr><th>${gname}</th>${STAGES.map(s => `<th style="${S.ui.activeStage === s[0] ? 'background:#FCD258;color:#000;font-weight:700' : ''}">${s[1].replace(' → ', ' →<br>')}</th>`).join('')}</tr></thead><tbody>${sortedGrp.map(gr => {
+      const isRowActive = S.f.brand === gr.k;
+      return `<tr style="cursor:pointer;background:${isRowActive ? '#FFFDF2' : ''};outline:${isRowActive ? '2px solid #b38600' : ''}" onclick="(() => { S.f.brand = (S.f.brand === '${esc(gr.k)}' ? 'All' : '${esc(gr.k)}'); syncFilterUI(); render(); })()"><td><b>${esc(gr.k)}</b></td>${STAGES.map(([k]) => { const v = avgOf(gr.rows, k); return `<td style="${S.ui.activeStage === k ? 'background:rgba(253,203,60,0.2);font-weight:700' : ''}">${v ? v.toFixed(2) : ''}</td>`; }).join('')}</tr>`;
+    }).join('')}</tbody>`;
+  }
+
+  // location counts
+  const lc = groupBy(O, x => x.o.location).map(g2 => ({ k: g2.k, v: g2.rows.length })).sort((a, b) => b.v - a.v).slice(0, 28);
+  barsPlain('c-ploc', lc, { fmt: v => String(v), filterKey: 'location' });
 }
 
 function renderRatings() {
@@ -973,15 +1037,16 @@ function renderRatings() {
   let R = allRatings;
   if (S.selBrands.size) R = R.filter(o => S.selBrands.has(o.brand));
   if (S.selLocs.size) R = R.filter(o => S.selLocs.has(o.location));
+  if (S.f.star && S.f.star !== 'All') R = R.filter(o => Math.round(o.rating) === +S.f.star);
   const n = R.length, neg = R.filter(o => o.rating <= 3).length, pos = n - neg;
   const rf = S.f.ratingFilter || 'all';
 
   kpis('kpi-ratings', [
-    ['Total Ratings', cnt(n), false, () => { S.f.ratingFilter = 'all'; renderRatings(); }, rf === 'all', 'Click to show all ratings across all outlets'],
-    ['Negative Ratings', cnt(neg), false, () => { S.f.ratingFilter = (rf === 'neg' ? 'all' : 'neg'); renderRatings(); }, rf === 'neg', 'Click to filter and drill down into Negative Ratings (≤3★) across brands and locations'],
-    ['Positive Ratings', cnt(pos), false, () => { S.f.ratingFilter = (rf === 'pos' ? 'all' : 'pos'); renderRatings(); }, rf === 'pos', 'Click to filter and inspect Positive Ratings (4-5★) across brands and locations'],
-    ['Negative Ratings %', n ? pc(neg / n, 2) : '0%', false, () => { S.f.ratingFilter = (rf === 'neg' ? 'all' : 'neg'); renderRatings(); }, rf === 'neg', 'Click to isolate negative feedback rate drivers'],
-    ['Polarity rate', n ? pc(pos / n, 2) : '0%', false, () => { S.f.ratingFilter = (rf === 'pos' ? 'all' : 'pos'); renderRatings(); }, rf === 'pos', 'Click to isolate customer satisfaction polarity']
+    ['Total Ratings', cnt(n), false, () => { S.f.ratingFilter = 'all'; S.f.star = 'All'; renderRatings(); }, rf === 'all' && (!S.f.star || S.f.star === 'All'), 'Click to show all ratings across all outlets'],
+    ['Negative Ratings', cnt(neg), false, () => { S.f.ratingFilter = (rf === 'neg' ? 'all' : 'neg'); S.f.star = 'All'; renderRatings(); }, rf === 'neg', 'Click to filter and drill down into Negative Ratings (≤3★) across brands and locations'],
+    ['Positive Ratings', cnt(pos), false, () => { S.f.ratingFilter = (rf === 'pos' ? 'all' : 'pos'); S.f.star = 'All'; renderRatings(); }, rf === 'pos', 'Click to filter and inspect Positive Ratings (4-5★) across brands and locations'],
+    ['Negative Ratings %', n ? pc(neg / n, 2) : '0%', false, () => { S.f.ratingFilter = (rf === 'neg' ? 'all' : 'neg'); S.f.star = 'All'; renderRatings(); }, rf === 'neg', 'Click to isolate negative feedback rate drivers'],
+    ['Polarity rate', n ? pc(pos / n, 2) : '0%', false, () => { S.f.ratingFilter = (rf === 'pos' ? 'all' : 'pos'); S.f.star = 'All'; renderRatings(); }, rf === 'pos', 'Click to isolate customer satisfaction polarity']
   ]);
 
   let chartR = R;
@@ -1023,7 +1088,7 @@ function renderRatings() {
   rc('c-rall', agg(o => o.location).sort((a, b) => b.n - a.n).slice(0, 26), Y, 'location');
 
   const dist = [5, 4, 3, 2, 1].map(s => ({ k: String(s), v: chartR.filter(o => Math.round(o.rating) === s).length }));
-  donut('c-rdist', dist, { fmt: v => v, colors: [Y, LIGHT, '#ececec', '#ee2a5c', '#1d1d1d'] });
+  donut('c-rdist', dist, { fmt: v => v, colors: [Y, LIGHT, '#ececec', '#ee2a5c', '#1d1d1d'], filterKey: 'star' });
 
   // search lists
   fillList('#lstBrand', '#srchBrand', uniq(S.orders.map(o => o.brand)).sort(), S.selBrands);
@@ -1043,22 +1108,25 @@ function fillList(ul, input, values, set) {
 // ================= PAGE 5: 86 ITEMS =================
 function renderItems() {
   const f = S.f;
-  const I = S.items.filter(x => dateOk(x.at) && eq(x.brand, f.brand) && eq(x.location, f.location));
+  const I = S.items.filter(x => dateOk(x.at) && eq(x.brand, f.brand) && eq(x.location, f.location) && (f.item === 'All' || x.item === f.item) && (f.source === 'All' || x.source === f.source) && (f.type === 'All' || x.type === f.type));
   const n = I.length;
   const topB = groupBy(I, x => x.brand).sort((a, b) => b.rows.length - a.rows.length)[0];
   const topL = groupBy(I, x => x.location).sort((a, b) => b.rows.length - a.rows.length)[0];
 
   const isBrandActive = !!(topB && f.brand === topB.k);
   const isLocActive = !!(topL && f.location === topL.k);
-  const isAllActive = f.brand === 'All' && f.location === 'All';
+  const isAllActive = f.brand === 'All' && f.location === 'All' && f.item === 'All';
 
   kpis('kpi-items', [
     ['86 Items', cnt(n), false, () => {
       S.f.brand = 'All';
       S.f.location = 'All';
+      S.f.item = 'All';
+      S.f.source = 'All';
+      S.f.type = 'All';
       syncFilterUI();
       renderItems();
-    }, isAllActive, 'Click to reset brand and location filters to show all 86 stock-outs'],
+    }, isAllActive, 'Click to reset all 86 filters to show full inventory stock-outs'],
     ['Brand with Most 86 Items', topB ? esc(topB.k) : '–', true, () => {
       if (!topB) return;
       S.f.brand = (S.f.brand === topB.k ? 'All' : topB.k);
@@ -1082,12 +1150,44 @@ function renderItems() {
   const lRows = cr(x => x.location, 11);
   combo('c-iloc', lRows, { name: 'Count of 86 Items', pctName: '%GT Count of 86 Items', fmt: cnt, filterKey: 'location' });
 
-  hbar('c-idist', cr(x => x.item, 10), { fmt: cnt });
-  donut('c-isrc', groupBy(I, x => x.source).map(g => ({ k: g.k, v: g.rows.length })).sort((a, b) => b.v - a.v), { fmt: cnt, colors: [Y, '#1e88e5', '#555', '#ee2a5c'] });
-  donut('c-ityp', groupBy(I, x => x.type).map(g => ({ k: g.k, v: g.rows.length })).sort((a, b) => b.v - a.v), { fmt: cnt, colors: [Y, '#555'] });
+  hbar('c-idist', cr(x => x.item, 10), { fmt: cnt, filterKey: 'item' });
+  donut('c-isrc', groupBy(I, x => x.source).map(g => ({ k: g.k, v: g.rows.length })).sort((a, b) => b.v - a.v), { fmt: cnt, colors: [Y, '#1e88e5', '#555', '#ee2a5c'], filterKey: 'source' });
+  donut('c-ityp', groupBy(I, x => x.type).map(g => ({ k: g.k, v: g.rows.length })).sort((a, b) => b.v - a.v), { fmt: cnt, colors: [Y, '#555'], filterKey: 'type' });
 
-  const tr = groupBy(I, x => dkey(x.at)).map(g => ({ k: g.k, v: g.rows.length })).sort((a, b) => (a.k < b.k ? -1 : 1));
-  lineChart('c-itrend', tr.map(r => r.k.slice(5)), [{ name: '86 Items', color: Y, data: tr.map(r => r.v) }], { fmt: cnt, dl: tr.length <= 20 });
+  const allTimeItems = S.items.filter(x => eq(x.brand, f.brand) && eq(x.location, f.location) && (f.item === 'All' || x.item === f.item) && (f.source === 'All' || x.source === f.source) && (f.type === 'All' || x.type === f.type));
+  const tr = groupBy(allTimeItems, x => dkey(x.at)).map(g => ({ k: g.k, v: g.rows.length })).sort((a, b) => (a.k < b.k ? -1 : 1));
+  const iColors = tr.map(r => (S.f.from === r.k && S.f.to === r.k ? '#1d1d1d' : Y));
+  const itrendOpts = baseOpts({
+    onHover: (e, el) => {
+      if (e.native && e.native.target) {
+        e.native.target.style.cursor = el && el.length ? 'pointer' : 'default';
+      }
+    },
+    onClick: (e, elements) => {
+      if (!elements || !elements.length) return;
+      const idx = elements[0].index;
+      const row = tr[idx];
+      if (!row) return;
+      if (S.f.from === row.k && S.f.to === row.k) {
+        setDates(...fullRange());
+      } else {
+        setDates(row.k, row.k);
+      }
+      dateChanged();
+    },
+    scales: {
+      x: { ...gridless, ticks: { maxTicksLimit: 25, font: { size: 10 } } },
+      y: { beginAtZero: true, ticks: { callback: cnt, maxTicksLimit: 5 }, grid: { color: '#eee' } }
+    }
+  });
+  mk('c-itrend', tr.length ? {
+    type: 'bar',
+    data: {
+      labels: tr.map(r => r.k.slice(5)),
+      datasets: [{ label: '86 Items', data: tr.map(r => r.v), backgroundColor: iColors, datalabels: tr.length > 25 ? { display: false } : lbl(cnt) }]
+    },
+    options: itrendOpts
+  } : { __empty: true });
 
   // fix %GT fields
   [['c-ibrand', bRows], ['c-iloc', lRows]].forEach(([id, rows]) => {
@@ -1148,33 +1248,40 @@ function renderDelayed() {
   dcombo('c-dloc', o => o.location, 14, 'location');
 
   const pv = groupBy(O, x => gk(x.o, S.ui.dgroup)).map(g => ({ k: g.k, a: avg(g.rows.map(x => x.p)), e: avg(g.rows.map(x => x.est)), n: g.rows.length })).sort((a, b) => b.a - a.a).slice(0, 8);
+  const curDPrep = S.f[S.ui.dgroup === 'brand' ? 'brand' : 'cuisine'];
+  const dprepOpts = baseOpts({
+    plugins: { legend: { display: true, position: 'top', align: 'start', labels: { boxWidth: 8, boxHeight: 8, font: { size: 10 } } } },
+    scales: { x: { ...gridless, ticks: { autoSkip: false, font: { size: 10 }, callback(v) { return trunc(this.getLabelForValue(v), 11); } } }, y: { display: false, beginAtZero: true } }
+  });
+  addBarClick(dprepOpts, r => r.k, S.ui.dgroup === 'brand' ? 'brand' : 'cuisine');
   if (!pv.length) mk('c-dprep', { __empty: true });
   else mk('c-dprep', {
     type: 'bar',
     data: {
       labels: pv.map(r => r.k),
       datasets: [
-        { label: 'Brand Preparation Time', data: pv.map(r => +r.a.toFixed(1)), backgroundColor: GREY, datalabels: lbl(v => v.toFixed(1)) },
-        { label: 'Brand Estimated Time', data: pv.map(r => +r.e.toFixed(1)), backgroundColor: Y, datalabels: lbl(v => v.toFixed(1)) }
+        { label: 'Brand Preparation Time', data: pv.map(r => +r.a.toFixed(1)), backgroundColor: pv.map(r => curDPrep !== 'All' ? (String(r.k) === String(curDPrep) ? '#1d1d1d' : '#dedede') : GREY), datalabels: lbl(v => v.toFixed(1)) },
+        { label: 'Brand Estimated Time', data: pv.map(r => +r.e.toFixed(1)), backgroundColor: pv.map(r => curDPrep !== 'All' ? (String(r.k) === String(curDPrep) ? '#FCD258' : '#FEEBB4') : Y), datalabels: lbl(v => v.toFixed(1)) }
       ]
     },
-    options: baseOpts({
-      plugins: { legend: { display: true, position: 'top', align: 'start', labels: { boxWidth: 8, boxHeight: 8, font: { size: 10 } } } },
-      scales: { x: { ...gridless, ticks: { autoSkip: false, font: { size: 10 }, callback(v) { return trunc(this.getLabelForValue(v), 11); } } }, y: { display: false, beginAtZero: true } }
-    })
+    options: dprepOpts
   });
 
   // ranked delay table
   const rk = groupBy(O.filter(x => x.delay != null), x => `${gk(x.o, S.ui.dgroup)}|${x.o.location}`).map(g => ({
     name: S.ui.dgroup === 'brand' ? `${g.rows[0].o.brand}, ${g.rows[0].o.location}` : g.rows[0].o.cuisine + ', ' + g.rows[0].o.location,
+    targetKey: S.ui.dgroup === 'brand' ? g.rows[0].o.brand : g.rows[0].o.cuisine,
     d: Math.max(0, avg(g.rows.map(x => x.delay))),
     count: g.rows.length
   })).sort((a, b) => b.d - a.d);
   const mx = rk.length ? rk[0].d || 1 : 1;
   const thPrefix = isOnlyDelayed ? '🚨 Delayed Outlets (>10m)' : (S.ui.dgroup === 'brand' ? 'Brand' : 'Cuisine');
+  const curTargetKey = S.f[S.ui.dgroup === 'brand' ? 'brand' : 'cuisine'];
+  const filterField = S.ui.dgroup === 'brand' ? 'brand' : 'cuisine';
   $('#delayTable').innerHTML = `<thead><tr><th style="text-align:left">${thPrefix}</th><th>Orders</th><th>Avg Delay (min)</th></tr></thead><tbody>${rk.map((r, i) => {
     const t = Math.min(1, r.d / mx);
-    return `<tr style="background:${i % 2 ? '#111' : '#fff'};color:${i % 2 ? '#fff' : '#111'}"><td>${esc(r.name)}</td><td>${r.count}</td><td style="background:hsl(4,85%,${Math.max(40, 94 - t * 40)}%);color:#111;font-weight:700">${r.d.toFixed(2)}</td></tr>`;
+    const isRowActive = curTargetKey === r.targetKey;
+    return `<tr style="cursor:pointer;background:${isRowActive ? '#FFFDF2' : (i % 2 ? '#111' : '#fff')};color:${isRowActive ? '#000' : (i % 2 ? '#fff' : '#111')};outline:${isRowActive ? '2px solid #b38600' : 'none'}" onclick="(() => { S.f['${filterField}'] = (S.f['${filterField}'] === '${esc(r.targetKey)}' ? 'All' : '${esc(r.targetKey)}'); syncFilterUI(); render(); })()"><td>${isRowActive ? '✓ ' : ''}${esc(r.name)}</td><td>${r.count}</td><td style="background:hsl(4,85%,${Math.max(40, 94 - t * 40)}%);color:#111;font-weight:700">${r.d.toFixed(2)}</td></tr>`;
   }).join('')}</tbody>`;
 }
 
