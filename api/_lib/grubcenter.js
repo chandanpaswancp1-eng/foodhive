@@ -161,8 +161,19 @@ async function fetchPaged(pathPart, from, to, maxPages, session) {
   return all;
 }
 
-const today = () => new Date().toISOString().slice(0, 10);
-const daysAgo = n => new Date(Date.now() - n * 864e5).toISOString().slice(0, 10);
+// The business runs on Asia/Dubai time (UTC+4, no DST). .toISOString() is
+// always UTC regardless of the runtime's own local timezone -- and on
+// Vercel that runtime defaults to UTC, so this isn't just a theoretical
+// 4-hour edge case, it's the normal case there. dubaiDateKey() computes the
+// correct Dubai-local calendar date for any timestamp regardless of host TZ.
+const DUBAI_OFFSET_MS = 4 * 3600 * 1000;
+const pad2 = n => String(n).padStart(2, '0');
+function dubaiDateKey(ms) {
+  const d = new Date(ms + DUBAI_OFFSET_MS);
+  return `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}-${pad2(d.getUTCDate())}`;
+}
+const today = () => dubaiDateKey(Date.now());
+const daysAgo = n => dubaiDateKey(Date.now() - n * 864e5);
 const REOPENED_RE = /reopen/i;
 
 /** Fetch new GrubCENTER data and merge it into the persisted orders blob.
@@ -263,4 +274,4 @@ async function syncOnce(from, to) {
 // seeded into the Blob store once (see scripts/seed-blob.js) rather than read off local disk.
 const readBlobOfficialBrands = () => readBlobJson('official_foodhive_brands.json', null);
 
-module.exports = { CFG, configured, ensureSession, findPartnerId, syncOnce, readOrders, writeOrders, readItems, readMeta };
+module.exports = { CFG, configured, ensureSession, findPartnerId, syncOnce, readOrders, writeOrders, readItems, readMeta, dubaiDateKey };

@@ -181,8 +181,21 @@ async function fetchPaged(pathPart, from, to, maxPages = 20) {
 }
 
 // ---------- IN-MEMORY HIGH PERFORMANCE CACHE ----------
-const today = () => new Date().toISOString().slice(0, 10);
-const daysAgo = n => new Date(Date.now() - n * 864e5).toISOString().slice(0, 10);
+// The business runs on Asia/Dubai time (UTC+4, no DST), but .toISOString()
+// is always UTC regardless of the host's own local timezone -- using it for
+// "today"/day-bucketing is wrong by up to 4 hours (e.g. 1am Dubai is still
+// "yesterday" in UTC), which is exactly backwards for a day-boundary check.
+// This matters doubly on Vercel, where the function runtime's local
+// timezone is UTC by default regardless of what this dev machine happens
+// to be set to.
+const DUBAI_OFFSET_MS = 4 * 3600 * 1000;
+const pad2 = n => String(n).padStart(2, '0');
+function dubaiDateKey(ms) {
+  const d = new Date(ms + DUBAI_OFFSET_MS);
+  return `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}-${pad2(d.getUTCDate())}`;
+}
+const today = () => dubaiDateKey(Date.now());
+const daysAgo = n => dubaiDateKey(Date.now() - n * 864e5);
 
 const STORE = {
   ordersMap: new Map(),
@@ -396,7 +409,7 @@ http.createServer(async (req, res) => {
       if (from || to) {
         filtered = STORE.ordersArray.filter(o => {
           if (!o.receivedAt) return false;
-          const d = new Date(o.receivedAt).toISOString().slice(0, 10);
+          const d = dubaiDateKey(o.receivedAt);
           return (!from || d >= from) && (!to || d <= to);
         });
       }

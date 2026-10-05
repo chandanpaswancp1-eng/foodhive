@@ -1,5 +1,5 @@
 const { waitUntil } = require('@vercel/functions');
-const { configured, syncOnce, readOrders, readMeta } = require('./_lib/grubcenter');
+const { configured, syncOnce, readOrders, readMeta, dubaiDateKey } = require('./_lib/grubcenter');
 
 const SYNC_INTERVAL_MS = 10 * 60 * 1000;
 
@@ -12,7 +12,7 @@ module.exports = async (req, res) => {
   if (from || to) {
     filtered = ordersArray.filter(o => {
       if (!o.receivedAt) return false;
-      const d = new Date(o.receivedAt).toISOString().slice(0, 10);
+      const d = dubaiDateKey(o.receivedAt);
       return (!from || d >= from) && (!to || d <= to);
     });
   }

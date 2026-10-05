@@ -28,18 +28,57 @@ const sum = (a, f) => a.reduce((s, x) => s + f(x), 0);
 const avg = a => (a.length ? a.reduce((s, x) => s + x, 0) / a.length : 0);
 const uniq = a => [...new Set(a)];
 const pad = n => String(n).padStart(2, '0');
-const dkey = t => { const d = new Date(t); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; };
+// The business runs on Asia/Dubai time (UTC+4, no DST). Using the raw
+// Date getters here would bucket every chart by whatever timezone the
+// *viewer's browser* happens to be set to, not Dubai's -- two people
+// looking at the same dashboard from different timezones would see
+// different day/hour groupings. Shifting by the fixed Dubai offset and
+// reading back with the UTC getters makes this viewer-timezone-independent.
+const DUBAI_OFFSET_MS = 4 * 3600 * 1000;
+const dubaiDate = t => new Date(new Date(t).getTime() + DUBAI_OFFSET_MS);
+const dkey = t => { const d = dubaiDate(t); return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`; };
+const dubaiHour = t => dubaiDate(t).getUTCHours();
+const dubaiDOW = t => dubaiDate(t).getUTCDay();
 const money = n => n >= 1e6 ? (n / 1e6).toFixed(2) + 'M' : n >= 1e3 ? (n / 1e3).toFixed(2) + 'K' : n.toFixed(2);
 const cnt = n => n >= 1e6 ? (n / 1e6).toFixed(2) + 'M' : n >= 1e4 ? (n / 1e3).toFixed(1).replace(/\.0$/, '') + 'K' : String(Math.round(n));
 const pc = (n, d = 1) => (n * 100).toFixed(d) + '%';
 const trunc = (s, n = 15) => (s && s.length > n ? s.slice(0, n - 1) + '…' : s || '');
 const DOW = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
-const dowOf = t => DOW[(new Date(t).getDay() + 6) % 7];
+const dowOf = t => DOW[(dubaiDOW(t) + 6) % 7];
+
+function toCleanMs(v) {
+  if (v == null) return null;
+  if (typeof v === 'number') return v + 4 * 3600000;
+  const s = String(v).replace(/Z$/, '').replace('T', ' ');
+  const m = s.match(/^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})/);
+  if (!m) return Date.parse(v) || null;
+  return new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]).getTime();
+}
+const mins = (a, b) => {
+  const ma = toCleanMs(a), mb = toCleanMs(b);
+  if (!ma || !mb) return null;
+  const d = (mb - ma) / 60000;
+  return d >= 0 && d <= 180 ? d : null;
+};
+function prepOf(o) {
+  return mins(o.startedAt, o.preparedAt) ?? mins(o.acceptedAt || o.receivedAt, o.preparedAt);
+}
+function orderRating(o) {
+  if (o.rating != null && o.rating > 0) return o.rating;
+  if (S.ui.rmode === 'strict') return null;
+  const p = prepOf(o);
+  if (p == null) return null;
+  if (p <= 12) return 5;
+  if (p <= 18) return 4;
+  if (p <= 26) return 3;
+  if (p <= 38) return 2;
+  return 1;
+}
 
 // ---------------- state ----------------
 const S = {
   orders: [], items: [], source: 'none', page: 'sales', loadedRange: null,
-  f: { from: '', to: '', channel: 'All', brand: 'All', location: 'All', payment: 'All', day: 'All', partner: 'All', reason: 'All', post: 'All' },
+  f: { from: '', to: '', channel: 'All', brand: 'All', location: 'All', payment: 'All', day: 'All', partner: 'All', reason: 'All', post: 'All', ratingFilter: 'all', onlyDelayed: false },
   ui: { metric: 'sales', group: 'cuisine', grain: 'Daily', cmetric: 'orders', cgroup: 'brand', pgroup: 'brand', rgroup: 'cuisine', igroup: 'brand', dgroup: 'brand', rmode: 'estimated' },
   rng: {}, selBrands: new Set(), selLocs: new Set()
 };
@@ -225,8 +264,35 @@ function groupBy(arr, kf) {
   for (const o of arr) { const k = kf(o); let g = m.get(k); if (!g) m.set(k, g = { k, rows: [] }); g.rows.push(o); }
   return [...m.values()];
 }
-const salesAgg = (arr, kf) => groupBy(arr, kf).map(g => ({ k: g.k, sales: sum(g.rows, o => o.netSales), orders: g.rows.length, disc: sum(g.rows, o => o.discount), receipt: sum(g.rows, o => o.receiptTotal) }));
-const metricOf = (r, metric) => (metric === 'sales' ? r.sales : r.orders);
+const salesAgg = (arr, kf) => groupBy(arr, kf).map(g => {
+  const sales = sum(g.rows, o => o.netSales);
+  const orders = g.rows.length;
+  const disc = sum(g.rows, o => o.discount);
+  const receipt = sum(g.rows, o => o.receiptTotal);
+  return {
+    k: g.k,
+    sales,
+    orders,
+    disc,
+    receipt,
+    aov: orders ? sales / orders : 0,
+    discPct: sales ? (disc / sales) * 100 : 0
+  };
+});
+const metricOf = (r, metric) => {
+  if (metric === 'sales') return r.sales;
+  if (metric === 'orders') return r.orders;
+  if (metric === 'receipt') return r.receipt;
+  if (metric === 'aov') return r.aov;
+  if (metric === 'disc') return r.disc;
+  if (metric === 'discPct') return r.discPct;
+  return r.sales;
+};
+const metricFmt = metric => {
+  if (metric === 'orders') return cnt;
+  if (metric === 'discPct') return n => n.toFixed(1) + '%';
+  return money;
+};
 
 // ---------------- filtering ----------------
 function dateOk(t) { const k = dkey(t); return (!S.f.from || k >= S.f.from) && (!S.f.to || k <= S.f.to); }
@@ -407,7 +473,31 @@ function buildToggles() {
 
 // ---------------- KPI card renderer ----------------
 function kpis(id, list) {
-  $('#' + id).innerHTML = list.map(([h, v, wide]) => `<div class="kpi${wide ? ' wide' : ''}"><div class="kh">${h}</div><div class="kv">${v}</div></div>`).join('');
+  const container = $('#' + id);
+  if (!container) return;
+  container.innerHTML = list.map(([h, v, wide, , isActive, tooltip], idx) => {
+    const act = isActive ? ' active' : '';
+    const tip = tooltip ? ` title="${esc(tooltip)}"` : ' title="Click to filter/reflect data"';
+    const hint = isActive ? 'ACTIVE' : 'FILTER';
+    return `<div class="kpi${wide ? ' wide' : ''}${act}" data-idx="${idx}"${tip} role="button" tabindex="0">
+      <div class="kh">${h}</div>
+      <div class="kv">${v}</div>
+      <div class="click-hint">${hint}</div>
+    </div>`;
+  }).join('');
+
+  container.querySelectorAll('.kpi').forEach(el => {
+    const idx = +el.dataset.idx;
+    const item = list[idx];
+    if (item && typeof item[3] === 'function') {
+      const handler = (e) => {
+        e.stopPropagation();
+        item[3]();
+      };
+      el.onclick = handler;
+      el.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handler(e); } };
+    }
+  });
 }
 
 // ================= PAGE 1: SALES =================
@@ -422,9 +512,56 @@ function renderSales() {
   const days = uniq(O.map(o => dkey(o.receivedAt))).length || 1;
   const run = net / days;
   const top = salesAgg(O, o => o.brand).sort((a, b) => b.sales - a.sales)[0];
-  kpis('kpi-sales', [['Net Sales', money(net)], ['Receipt Total', money(rec)], ['Total Orders', cnt(n)], ['AOV', n ? (net / n).toFixed(2) : '0'], ['Total Discount', money(disc)], ['Discount %', net ? pc(disc / net, 2) : '0%'], ['Avg RunRate', money(run)], ['Projected RR', money(run * 30)], ['Top Performing Brand', top ? esc(top.k) : '–', true]]);
 
-  const m = S.ui.metric, mf = m === 'sales' ? money : cnt, mname = m === 'sales' ? 'Net Sales' : 'Total Orders';
+  const m = S.ui.metric;
+  const mnameMap = {
+    sales: 'Net Sales',
+    orders: 'Total Orders',
+    receipt: 'Receipt Total',
+    aov: 'Average Order Value (AOV)',
+    disc: 'Total Discount',
+    discPct: 'Discount %'
+  };
+  const mname = mnameMap[m] || 'Net Sales';
+  const mf = metricFmt(m);
+
+  kpis('kpi-sales', [
+    ['Net Sales', money(net), false, () => { S.ui.metric = 'sales'; buildToggles(); renderSales(); }, m === 'sales', 'Click to view Net Sales across all charts'],
+    ['Receipt Total', money(rec), false, () => { S.ui.metric = (m === 'receipt' ? 'sales' : 'receipt'); buildToggles(); renderSales(); }, m === 'receipt', 'Click to view Receipt Total (Gross) across all charts'],
+    ['Total Orders', cnt(n), false, () => { S.ui.metric = 'orders'; buildToggles(); renderSales(); }, m === 'orders', 'Click to view Order Volume counts across all charts'],
+    ['AOV', n ? (net / n).toFixed(2) : '0', false, () => { S.ui.metric = (m === 'aov' ? 'sales' : 'aov'); buildToggles(); renderSales(); }, m === 'aov', 'Click to view Average Order Value (AOV) across all charts'],
+    ['Total Discount', money(disc), false, () => {
+      S.ui.metric = (m === 'disc' ? 'sales' : 'disc');
+      buildToggles();
+      renderSales();
+      const el = document.getElementById('c-disc');
+      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, m === 'disc', 'Click to view Total Discounts across all charts'],
+    ['Discount %', net ? pc(disc / net, 2) : '0%', false, () => { S.ui.metric = (m === 'discPct' ? 'sales' : 'discPct'); buildToggles(); renderSales(); }, m === 'discPct', 'Click to view Discount % burn across all charts'],
+    ['Avg RunRate', money(run), false, () => {
+      S.ui.grain = (S.ui.grain === 'Daily' ? 'Monthly' : 'Daily');
+      renderSales();
+      const el = document.getElementById('c-time');
+      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, false, 'Click to toggle Daily vs Monthly run-rate in trend chart'],
+    ['Projected RR', money(run * 30), false, () => {
+      S.ui.grain = (S.ui.grain === 'Monthly' ? 'Daily' : 'Monthly');
+      renderSales();
+      const el = document.getElementById('c-time');
+      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, false, 'Click to toggle 30-day projected run-rate view'],
+    ['Top Performing Brand', top ? esc(top.k) : '–', true, () => {
+      if (!top) return;
+      if (S.f.brand === top.k) {
+        S.f.brand = 'All';
+      } else {
+        S.f.brand = top.k;
+      }
+      syncFilterUI();
+      render();
+    }, top && S.f.brand === top.k, top ? `Click to filter dashboard for "${top.k}" (click again to reset)` : '']
+  ]);
+
   const grpName = S.ui.group === 'brand' ? 'Brands' : 'Cuisines';
   $('#t-brand').textContent = `${grpName} by ${mname}`;
   const br = salesAgg(O, o => gk(o, S.ui.group)).map(r => ({ k: r.k, v: metricOf(r, m) })).sort((a, b) => b.v - a.v).slice(0, 14);
@@ -455,15 +592,15 @@ function renderSales() {
     options: baseOpts({ scales: { x: { ...gridless, ticks: { maxTicksLimit: 12, font: { size: 10 } } }, y: { beginAtZero: true, ticks: { callback: mf, maxTicksLimit: 5 }, grid: { color: '#eee' }, title: { display: true, text: mname } } } })
   } : { __empty: true });
 
-  const loc = salesAgg(O, o => o.location).sort((a, b) => b.sales - a.sales).slice(0, 10).map(r => ({ k: r.k, v: r.sales, orders: r.orders }));
-  combo('c-loc', loc, { name: 'Net Sales', pctName: '%GT Total Orders', filterKey: 'location' });
+  const loc = salesAgg(O, o => o.location).sort((a, b) => metricOf(b, m) - metricOf(a, m)).slice(0, 10).map(r => ({ k: r.k, v: metricOf(r, m), orders: r.orders }));
+  combo('c-loc', loc, { name: mname, pctName: '%GT Total Orders', filterKey: 'location', fmt: mf });
   patchPct('c-loc', loc, n);
 
-  const sl = salesAgg(O, o => slotOf(new Date(o.receivedAt).getHours())).sort((a, b) => b.sales - a.sales);
-  combo('c-slot', sl.map(r => ({ k: r.k, v: r.sales })), { name: 'Net Sales', pctName: '%GT Total Orders' });
+  const sl = salesAgg(O, o => slotOf(dubaiHour(o.receivedAt))).sort((a, b) => metricOf(b, m) - metricOf(a, m));
+  combo('c-slot', sl.map(r => ({ k: r.k, v: metricOf(r, m) })), { name: mname, pctName: '%GT Total Orders', fmt: mf });
   patchPct('c-slot', sl, n);
 
-  hbar('c-chan', salesAgg(O, o => o.channel).map(r => ({ k: r.k, v: m === 'sales' ? r.sales : r.orders })).sort((a, b) => b.v - a.v), { fmt: mf, name: mname, filterKey: 'channel' });
+  hbar('c-chan', salesAgg(O, o => o.channel).map(r => ({ k: r.k, v: metricOf(r, m) })).sort((a, b) => b.v - a.v), { fmt: mf, name: mname, filterKey: 'channel' });
 
   // date & time of day
   const tods = ['Morning', 'Afternoon', 'Evening', 'Night'];
@@ -471,19 +608,27 @@ function renderSales() {
   const dates = uniq(O.map(o => dkey(o.receivedAt))).sort();
   const tmap = {};
   O.forEach(o => {
-    const k = todOf(new Date(o.receivedAt).getHours()) + '|' + dkey(o.receivedAt);
-    tmap[k] = (tmap[k] || 0) + (m === 'sales' ? o.netSales : 1);
+    const k = todOf(dubaiHour(o.receivedAt)) + '|' + dkey(o.receivedAt);
+    tmap[k] = (tmap[k] || 0) + (m === 'orders' ? 1 : m === 'receipt' ? o.receiptTotal : m === 'disc' ? o.discount : o.netSales);
   });
   lineChart('c-tod', dates, tods.map(t => ({ name: t, color: cols[t], data: dates.map(d => tmap[t + '|' + d] || 0) })), { fmt: mf });
 
   const hr = Array.from({ length: 24 }, (_, h) => ({ k: String(h), v: 0, o: 0 }));
-  O.forEach(o => { const h = new Date(o.receivedAt).getHours(); hr[h].v += o.netSales; hr[h].o++; });
-  combo('c-hour', hr, { name: 'Net Sales', pctName: '%GT Total Orders' });
+  O.forEach(o => {
+    const h = dubaiHour(o.receivedAt);
+    hr[h].v += (m === 'orders' ? 1 : m === 'receipt' ? o.receiptTotal : m === 'disc' ? o.discount : o.netSales);
+    hr[h].o++;
+  });
+  combo('c-hour', hr, { name: mname, pctName: '%GT Total Orders', fmt: mf });
   patchPct('c-hour', hr.map(h => ({ orders: h.o })), n);
 
   const dw = DOW.map(d => ({ k: d, v: 0, o: 0 }));
-  O.forEach(o => { const i = (new Date(o.receivedAt).getDay() + 6) % 7; dw[i].v += o.netSales; dw[i].o++; });
-  combo('c-dow', dw, { name: 'Net Sales', pctName: '%GT Total Orders', filterKey: 'day' });
+  O.forEach(o => {
+    const i = (dubaiDOW(o.receivedAt) + 6) % 7;
+    dw[i].v += (m === 'orders' ? 1 : m === 'receipt' ? o.receiptTotal : m === 'disc' ? o.discount : o.netSales);
+    dw[i].o++;
+  });
+  combo('c-dow', dw, { name: mname, pctName: '%GT Total Orders', filterKey: 'day', fmt: mf });
   patchPct('c-dow', dw.map(d => ({ orders: d.o })), n);
 
   const dc = salesAgg(O, o => o.channel).filter(r => r.disc > 0).sort((a, b) => b.disc - a.disc).map(r => ({ k: r.k, v: r.disc }));
@@ -501,10 +646,14 @@ function patchPct(id, rows, totalOrders) {
 function renderCancel() {
   const C = base('cancel').filter(o => o.cancelled);
   const amt = sum(C, o => o.receiptTotal), n = C.length;
-  kpis('kpi-cancel', [['Cancelled Orders Amount', money(amt)], ['Total Orders', cnt(n)], ['AOV', n ? (amt / n).toFixed(2) : '0']]);
   const val = S.ui.cmetric === 'value';
   const mv = r => (val ? r.receipt : r.orders);
   const lbf = val ? money : cnt;
+  kpis('kpi-cancel', [
+    ['Cancelled Orders Amount', money(amt), false, () => { S.ui.cmetric = 'value'; buildToggles(); renderCancel(); }, val, 'Click to view Cancelled Orders Value in AED across all charts'],
+    ['Total Orders', cnt(n), false, () => { S.ui.cmetric = 'orders'; buildToggles(); renderCancel(); }, !val, 'Click to view Cancelled Orders Count volume across all charts'],
+    ['AOV', n ? (amt / n).toFixed(2) : '0', false, () => { S.f.post = (S.f.post === 'Yes' ? 'All' : 'Yes'); syncFilterUI(); renderCancel(); }, S.f.post === 'Yes', 'Click to filter Post-Cancelled orders (direct kitchen food waste)']
+  ]);
 
   const mkRows = (kf, lim) => { const rr = salesAgg(C, kf).sort((a, b) => mv(b) - mv(a)); const tot = sum(rr, r => r.orders); return { rows: rr.slice(0, lim), tot }; };
   const fill = (id, kf, lim, filterKey) => {
@@ -548,20 +697,6 @@ const STAGES = [
   ['recDisp', 'Receiving → Dispatched', 'Receiving To Dispatched', o => [o.acceptedAt || o.receivedAt, o.dispatchedAt]],
   ['recDel', 'Received → Delivered', 'Received To Delivered', o => [o.acceptedAt || o.receivedAt, o.deliveredAt]]
 ];
-function toCleanMs(v) {
-  if (v == null) return null;
-  if (typeof v === 'number') return v + 4 * 3600000;
-  const s = String(v).replace(/Z$/, '').replace('T', ' ');
-  const m = s.match(/^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})/);
-  if (!m) return Date.parse(v) || null;
-  return new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]).getTime();
-}
-const mins = (a, b) => {
-  const ma = toCleanMs(a), mb = toCleanMs(b);
-  if (!ma || !mb) return null;
-  const d = (mb - ma) / 60000;
-  return d >= 0 && d <= 180 ? d : null;
-};
 function stageVals(o) { const r = {}; STAGES.forEach(([k, , , f]) => { const [a, b] = f(o); r[k] = mins(a, b); }); return r; }
 
 function initRanges() {
@@ -647,63 +782,92 @@ function renderPrep() {
     return v == null || !r || ((isNaN(r.min) || v >= r.min - 1e-9) && (isNaN(r.max) || v <= r.max + 1e-9));
   }));
   const avgOf = (arr, k) => avg(arr.map(x => x.v[k]).filter(v => v != null));
-  const kp = STAGES.map(([k, l]) => [l, avgOf(O, k).toFixed(2)]);
+  const stageTarget = {
+    acc: 'c-pb-acc',
+    prep: 'c-pb-prep',
+    std: 'c-pb-std',
+    recDisp: 'c-pb-recDisp',
+    disp: 'c-pb-recDisp',
+    recDel: 'c-ploc'
+  };
+
+  const focusStage = (k) => {
+    const tid = stageTarget[k] || 'prepTable';
+    const targetEl = document.getElementById(tid);
+    if (targetEl) {
+      targetEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      const parentPanel = targetEl.closest('.panel') || targetEl;
+      parentPanel.style.transition = 'all 0.3s ease';
+      parentPanel.style.outline = '3px solid #FDCB3C';
+      parentPanel.style.boxShadow = '0 0 16px rgba(253, 203, 60, 0.6)';
+      setTimeout(() => {
+        parentPanel.style.outline = '';
+        parentPanel.style.boxShadow = '';
+      }, 1600);
+    }
+  };
+
+  const kp = STAGES.map(([k, l]) => [
+    l,
+    avgOf(O, k).toFixed(2),
+    false,
+    () => focusStage(k),
+    false,
+    `Click to scroll and spotlight ${l} Best & Worst charts`
+  ]);
   
   // best vs worst outlet
   const pairs = groupBy(O.filter(x => x.v.recDisp != null), x => `${x.o.brand} - ${x.o.location}`).map(g => ({ k: g.k, v: avg(g.rows.map(x => x.v.recDisp)), n: g.rows.length })).filter(p => p.n >= 1).sort((a, b) => a.v - b.v);
   const best = pairs[0], worst = pairs[pairs.length - 1];
-  kp.push(['Best vs Worst Brand Location', best ? `🏆 Best outlet ${esc(best.k)} – ${best.v.toFixed(1)} min | 🚨 Underperforming: ${esc(worst.k)} – ${worst.v.toFixed(1)} min` : '–', true]);
+
+  const bBrand = best ? best.k.split(' - ')[0] : '';
+  const wBrand = worst ? worst.k.split(' - ')[0] : '';
+  const isBestActive = S.f.brand === bBrand;
+  const isWorstActive = S.f.brand === wBrand;
+
+  kp.push([
+    'Best vs Worst Brand Location',
+    best ? `🏆 Best outlet ${esc(best.k)} – ${best.v.toFixed(1)} min | 🚨 Underperforming: ${esc(worst.k)} – ${worst.v.toFixed(1)} min` : '–',
+    true,
+    () => {
+      if (!best) return;
+      if (S.f.brand === bBrand) {
+        S.f.brand = wBrand;
+      } else if (S.f.brand === wBrand) {
+        S.f.brand = 'All';
+      } else {
+        S.f.brand = bBrand;
+      }
+      syncFilterUI();
+      render();
+    },
+    isBestActive || isWorstActive,
+    isBestActive ? `Currently showing Best Brand: "${bBrand}" (click for Worst)` : isWorstActive ? `Currently showing Worst Brand: "${wBrand}" (click to reset)` : `Click to filter Best Brand: "${bBrand}"`
+  ]);
   kpis('kpi-prep', kp);
-
-  const g = S.ui.pgroup, gname = g === 'brand' ? 'Brand' : 'Cuisine';
-  const grp = groupBy(O, x => gk(x.o, g));
-  const wrap = $('#prepCharts');
-  if (!wrap.children.length) {
-    const sel = [['acc', 'Accepted To Started_Min'], ['prep', 'Started To Prepared_Min'], ['std', 'Prepared To Sent To Dispatch_Min'], ['recDisp', 'Receiving To Dispatched_Min']];
-    wrap.innerHTML = sel.map(([k, t]) => `<div class="panel"><div class="ph" data-t="Best ${t}"></div><div class="pb"><canvas id="c-pb-${k}"></canvas></div></div>`).join('') + sel.map(([k, t]) => `<div class="panel"><div class="ph dark" data-t="Worst ${t}"></div><div class="pb"><canvas id="c-pw-${k}"></canvas></div></div>`).join('');
-    const kids = [...wrap.children]; wrap.innerHTML = '';
-    [0, 4, 1, 5, 2, 6, 3, 7].forEach(i => wrap.appendChild(kids[i]));
-  }
-  $$('.ph[data-t]', wrap).forEach(h => h.textContent = h.dataset.t.replace('_Min', `_Min by ${gname}`));
-  ['acc', 'prep', 'std', 'recDisp'].forEach(k => {
-    const rows = grp.map(gr => ({ k: gr.k, v: avgOf(gr.rows, k), n: gr.rows.filter(x => x.v[k] != null).length })).filter(r => r.n);
-    barsPlain('c-pb-' + k, rows.slice().sort((a, b) => a.v - b.v).slice(0, 10).sort((a, b) => a.v - b.v), { color: Y, filterKey: g === 'brand' ? 'brand' : 'cuisine' });
-    barsPlain('c-pw-' + k, rows.slice().sort((a, b) => b.v - a.v).slice(0, 10), { color: GREY, filterKey: g === 'brand' ? 'brand' : 'cuisine' });
-  });
-
-  // matrix table
-  const t = $('#prepTable');
-  t.innerHTML = `<thead><tr><th>${gname}</th>${STAGES.map(s => `<th>${s[1].replace(' → ', ' →<br>')}</th>`).join('')}</tr></thead><tbody>${grp.sort((a, b) => (a.k < b.k ? -1 : 1)).map(gr => `<tr><td>${esc(gr.k)}</td>${STAGES.map(([k]) => { const v = avgOf(gr.rows, k); return `<td>${v ? v.toFixed(2) : ''}</td>`; }).join('')}</tr>`).join('')}</tbody>`;
-
-  // location counts
-  const lc = groupBy(O, x => x.o.location).map(g2 => ({ k: g2.k, v: g2.rows.length })).sort((a, b) => b.v - a.v).slice(0, 28);
-  barsPlain('c-ploc', lc, { fmt: v => String(v), filterKey: 'location' });
-}
-
-// ================= PAGE 4: RATINGS =================
-function prepOf(o) {
-  return mins(o.startedAt, o.preparedAt) ?? mins(o.acceptedAt || o.receivedAt, o.preparedAt);
-}
-function orderRating(o) {
-  if (o.rating != null && o.rating > 0) return o.rating;
-  if (S.ui.rmode === 'strict') return null;
-  const p = prepOf(o);
-  if (p == null) return null;
-  if (p <= 12) return 5;
-  if (p <= 18) return 4;
-  if (p <= 26) return 3;
-  if (p <= 38) return 2;
-  return 1;
 }
 
 function renderRatings() {
-  let R = base('ratings').filter(o => !o.cancelled).map(o => ({ ...o, rating: orderRating(o) })).filter(o => o.rating != null);
+  const allRatings = base('ratings').filter(o => !o.cancelled).map(o => ({ ...o, rating: orderRating(o) })).filter(o => o.rating != null);
+  let R = allRatings;
   if (S.selBrands.size) R = R.filter(o => S.selBrands.has(o.brand));
   if (S.selLocs.size) R = R.filter(o => S.selLocs.has(o.location));
   const n = R.length, neg = R.filter(o => o.rating <= 3).length, pos = n - neg;
-  kpis('kpi-ratings', [['Total Ratings', cnt(n)], ['Negative Ratings', cnt(neg)], ['Positive Ratings', cnt(pos)], ['Negative Ratings %', n ? pc(neg / n, 2) : '0%'], ['Polarity rate', n ? pc(pos / n, 2) : '0%']]);
+  const rf = S.f.ratingFilter || 'all';
 
-  const agg = kf => groupBy(R, kf).map(g => ({ k: g.k, n: g.rows.length, a: avg(g.rows.map(o => o.rating)) }));
+  kpis('kpi-ratings', [
+    ['Total Ratings', cnt(n), false, () => { S.f.ratingFilter = 'all'; renderRatings(); }, rf === 'all', 'Click to show all ratings across all outlets'],
+    ['Negative Ratings', cnt(neg), false, () => { S.f.ratingFilter = (rf === 'neg' ? 'all' : 'neg'); renderRatings(); }, rf === 'neg', 'Click to filter and drill down into Negative Ratings (≤3★) across brands and locations'],
+    ['Positive Ratings', cnt(pos), false, () => { S.f.ratingFilter = (rf === 'pos' ? 'all' : 'pos'); renderRatings(); }, rf === 'pos', 'Click to filter and inspect Positive Ratings (4-5★) across brands and locations'],
+    ['Negative Ratings %', n ? pc(neg / n, 2) : '0%', false, () => { S.f.ratingFilter = (rf === 'neg' ? 'all' : 'neg'); renderRatings(); }, rf === 'neg', 'Click to isolate negative feedback rate drivers'],
+    ['Polarity rate', n ? pc(pos / n, 2) : '0%', false, () => { S.f.ratingFilter = (rf === 'pos' ? 'all' : 'pos'); renderRatings(); }, rf === 'pos', 'Click to isolate customer satisfaction polarity']
+  ]);
+
+  let chartR = R;
+  if (rf === 'neg') chartR = R.filter(o => o.rating <= 3);
+  else if (rf === 'pos') chartR = R.filter(o => o.rating >= 4);
+
+  const agg = kf => groupBy(chartR, kf).map(g => ({ k: g.k, n: g.rows.length, a: avg(g.rows.map(o => o.rating)) }));
   const rc = (id, rows, color, filterKey) => {
     if (!rows.length) return mk(id, { __empty: true });
     const opts = baseOpts({
@@ -716,7 +880,7 @@ function renderRatings() {
       data: {
         labels: rows.map(r => r.k),
         datasets: [
-          { type: 'bar', label: 'Total Ratings', data: rows.map(r => r.n), backgroundColor: color, yAxisID: 'y', order: 2, datalabels: lbl(v => v) },
+          { type: 'bar', label: rf === 'neg' ? 'Negative Ratings (≤3★)' : rf === 'pos' ? 'Positive Ratings (4-5★)' : 'Total Ratings', data: rows.map(r => r.n), backgroundColor: rf === 'neg' ? '#ee2a5c' : color, yAxisID: 'y', order: 2, datalabels: lbl(v => v) },
           { type: 'line', label: 'Average Rating', data: rows.map(r => +r.a.toFixed(1)), borderColor: K, backgroundColor: K, borderWidth: 1.6, pointRadius: 2, tension: .3, yAxisID: 'y1', order: 1, datalabels: { display: rows.length < 26, align: 'top', backgroundColor: 'rgba(255,255,255,.85)', borderRadius: 3, padding: 1, font: { size: 10, weight: '600' }, color: K } }
         ]
       },
@@ -730,14 +894,14 @@ function renderRatings() {
 
   const bg = agg(o => gk(o, S.ui.rgroup)).filter(r => r.n >= 1);
   const nm = S.ui.rgroup === 'brand' ? 'Brands' : 'Brands (Cuisine Cluster)';
-  $('#t-rbb').textContent = 'Best ' + nm + ' By Rating';
-  $('#t-rwb').textContent = 'Worst ' + nm + ' By Ratings';
+  $('#t-rbb').textContent = (rf === 'neg' ? 'Lowest Impact ' : 'Best ') + nm + ' By Rating';
+  $('#t-rwb').textContent = (rf === 'neg' ? 'Most Negative ' : 'Worst ') + nm + ' By Ratings';
   rc('c-rbb', bg.slice().sort((a, b) => b.a - a.a || b.n - a.n).slice(0, 10), Y, S.ui.rgroup === 'brand' ? 'brand' : 'cuisine');
   rc('c-rwb', bg.slice().sort((a, b) => a.a - b.a || b.n - a.n).slice(0, 12), Y, S.ui.rgroup === 'brand' ? 'brand' : 'cuisine');
 
   rc('c-rall', agg(o => o.location).sort((a, b) => b.n - a.n).slice(0, 26), Y, 'location');
 
-  const dist = [5, 4, 3, 2, 1].map(s => ({ k: String(s), v: R.filter(o => Math.round(o.rating) === s).length }));
+  const dist = [5, 4, 3, 2, 1].map(s => ({ k: String(s), v: chartR.filter(o => Math.round(o.rating) === s).length }));
   donut('c-rdist', dist, { fmt: v => v, colors: [Y, LIGHT, '#ececec', '#ee2a5c', '#1d1d1d'] });
 
   // search lists
@@ -762,7 +926,31 @@ function renderItems() {
   const n = I.length;
   const topB = groupBy(I, x => x.brand).sort((a, b) => b.rows.length - a.rows.length)[0];
   const topL = groupBy(I, x => x.location).sort((a, b) => b.rows.length - a.rows.length)[0];
-  kpis('kpi-items', [['86 Items', cnt(n)], ['Brand with Most 86 Items', topB ? esc(topB.k) : '–', true], ['Location with Most 86 Items', topL ? esc(topL.k) : '–', true]]);
+
+  const isBrandActive = !!(topB && f.brand === topB.k);
+  const isLocActive = !!(topL && f.location === topL.k);
+  const isAllActive = f.brand === 'All' && f.location === 'All';
+
+  kpis('kpi-items', [
+    ['86 Items', cnt(n), false, () => {
+      S.f.brand = 'All';
+      S.f.location = 'All';
+      syncFilterUI();
+      renderItems();
+    }, isAllActive, 'Click to reset brand and location filters to show all 86 stock-outs'],
+    ['Brand with Most 86 Items', topB ? esc(topB.k) : '–', true, () => {
+      if (!topB) return;
+      S.f.brand = (S.f.brand === topB.k ? 'All' : topB.k);
+      syncFilterUI();
+      render();
+    }, isBrandActive, topB ? (isBrandActive ? `Currently showing Brand "${topB.k}" (click to reset)` : `Click to filter 86ed items for Brand "${topB.k}"`) : ''],
+    ['Location with Most 86 Items', topL ? esc(topL.k) : '–', true, () => {
+      if (!topL) return;
+      S.f.location = (S.f.location === topL.k ? 'All' : topL.k);
+      syncFilterUI();
+      render();
+    }, isLocActive, topL ? (isLocActive ? `Currently showing Location "${topL.k}" (click to reset)` : `Click to filter 86ed items for Location "${topL.k}"`) : '']
+  ]);
 
   const cr = (kf, lim) => groupBy(I, kf).map(g => ({ k: g.k, v: g.rows.length })).sort((a, b) => b.v - a.v).slice(0, lim);
   $('#t-ibrand').textContent = `86 Items and %GT 86 Items by ${S.ui.igroup === 'brand' ? 'Brand' : 'Cuisine'}`;
@@ -789,14 +977,33 @@ function renderItems() {
 // ================= PAGE 6: DELAYED =================
 const EST_DEFAULT = 15, DELAY_LIMIT = 10;
 function renderDelayed() {
-  const O = base('delayed').filter(o => !o.cancelled).map(o => {
+  const allOrders = base('delayed').filter(o => !o.cancelled).map(o => {
     const p = prepOf(o); const est = o.estPrep || EST_DEFAULT; return { o, p, est, delay: p == null ? null : p - est };
   }).filter(x => x.p != null);
-  const delayed = O.filter(x => x.delay > DELAY_LIMIT);
-  kpis('kpi-delayed', [['Total Orders', cnt(O.length)], ['Delayed Orders', cnt(delayed.length)], ['> 10 Minutes %', O.length ? pc(delayed.length / O.length, 2) : '0%']]);
+  const delayed = allOrders.filter(x => x.delay > DELAY_LIMIT);
+  const isOnlyDelayed = !!S.f.onlyDelayed;
+
+  kpis('kpi-delayed', [
+    ['Total Orders', cnt(allOrders.length), false, () => {
+      S.f.onlyDelayed = false;
+      renderDelayed();
+    }, !isOnlyDelayed, 'Click to show all completed orders in delay analytics'],
+    ['Delayed Orders', cnt(delayed.length), false, () => {
+      S.f.onlyDelayed = !S.f.onlyDelayed;
+      renderDelayed();
+      const el = document.getElementById('delayTable');
+      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, isOnlyDelayed, 'Click to filter dashboard to only delayed orders (>10 min delay) and highlight bottlenecks'],
+    ['> 10 Minutes %', allOrders.length ? pc(delayed.length / allOrders.length, 2) : '0%', false, () => {
+      S.f.onlyDelayed = !S.f.onlyDelayed;
+      renderDelayed();
+    }, isOnlyDelayed, 'Click to toggle delay exception view (>10 min delay)']
+  ]);
+
+  const O = isOnlyDelayed ? delayed : allOrders;
 
   const dcombo = (id, kf, lim, filterKey) => {
-    const rows = groupBy(O, x => kf(x.o)).map(g => ({ k: g.k, c: g.rows.length, d: g.rows.filter(x => x.delay > DELAY_LIMIT).length })).sort((a, b) => b.c - a.c).slice(0, lim);
+    const rows = groupBy(O, x => kf(x.o)).map(g => ({ k: g.k, c: g.rows.length, d: g.rows.filter(x => x.delay > DELAY_LIMIT).length })).sort((a, b) => (isOnlyDelayed ? b.d - a.d : b.c - a.c)).slice(0, lim);
     if (!rows.length) return mk(id, { __empty: true });
     const opts = baseOpts({
       plugins: { legend: { display: true, position: 'top', align: 'start', labels: { boxWidth: 8, boxHeight: 8, font: { size: 10 } } } },
@@ -808,7 +1015,7 @@ function renderDelayed() {
       data: {
         labels: rows.map(r => r.k),
         datasets: [
-          { type: 'bar', label: 'Completed Orders', data: rows.map(r => r.c), backgroundColor: Y, yAxisID: 'y', order: 3, datalabels: lbl(v => v) },
+          { type: 'bar', label: isOnlyDelayed ? 'Delayed Orders' : 'Completed Orders', data: rows.map(r => r.c), backgroundColor: isOnlyDelayed ? '#ee2a5c' : Y, yAxisID: 'y', order: 3, datalabels: lbl(v => v) },
           { type: 'bar', label: 'Delayed >10 Minutes', data: rows.map(r => r.d), backgroundColor: GREY, yAxisID: 'y', order: 2, datalabels: lbl(v => v) },
           { type: 'line', label: '>10 Minutes %', data: rows.map(r => r.c ? r.d / r.c * 100 : 0), borderColor: K, backgroundColor: K, borderWidth: 1.6, pointRadius: 2, tension: .3, yAxisID: 'y1', order: 1, datalabels: { display: rows.length < 20, align: 'top', backgroundColor: 'rgba(255,255,255,.85)', borderRadius: 3, padding: 1, font: { size: 10, weight: '600' }, color: K, formatter: v => v.toFixed(0) + '%' } }
         ]
@@ -839,12 +1046,14 @@ function renderDelayed() {
   // ranked delay table
   const rk = groupBy(O.filter(x => x.delay != null), x => `${gk(x.o, S.ui.dgroup)}|${x.o.location}`).map(g => ({
     name: S.ui.dgroup === 'brand' ? `${g.rows[0].o.brand}, ${g.rows[0].o.location}` : g.rows[0].o.cuisine + ', ' + g.rows[0].o.location,
-    d: Math.max(0, avg(g.rows.map(x => x.delay)))
+    d: Math.max(0, avg(g.rows.map(x => x.delay))),
+    count: g.rows.length
   })).sort((a, b) => b.d - a.d);
   const mx = rk.length ? rk[0].d || 1 : 1;
-  $('#delayTable').innerHTML = `<thead><tr><th style="text-align:left">${S.ui.dgroup === 'brand' ? 'Brand' : 'Cuisine'}</th><th>Avg Time</th></tr></thead><tbody>${rk.map((r, i) => {
-    const t = r.d / mx;
-    return `<tr style="background:${i % 2 ? '#111' : '#fff'};color:${i % 2 ? '#fff' : '#111'}"><td>${esc(r.name)}</td><td style="background:hsl(4,85%,${94 - t * 40}%);color:#111">${r.d.toFixed(2)}</td></tr>`;
+  const thPrefix = isOnlyDelayed ? '🚨 Delayed Outlets (>10m)' : (S.ui.dgroup === 'brand' ? 'Brand' : 'Cuisine');
+  $('#delayTable').innerHTML = `<thead><tr><th style="text-align:left">${thPrefix}</th><th>Orders</th><th>Avg Delay (min)</th></tr></thead><tbody>${rk.map((r, i) => {
+    const t = Math.min(1, r.d / mx);
+    return `<tr style="background:${i % 2 ? '#111' : '#fff'};color:${i % 2 ? '#fff' : '#111'}"><td>${esc(r.name)}</td><td>${r.count}</td><td style="background:hsl(4,85%,${Math.max(40, 94 - t * 40)}%);color:#111;font-weight:700">${r.d.toFixed(2)}</td></tr>`;
   }).join('')}</tbody>`;
 }
 
@@ -887,8 +1096,16 @@ function fullRange() {
 }
 
 // Sidebar Buttons
+function resetFilters() {
+  Object.keys(S.f).forEach(k => {
+    if (k === 'ratingFilter') S.f[k] = 'all';
+    else if (k === 'onlyDelayed') S.f[k] = false;
+    else if (!['from', 'to'].includes(k)) S.f[k] = 'All';
+  });
+}
+
 $('#btnAll').onclick = () => {
-  Object.keys(S.f).forEach(k => { S.f[k] = 'All'; });
+  resetFilters();
   S.selBrands.clear(); S.selLocs.clear();
   setDates(...fullRange());
   initRanges();
@@ -918,7 +1135,7 @@ function setData(orders, items, source, label) {
   }
   S.loadedRange = fullRange();
   S.selBrands.clear(); S.selLocs.clear();
-  Object.keys(S.f).forEach(k => { if (!['from', 'to'].includes(k)) S.f[k] = 'All'; });
+  resetFilters();
   initRanges();
   buildFilters();
   buildToggles();
@@ -1110,6 +1327,10 @@ function loadDemo() {
     } catch (_) {}
   }, 10 * 60 * 1000);
 
-  window.FoodHive = { S, show, render, setData, base };
+  window.S = S;
+  window.show = show;
+  window.render = render;
+  window.syncFilterUI = syncFilterUI;
+  window.FoodHive = { S, show, render, setData, base, syncFilterUI };
 })();
 })();
