@@ -147,19 +147,36 @@ function dayChunks(from, to) {
   return days;
 }
 
+// Up to 2 retries with growing backoff before giving up on a day -- and log
+// it either way, so a transient failure shows up as a visible gap instead
+// of silently shrinking the synced dataset.
+async function fetchDayWithRetry(pathPart, day, maxPages, s, pid) {
+  let lastErr;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (attempt > 0) await new Promise(r => setTimeout(r, 1500 * attempt));
+    try {
+      return await fetchPagedOneRange(pathPart, day, day, maxPages, s, pid);
+    } catch (e) { lastErr = e; }
+  }
+  console.warn(`[GrubCENTER Sync] Giving up on ${pathPart} ${day} after 3 attempts: ${lastErr.message}`);
+  return null; // distinguish "failed" from "legitimately 0 orders that day"
+}
+
 async function fetchPaged(pathPart, from, to, maxPages = 20) {
   const s = await ensureSession();
   const pid = findPartnerId(s.claims);
   const days = dayChunks(from, to);
-  const CONCURRENCY = 5;
+  const CONCURRENCY = 3;
   const all = [];
+  const failedDays = [];
   for (let i = 0; i < days.length; i += CONCURRENCY) {
     const batch = days.slice(i, i + CONCURRENCY);
     const results = await Promise.all(batch.map(day =>
-      fetchPagedOneRange(pathPart, day, day, maxPages, s, pid).catch(() => [])
+      fetchDayWithRetry(pathPart, day, maxPages, s, pid).then(rows => ({ day, rows }))
     ));
-    results.forEach(rows => all.push(...rows));
+    results.forEach(({ day, rows }) => { if (rows === null) failedDays.push(day); else all.push(...rows); });
   }
+  if (failedDays.length) console.warn(`[GrubCENTER Sync] ${pathPart}: ${failedDays.length} day(s) could not be fetched and are MISSING from this sync: ${failedDays.join(', ')}`);
   return all;
 }
 
@@ -210,6 +227,8 @@ function preloadData() {
 }
 preloadData();
 
+const REOPENED_RE = /reopen/i;
+
 // 2. Synchronize live GrubCENTER data into master store
 async function syncGrubcenter(from, to) {
   if (STORE.syncing) return;
@@ -217,11 +236,13 @@ async function syncGrubcenter(from, to) {
   const f = from || daysAgo(45), t = to || today();
   try {
     console.log(`[GrubCENTER Sync] Pulling live data (${f} to ${t})...`);
-    const [rawSales, rawOps, rawCancels] = await Promise.all([
-      fetchPaged(CFG.ordersPath, f, t, 25),
-      fetchPaged(CFG.opsPath, f, t, 20).catch(err => { console.warn('Ops warning:', err.message); return []; }),
-      fetchPaged(CFG.cancelPath, f, t, 10).catch(err => { console.warn('Cancel warning:', err.message); return []; })
-    ]);
+    // Sequential, not parallel: each of these already fans out multiple
+    // concurrent day-chunked requests internally, and running all three
+    // endpoints at once compounds that into enough concurrent load to
+    // trigger rate-limiting/transient failures on GrubCENTER's side.
+    const rawSales = await fetchPaged(CFG.ordersPath, f, t, 25);
+    const rawOps = await fetchPaged(CFG.opsPath, f, t, 20).catch(err => { console.warn('Ops warning:', err.message); return []; });
+    const rawCancels = await fetchPaged(CFG.cancelPath, f, t, 10).catch(err => { console.warn('Cancel warning:', err.message); return []; });
 
     const opsMap = new Map();
     rawOps.forEach(o => {
@@ -238,12 +259,20 @@ async function syncGrubcenter(from, to) {
     STORE.liveOpsCount = rawOps.length;
     STORE.liveCancelCount = rawCancels.length;
 
-    // Merge operations & cancellation timings into live orders
+    // Merge operations & cancellation timings into live orders. GrubCENTER's
+    // cancellation report also lists orders that were cancelled and then
+    // REOPENED (reason "Order reopened") -- those are active again, not
+    // cancelled, so they must not be flagged here even though they appear
+    // in the report. (Confirmed against the live account: 235 of 2157
+    // orders in one test window were wrongly marked cancelled this way --
+    // the single largest source of the dashboard undercounting GrubTech's
+    // own totals.)
     const mergedLive = rawSales.map(s => {
       const oid = String(s.orderId || s.id || '');
       const ext = String(s.externalId || '');
       const op = opsMap.get(oid) || opsMap.get(ext) || {};
       const cl = cancelMap.get(oid) || cancelMap.get(ext) || {};
+      const reopened = REOPENED_RE.test(cl.reason || '');
       return {
         ...s,
         acceptedAt: op.acceptedAt || s.acceptedAt,
@@ -252,9 +281,9 @@ async function syncGrubcenter(from, to) {
         sentToDispatcherAt: op.sentToDispatcherAt || s.sentToDispatcherAt || op.sentToDispatchAt,
         dispatchedAt: op.dispatchedAt || s.dispatchedAt,
         completedAt: op.completedAt || s.completedAt,
-        cancelled: cl.reason ? true : (s.cancelled || false),
+        cancelled: (cl.reason && !reopened) ? true : (s.cancelled || false),
         postCancelled: cl.postCancelled === 'Yes' || cl.postCancelled === true,
-        reason: cl.reason || s.cancellationReason || s.reason || ''
+        reason: reopened ? (s.cancellationReason || s.reason || '') : (cl.reason || s.cancellationReason || s.reason || '')
       };
     });
 
@@ -285,7 +314,7 @@ async function syncGrubcenter(from, to) {
         if (!o.deliveredAt && op.completedAt) o.deliveredAt = op.completedAt;
       }
       const cl = cancelMap.get(o.id);
-      if (cl) {
+      if (cl && !REOPENED_RE.test(cl.reason || '')) {
         o.cancelled = true;
         o.reason = cl.reason || o.reason;
         o.postCancelled = cl.postCancelled === 'Yes' || cl.postCancelled === true;

@@ -130,15 +130,31 @@ function dayChunks(from, to) {
   return days;
 }
 
+// One retry before giving up on a day (kept short -- Vercel functions have
+// a max execution duration, so this trades some reliability for staying
+// within it, unlike server.js's more patient 3-attempt version).
+async function fetchDayWithRetry(pathPart, day, maxPages, session, pid) {
+  try {
+    return await fetchPagedOneRange(pathPart, day, day, maxPages, session, pid);
+  } catch (e) {
+    try {
+      return await fetchPagedOneRange(pathPart, day, day, maxPages, session, pid);
+    } catch (e2) {
+      console.warn(`[sync] giving up on ${pathPart} ${day}: ${e2.message}`);
+      return [];
+    }
+  }
+}
+
 async function fetchPaged(pathPart, from, to, maxPages, session) {
   const pid = findPartnerId(session.claims);
   const days = dayChunks(from, to);
-  const CONCURRENCY = 5;
+  const CONCURRENCY = 3;
   const all = [];
   for (let i = 0; i < days.length; i += CONCURRENCY) {
     const batch = days.slice(i, i + CONCURRENCY);
     const results = await Promise.all(batch.map(day =>
-      fetchPagedOneRange(pathPart, day, day, maxPages, session, pid).catch(() => [])
+      fetchDayWithRetry(pathPart, day, maxPages, session, pid)
     ));
     results.forEach(rows => all.push(...rows));
   }
@@ -147,6 +163,7 @@ async function fetchPaged(pathPart, from, to, maxPages, session) {
 
 const today = () => new Date().toISOString().slice(0, 10);
 const daysAgo = n => new Date(Date.now() - n * 864e5).toISOString().slice(0, 10);
+const REOPENED_RE = /reopen/i;
 
 /** Fetch new GrubCENTER data and merge it into the persisted orders blob.
  * Mirrors server.js's syncGrubcenter(), but reads/writes the Blob store
@@ -174,11 +191,17 @@ async function syncOnce(from, to) {
     if (c.orderId) cancelMap.set(String(c.orderId), c);
   });
 
+  // GrubCENTER's cancellation report also lists orders that were cancelled
+  // and then REOPENED (reason "Order reopened") -- those are active again,
+  // not cancelled, so they must not be flagged here even though they
+  // appear in the report (confirmed against the live account: this was the
+  // single largest source of undercounting vs GrubCENTER's own totals).
   const mergedLive = rawSales.map(s => {
     const oid = String(s.orderId || s.id || '');
     const ext = String(s.externalId || '');
     const op = opsMap.get(oid) || opsMap.get(ext) || {};
     const cl = cancelMap.get(oid) || cancelMap.get(ext) || {};
+    const reopened = REOPENED_RE.test(cl.reason || '');
     return {
       ...s,
       acceptedAt: op.acceptedAt || s.acceptedAt,
@@ -187,9 +210,9 @@ async function syncOnce(from, to) {
       sentToDispatcherAt: op.sentToDispatcherAt || s.sentToDispatcherAt || op.sentToDispatchAt,
       dispatchedAt: op.dispatchedAt || s.dispatchedAt,
       completedAt: op.completedAt || s.completedAt,
-      cancelled: cl.reason ? true : (s.cancelled || false),
+      cancelled: (cl.reason && !reopened) ? true : (s.cancelled || false),
       postCancelled: cl.postCancelled === 'Yes' || cl.postCancelled === true,
-      reason: cl.reason || s.cancellationReason || s.reason || ''
+      reason: reopened ? (s.cancellationReason || s.reason || '') : (cl.reason || s.cancellationReason || s.reason || '')
     };
   });
 
@@ -217,7 +240,7 @@ async function syncOnce(from, to) {
       if (!o.deliveredAt && op.completedAt) o.deliveredAt = op.completedAt;
     }
     const cl = cancelMap.get(o.id);
-    if (cl) {
+    if (cl && !REOPENED_RE.test(cl.reason || '')) {
       o.cancelled = true;
       o.reason = cl.reason || o.reason;
       o.postCancelled = cl.postCancelled === 'Yes' || cl.postCancelled === true;
