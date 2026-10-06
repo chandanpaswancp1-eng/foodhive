@@ -1673,6 +1673,45 @@ $('#mDemo').onclick = () => { loadDemo(); log('Demo data loaded.'); };
 $('#mLive').onclick = async () => { const ok = await loadLive(); if (ok) $('#modal').hidden = true; };
 if ($('#mCached')) $('#mCached').onclick = async () => { await loadCached(); };
 $('#btnData').onclick = () => { $('#modal').hidden = false; $('#mStatus').textContent = $('#srcBadge').textContent; };
+
+let syncPolling = false;
+async function syncNow() {
+  if (syncPolling) return;
+  const btn = $('#btnSync'), msg = $('#syncMsg');
+  if (!btn) return;
+  btn.disabled = true; btn.textContent = '⏳ Syncing…';
+  if (msg) { msg.textContent = ''; msg.className = 'sync-msg'; }
+  const done = (text, cls) => {
+    if (msg) { msg.textContent = text; msg.className = 'sync-msg' + (cls ? ' ' + cls : ''); }
+    btn.disabled = false; btn.textContent = '🔄 Sync Now';
+    syncPolling = false;
+  };
+  try {
+    const before = await fetch('/api/status').then(r => r.json()).then(j => j.lastSync || 0).catch(() => 0);
+    const range = (S.f.from && S.f.to) ? `?from=${S.f.from}&to=${S.f.to}` : '';
+    const res = await fetch('/api/refresh' + range).then(r => r.json());
+    if (res.configured === false) { done(res.message || 'GrubCENTER not configured on this server', 'err'); return; }
+    syncPolling = true;
+    const deadline = Date.now() + 90000;
+    (async function poll() {
+      if (Date.now() > deadline) { done('Still syncing in the background — check back shortly'); return; }
+      const st = await fetch('/api/status').then(r => r.json()).catch(() => null);
+      if (st && st.lastSync > before) {
+        const [ordRes, availRes] = await Promise.all([fetch('/api/orders'), fetch('/api/availability')]);
+        const ordData = await ordRes.json();
+        let items = S.items;
+        try { const itJson = await availRes.json(); if (itJson.items) items = itJson.items; } catch (_) {}
+        setData(ordData.orders, items, 'live', `● Live · GrubCENTER (${ordData.orders.length})`);
+        done(`✓ Synced — ${ordData.orders.length} orders`, 'ok');
+        return;
+      }
+      setTimeout(poll, 2500);
+    })();
+  } catch (e) {
+    done('✗ ' + e.message, 'err');
+  }
+}
+if ($('#btnSync')) $('#btnSync').onclick = syncNow;
 $('#mClose').onclick = () => { $('#modal').hidden = true; };
 if ($('#dailyModalClose')) $('#dailyModalClose').onclick = () => { $('#dailyModal').hidden = true; };
 if ($('#dailyModalClose2')) $('#dailyModalClose2').onclick = () => { $('#dailyModal').hidden = true; };

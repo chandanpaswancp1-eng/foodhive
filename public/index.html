@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>FOOD HIVE · Operations &amp; Sales Dashboard</title>
 <link rel="icon" href="assets/favicon.png">
-<link rel="stylesheet" href="style.css?v=3.0">
+<link rel="stylesheet" href="style.css?v=3.1">
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.2.0/dist/chartjs-plugin-datalabels.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
@@ -41,6 +41,8 @@
 
     <div class="side-foot">
       <div id="srcBadge" class="src-badge live">● Live · GrubCENTER (2614)</div>
+      <button class="btn-sync" id="btnSync" title="Pull the latest orders directly from GrubCENTER for the currently selected date range">🔄 Sync Now</button>
+      <div id="syncMsg" class="sync-msg"></div>
       <button class="btn-dark" id="btnData">Data source</button>
     </div>
   </aside>
@@ -272,7 +274,7 @@
   </div>
 </div>
 
-<script src="normalize.js?v=3.0"></script>
-<script src="app.js?v=3.0"></script>
+<script src="normalize.js?v=3.1"></script>
+<script src="app.js?v=3.1"></script>
 </body>
 </html>

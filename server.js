@@ -399,8 +399,11 @@ http.createServer(async (req, res) => {
     }
 
     if (u.pathname === '/api/refresh') {
+      if (!(CFG.email && CFG.password)) {
+        return sendGzip(req, res, 200, { ok: false, configured: false, message: 'GrubCENTER credentials not configured on this server' });
+      }
       syncGrubcenter(u.searchParams.get('from'), u.searchParams.get('to')).catch(() => {});
-      return sendGzip(req, res, 200, { ok: true, message: 'Sync started' });
+      return sendGzip(req, res, 200, { ok: true, configured: true, message: 'Sync started' });
     }
 
     if (u.pathname === '/api/orders') {
