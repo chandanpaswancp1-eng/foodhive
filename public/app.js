@@ -430,10 +430,10 @@ function buildFilters() {
         <label>${label} <span class="chevron">⌄</span></label>
         ${stats ? `
         <div class="period-pill-row">
-          <button type="button" class="pp-btn${isToday ? ' on' : ''}" data-p="today" title="Today (${stats.latestDate}): ${stats.today.count} orders · ${money(stats.today.net)} Net">Today (${stats.today.count})</button>
-          <button type="button" class="pp-btn${isWeek ? ' on' : ''}" data-p="week" title="This Week (${stats.weekStart} to ${stats.latestDate}): ${stats.week.count} orders · ${money(stats.week.net)} Net">Week (${stats.week.count})</button>
-          <button type="button" class="pp-btn${isMonth ? ' on' : ''}" data-p="month" title="Previous Month (${stats.monthStart} to ${stats.monthEnd}): ${stats.month.count} orders · ${money(stats.month.net)} Net">Month (${stats.month.count})</button>
-          <button type="button" class="pp-btn${isAll ? ' on' : ''}" data-p="all" title="All Time (${stats.minDate} to ${stats.latestDate}): ${stats.all.count} orders · ${money(stats.all.net)} Net">All (${cnt(stats.all.count)})</button>
+          <button type="button" class="pp-btn${isToday ? ' on' : ''}" data-p="today" title="Today (${stats.latestDate}): ${stats.today.count} orders · ${money(stats.today.net)} Net">Today</button>
+          <button type="button" class="pp-btn${isWeek ? ' on' : ''}" data-p="week" title="This Week (${stats.weekStart} to ${stats.latestDate}): ${stats.week.count} orders · ${money(stats.week.net)} Net">Week</button>
+          <button type="button" class="pp-btn${isMonth ? ' on' : ''}" data-p="month" title="Previous Month (${stats.monthStart} to ${stats.monthEnd}): ${stats.month.count} orders · ${money(stats.month.net)} Net">Month</button>
+          <button type="button" class="pp-btn${isAll ? ' on' : ''}" data-p="all" title="All Time (${stats.minDate} to ${stats.latestDate}): ${stats.all.count} orders · ${money(stats.all.net)} Net">All</button>
         </div>` : ''}
         <div class="date-inputs">
           <input type="date" id="fFrom" value="${S.f.from}">
