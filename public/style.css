@@ -306,7 +306,7 @@ nav a.on { background: #fff; border-color: var(--k); }
 .kpi {
   background: #fff;
   border: 1px solid #ced5d7;
-  min-width: 100px;
+  min-width: 112px;
   flex: 1;
   box-shadow: 0 1px 2px rgba(0,0,0,0.03);
   cursor: pointer;
@@ -343,7 +343,12 @@ nav a.on { background: #fff; border-color: var(--k); }
   font-size: 24px;
   padding: 8px 6px;
   font-weight: 500;
-  white-space: nowrap;
+  /* Wraps instead of overflowing if a value is ever too long for the
+     tile's current width -- browsers only wrap when content doesn't
+     already fit on one line, so normal-length values are unaffected. */
+  white-space: normal;
+  overflow-wrap: break-word;
+  word-break: break-word;
 }
 .kpi.wide .kv {
   font-size: 17px;
