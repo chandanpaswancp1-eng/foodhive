@@ -58,7 +58,7 @@ const mins = (a, b) => {
   const ma = toCleanMs(a), mb = toCleanMs(b);
   if (!ma || !mb) return null;
   const d = (mb - ma) / 60000;
-  return d >= 0 && d <= 180 ? d : null;
+  return d >= 0 && d <= 1440 ? d : null;
 };
 function prepOf(o) {
   return mins(o.startedAt, o.preparedAt) ?? mins(o.acceptedAt || o.receivedAt, o.preparedAt);
@@ -888,6 +888,8 @@ function renderSales() {
     if (!eq(o.brand, f.brand) || !eq(o.location, f.location)) return false;
     if (!eq(o.channel, f.channel) || !eq(o.payment, f.payment) || !eq(o.partner, f.partner)) return false;
     if (f.day !== 'All' && dowOf(o.receivedAt) !== f.day) return false;
+    if (f.slot && f.slot !== 'All' && slotOf(dubaiHour(o.receivedAt)) !== f.slot) return false;
+    if (f.hour != null && f.hour !== 'All' && String(dubaiHour(o.receivedAt)) !== String(f.hour)) return false;
     return true;
   });
   const ts = salesAgg(timeOrders, o => grainKey[S.ui.grain](o.receivedAt)).sort((a, b) => (a.k < b.k ? -1 : 1));
@@ -954,14 +956,14 @@ function renderSales() {
   const tmap = {};
   O.forEach(o => {
     const k = todOf(dubaiHour(o.receivedAt)) + '|' + dkey(o.receivedAt);
-    tmap[k] = (tmap[k] || 0) + (m === 'orders' ? 1 : m === 'receipt' ? o.receiptTotal : m === 'disc' ? o.discount : o.netSales);
+    tmap[k] = (tmap[k] || 0) + (m === 'orders' ? 1 : (m === 'gross' || m === 'receipt') ? o.receiptTotal : m === 'disc' ? o.discount : o.netSales);
   });
   lineChart('c-tod', dates, tods.map(t => ({ name: t, color: cols[t], data: dates.map(d => tmap[t + '|' + d] || 0) })), { fmt: mf });
 
   const hr = Array.from({ length: 24 }, (_, h) => ({ k: String(h), v: 0, o: 0 }));
   O.forEach(o => {
     const h = dubaiHour(o.receivedAt);
-    hr[h].v += (m === 'orders' ? 1 : m === 'receipt' ? o.receiptTotal : m === 'disc' ? o.discount : o.netSales);
+    hr[h].v += (m === 'orders' ? 1 : (m === 'gross' || m === 'receipt') ? o.receiptTotal : m === 'disc' ? o.discount : o.netSales);
     hr[h].o++;
   });
   combo('c-hour', hr, { name: mname, pctName: '%GT Total Orders', filterKey: 'hour', fmt: mf });
@@ -970,7 +972,7 @@ function renderSales() {
   const dw = DOW.map(d => ({ k: d, v: 0, o: 0 }));
   O.forEach(o => {
     const i = (dubaiDOW(o.receivedAt) + 6) % 7;
-    dw[i].v += (m === 'orders' ? 1 : m === 'receipt' ? o.receiptTotal : m === 'disc' ? o.discount : o.netSales);
+    dw[i].v += (m === 'orders' ? 1 : (m === 'gross' || m === 'receipt') ? o.receiptTotal : m === 'disc' ? o.discount : o.netSales);
     dw[i].o++;
   });
   combo('c-dow', dw, { name: mname, pctName: '%GT Total Orders', filterKey: 'day', fmt: mf });
@@ -998,7 +1000,7 @@ function renderCancel() {
   const lbf = val ? money : cnt;
   kpis('kpi-cancel', [
     ['Cancelled Orders Amount', money(amt), false, () => { S.ui.cmetric = 'value'; buildToggles(); renderCancel(); }, val, 'Click to view Cancelled Orders Value in AED across all charts'],
-    ['Total Orders', cnt(n), false, () => { S.ui.cmetric = 'orders'; buildToggles(); renderCancel(); }, !val, 'Click to view Cancelled Orders Count volume across all charts'],
+    ['Total Cancelled Orders', cnt(n), false, () => { S.ui.cmetric = 'orders'; buildToggles(); renderCancel(); }, !val, 'Click to view Cancelled Orders Count volume across all charts'],
     ['AOV', n ? (amt / n).toFixed(2) : '0', false, () => { S.f.post = (S.f.post === 'Yes' ? 'All' : 'Yes'); syncFilterUI(); renderCancel(); }, S.f.post === 'Yes', 'Click to filter Post-Cancelled orders (direct kitchen food waste)']
   ]);
 
@@ -1508,7 +1510,7 @@ function renderDelayed() {
   const rk = groupBy(O.filter(x => x.delay != null), x => `${gk(x.o, S.ui.dgroup)}|${x.o.location}`).map(g => ({
     name: S.ui.dgroup === 'brand' ? `${g.rows[0].o.brand}, ${g.rows[0].o.location}` : g.rows[0].o.cuisine + ', ' + g.rows[0].o.location,
     targetKey: S.ui.dgroup === 'brand' ? g.rows[0].o.brand : g.rows[0].o.cuisine,
-    d: Math.max(0, avg(g.rows.map(x => x.delay))),
+    d: avg(g.rows.map(x => x.delay)),
     count: g.rows.length
   })).sort((a, b) => b.d - a.d);
   const mx = rk.length ? rk[0].d || 1 : 1;
@@ -1516,7 +1518,7 @@ function renderDelayed() {
   const curTargetKey = S.f[S.ui.dgroup === 'brand' ? 'brand' : 'cuisine'];
   const filterField = S.ui.dgroup === 'brand' ? 'brand' : 'cuisine';
   $('#delayTable').innerHTML = `<thead><tr><th style="text-align:left">${thPrefix}</th><th>Orders</th><th>Avg Delay (min)</th></tr></thead><tbody>${rk.map((r, i) => {
-    const t = Math.min(1, r.d / mx);
+    const t = Math.max(0, Math.min(1, r.d / mx));
     const isRowActive = curTargetKey === r.targetKey;
     return `<tr style="cursor:pointer;background:${isRowActive ? '#FFFDF2' : (i % 2 ? '#111' : '#fff')};color:${isRowActive ? '#000' : (i % 2 ? '#fff' : '#111')};outline:${isRowActive ? '2px solid #b38600' : 'none'}" onclick="(() => { S.f['${filterField}'] = (S.f['${filterField}'] === '${esc(r.targetKey)}' ? 'All' : '${esc(r.targetKey)}'); syncFilterUI(); render(); })()"><td>${isRowActive ? '✓ ' : ''}${esc(r.name)}</td><td>${r.count}</td><td style="background:hsl(4,85%,${Math.max(40, 94 - t * 40)}%);color:#111;font-weight:700">${r.d.toFixed(2)}</td></tr>`;
   }).join('')}</tbody>`;

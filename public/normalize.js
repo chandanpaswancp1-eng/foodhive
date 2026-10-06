@@ -118,7 +118,7 @@
     return flat.map((r, i) => {
       const g = f => (map[f] !== undefined ? r[map[f]] : undefined);
       const status = str(g('status')).toLowerCase();
-      const cancelled = /cancel|reject|fail|void/.test(status) || r.cancelled === true;
+      const cancelled = typeof r.cancelled === 'boolean' ? r.cancelled : /cancel|reject|fail|void/.test(status);
       const receipt = num(g('receiptTotal'));
       const discount = Math.abs(num(g('discount')));
       const net = map.netSales !== undefined ? num(g('netSales')) : Math.max(receipt - discount, 0);
@@ -140,7 +140,7 @@
         payment: str(g('payment')) || '(Blank)',
         partner: str(g('partner')) || '(Blank)',
         netSales: net,
-        receiptTotal: receipt || net + discount,
+        receiptTotal: g('receiptTotal') !== undefined ? receipt : net + discount,
         discount,
         cancelled,
         postCancelled: cancelled && (map.postCancelled !== undefined ? truthy(g('postCancelled')) : (r.postCancelled || !!toDate(g('acceptedAt')))),
