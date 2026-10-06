@@ -177,28 +177,33 @@ nav a.on { background: #fff; border-color: var(--k); }
   cursor: pointer;
 }
 .fbox.dates {
-  min-width: 260px;
+  min-width: 340px;
+  padding: 8px 12px 10px;
   display: flex;
   flex-direction: column;
 }
+.fbox.dates label {
+  font-size: 13px;
+  margin-bottom: 6px;
+}
 .period-pill-row {
   display: flex;
-  gap: 2px;
-  margin-bottom: 4px;
+  gap: 3px;
+  margin-bottom: 6px;
   background: #eee;
-  border-radius: 3px;
-  padding: 2px;
+  border-radius: 4px;
+  padding: 3px;
 }
 .pp-btn {
   flex: 1;
-  padding: 3px 2px;
+  padding: 7px 4px;
   border: none;
   background: transparent;
   color: #444;
-  font-size: 10px;
+  font-size: 13px;
   font-weight: 700;
   cursor: pointer;
-  border-radius: 2px;
+  border-radius: 3px;
   text-align: center;
   transition: all 0.15s ease;
   white-space: nowrap;
@@ -214,16 +219,16 @@ nav a.on { background: #fff; border-color: var(--k); }
 }
 .date-inputs {
   display: flex;
-  gap: 6px;
+  gap: 8px;
   align-items: center;
 }
 .date-inputs input[type=date] {
   background: var(--y);
   border: 1px solid #b38600;
-  font-weight: 600;
-  font-size: 11px;
-  padding: 3px 4px;
-  border-radius: 2px;
+  font-weight: 700;
+  font-size: 14px;
+  padding: 7px 8px;
+  border-radius: 3px;
   color: var(--k);
   flex: 1;
 }
