@@ -360,6 +360,52 @@ function syncFilterUI() {
   });
 }
 
+function getPeriodStats() {
+  const ts = S.orders.map(o => o.receivedAt);
+  if (!ts.length) return null;
+  const latestDate = dkey(Math.max(...ts));
+  const [minDate] = fullRange();
+
+  // Today
+  const todayOrders = S.orders.filter(o => !o.cancelled && dkey(o.receivedAt) === latestDate);
+  const todayNet = sum(todayOrders, o => o.netSales);
+
+  // This Week (from Monday of latestDate)
+  const ld = new Date(latestDate + 'T00:00:00');
+  const dow = (ld.getDay() + 6) % 7;
+  const ws = new Date(ld);
+  ws.setDate(ld.getDate() - dow);
+  const weekStart = dkey(ws);
+  const weekOrders = S.orders.filter(o => !o.cancelled && dkey(o.receivedAt) >= weekStart && dkey(o.receivedAt) <= latestDate);
+  const weekNet = sum(weekOrders, o => o.netSales);
+
+  // This Month
+  const monthStart = latestDate.slice(0, 7) + '-01';
+  const monthOrders = S.orders.filter(o => !o.cancelled && dkey(o.receivedAt) >= monthStart && dkey(o.receivedAt) <= latestDate);
+  const monthNet = sum(monthOrders, o => o.netSales);
+
+  // All Time
+  const allOrders = S.orders.filter(o => !o.cancelled);
+  const allNet = sum(allOrders, o => o.netSales);
+
+  return {
+    latestDate,
+    weekStart,
+    monthStart,
+    minDate,
+    today: { count: todayOrders.length, net: todayNet },
+    week: { count: weekOrders.length, net: weekNet },
+    month: { count: monthOrders.length, net: monthNet },
+    all: { count: allOrders.length, net: allNet }
+  };
+}
+
+function getDefaultPeriod() {
+  const st = getPeriodStats();
+  if (!st) return fullRange();
+  return [st.latestDate, st.latestDate];
+}
+
 function buildFilters() {
   const targetId = S.page === 'prep' ? 'filters-prep' : `filters-${S.page}`;
   const el = $('#' + targetId); if (!el) return;
@@ -369,9 +415,22 @@ function buildFilters() {
   list.forEach(([key, label]) => {
     const d = document.createElement('div');
     if (key === 'dates') {
+      const stats = getPeriodStats();
+      const isToday = stats && S.f.from === stats.latestDate && S.f.to === stats.latestDate;
+      const isWeek = stats && S.f.from === stats.weekStart && S.f.to === stats.latestDate;
+      const isMonth = stats && S.f.from === stats.monthStart && S.f.to === stats.latestDate;
+      const isAll = stats && S.f.from === stats.minDate && S.f.to === stats.latestDate;
+
       d.className = 'fbox dates';
       d.innerHTML = `
         <label>${label} <span class="chevron">⌄</span></label>
+        ${stats ? `
+        <div class="period-pill-row">
+          <button type="button" class="pp-btn${isToday ? ' on' : ''}" data-p="today" title="Today (${stats.latestDate}): ${stats.today.count} orders · ${money(stats.today.net)} Net">Today (${stats.today.count})</button>
+          <button type="button" class="pp-btn${isWeek ? ' on' : ''}" data-p="week" title="This Week (${stats.weekStart} to ${stats.latestDate}): ${stats.week.count} orders · ${money(stats.week.net)} Net">Week (${stats.week.count})</button>
+          <button type="button" class="pp-btn${isMonth ? ' on' : ''}" data-p="month" title="This Month (${stats.monthStart} to ${stats.latestDate}): ${stats.month.count} orders · ${money(stats.month.net)} Net">Month (${stats.month.count})</button>
+          <button type="button" class="pp-btn${isAll ? ' on' : ''}" data-p="all" title="All Time (${stats.minDate} to ${stats.latestDate}): ${stats.all.count} orders · ${money(stats.all.net)} Net">All (${cnt(stats.all.count)})</button>
+        </div>` : ''}
         <div class="date-inputs">
           <input type="date" id="fFrom" value="${S.f.from}">
           <input type="date" id="fTo" value="${S.f.to}">
@@ -382,6 +441,19 @@ function buildFilters() {
           <input type="range" id="slTo" min="0" max="1000" value="1000">
         </div>
       `;
+
+      d.querySelectorAll('.pp-btn').forEach(btn => {
+        btn.onclick = () => {
+          const p = btn.dataset.p;
+          const st = getPeriodStats();
+          if (!st) return;
+          if (p === 'today') setDates(st.latestDate, st.latestDate);
+          else if (p === 'week') setDates(st.weekStart, st.latestDate);
+          else if (p === 'month') setDates(st.monthStart, st.latestDate);
+          else if (p === 'all') setDates(...fullRange());
+          dateChanged();
+        };
+      });
     } else {
       d.className = 'fbox';
       d.innerHTML = `<label>${label} <span class="chevron">⌄</span></label><select data-k="${key}"><option>All</option>${optionsFor(key).map(o => `<option${S.f[key] === o ? ' selected' : ''}>${esc(o)}</option>`).join('')}</select>`;
@@ -419,6 +491,19 @@ function initDateSlider() {
   const bar = $('#dateBar', root) || $('#dateBar');
   if (!fr || !slFr || !to || !slTo) return;
 
+  function syncPillButtons() {
+    const stats = getPeriodStats();
+    if (!stats) return;
+    $$('.pp-btn').forEach(btn => {
+      const p = btn.dataset.p;
+      const on = (p === 'today' && S.f.from === stats.latestDate && S.f.to === stats.latestDate) ||
+                 (p === 'week' && S.f.from === stats.weekStart && S.f.to === stats.latestDate) ||
+                 (p === 'month' && S.f.from === stats.monthStart && S.f.to === stats.latestDate) ||
+                 (p === 'all' && S.f.from === stats.minDate && S.f.to === stats.latestDate);
+      btn.classList.toggle('on', !!on);
+    });
+  }
+
   function updateBar() {
     const p1 = Math.min(+slFr.value, +slTo.value);
     const p2 = Math.max(+slFr.value, +slTo.value);
@@ -426,6 +511,7 @@ function initDateSlider() {
       bar.style.left = (p1 / 10) + '%';
       bar.style.width = ((p2 - p1) / 10) + '%';
     }
+    syncPillButtons();
   }
 
   function syncFromDates() {
@@ -1670,7 +1756,7 @@ function loadDemo() {
       try { items = (await availRes.json()).items || []; } catch (_) {}
       if (ordData && ordData.orders && ordData.orders.length) {
         setData(ordData.orders, items, 'live', `● Live · GrubCENTER (${ordData.orders.length})`);
-        setDates(...fullRange());
+        setDates(...getDefaultPeriod());
         show(initialPage);
       }
     }

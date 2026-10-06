@@ -177,9 +177,40 @@ nav a.on { background: #fff; border-color: var(--k); }
   cursor: pointer;
 }
 .fbox.dates {
-  min-width: 250px;
+  min-width: 260px;
   display: flex;
   flex-direction: column;
+}
+.period-pill-row {
+  display: flex;
+  gap: 2px;
+  margin-bottom: 4px;
+  background: #eee;
+  border-radius: 3px;
+  padding: 2px;
+}
+.pp-btn {
+  flex: 1;
+  padding: 3px 2px;
+  border: none;
+  background: transparent;
+  color: #444;
+  font-size: 10px;
+  font-weight: 700;
+  cursor: pointer;
+  border-radius: 2px;
+  text-align: center;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+.pp-btn:hover {
+  background: #fff;
+  color: #000;
+}
+.pp-btn.on {
+  background: var(--k);
+  color: var(--y);
+  box-shadow: 0 1px 2px rgba(0,0,0,0.2);
 }
 .date-inputs {
   display: flex;
