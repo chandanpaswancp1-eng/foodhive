@@ -379,9 +379,12 @@ function getPeriodStats() {
   const weekOrders = S.orders.filter(o => !o.cancelled && dkey(o.receivedAt) >= weekStart && dkey(o.receivedAt) <= latestDate);
   const weekNet = sum(weekOrders, o => o.netSales);
 
-  // This Month
-  const monthStart = latestDate.slice(0, 7) + '-01';
-  const monthOrders = S.orders.filter(o => !o.cancelled && dkey(o.receivedAt) >= monthStart && dkey(o.receivedAt) <= latestDate);
+  // Previous Month (the full prior calendar month, not month-to-date)
+  const [ly, lm] = latestDate.slice(0, 7).split('-').map(Number);
+  const prevMonthEndDate = new Date(ly, lm - 1, 0);
+  const monthEnd = `${prevMonthEndDate.getFullYear()}-${pad(prevMonthEndDate.getMonth() + 1)}-${pad(prevMonthEndDate.getDate())}`;
+  const monthStart = monthEnd.slice(0, 7) + '-01';
+  const monthOrders = S.orders.filter(o => !o.cancelled && dkey(o.receivedAt) >= monthStart && dkey(o.receivedAt) <= monthEnd);
   const monthNet = sum(monthOrders, o => o.netSales);
 
   // All Time
@@ -392,6 +395,7 @@ function getPeriodStats() {
     latestDate,
     weekStart,
     monthStart,
+    monthEnd,
     minDate,
     today: { count: todayOrders.length, net: todayNet },
     week: { count: weekOrders.length, net: weekNet },
@@ -418,7 +422,7 @@ function buildFilters() {
       const stats = getPeriodStats();
       const isToday = stats && S.f.from === stats.latestDate && S.f.to === stats.latestDate;
       const isWeek = stats && S.f.from === stats.weekStart && S.f.to === stats.latestDate;
-      const isMonth = stats && S.f.from === stats.monthStart && S.f.to === stats.latestDate;
+      const isMonth = stats && S.f.from === stats.monthStart && S.f.to === stats.monthEnd;
       const isAll = stats && S.f.from === stats.minDate && S.f.to === stats.latestDate;
 
       d.className = 'fbox dates';
@@ -428,7 +432,7 @@ function buildFilters() {
         <div class="period-pill-row">
           <button type="button" class="pp-btn${isToday ? ' on' : ''}" data-p="today" title="Today (${stats.latestDate}): ${stats.today.count} orders · ${money(stats.today.net)} Net">Today (${stats.today.count})</button>
           <button type="button" class="pp-btn${isWeek ? ' on' : ''}" data-p="week" title="This Week (${stats.weekStart} to ${stats.latestDate}): ${stats.week.count} orders · ${money(stats.week.net)} Net">Week (${stats.week.count})</button>
-          <button type="button" class="pp-btn${isMonth ? ' on' : ''}" data-p="month" title="This Month (${stats.monthStart} to ${stats.latestDate}): ${stats.month.count} orders · ${money(stats.month.net)} Net">Month (${stats.month.count})</button>
+          <button type="button" class="pp-btn${isMonth ? ' on' : ''}" data-p="month" title="Previous Month (${stats.monthStart} to ${stats.monthEnd}): ${stats.month.count} orders · ${money(stats.month.net)} Net">Month (${stats.month.count})</button>
           <button type="button" class="pp-btn${isAll ? ' on' : ''}" data-p="all" title="All Time (${stats.minDate} to ${stats.latestDate}): ${stats.all.count} orders · ${money(stats.all.net)} Net">All (${cnt(stats.all.count)})</button>
         </div>` : ''}
         <div class="date-inputs">
@@ -449,7 +453,7 @@ function buildFilters() {
           if (!st) return;
           if (p === 'today') setDates(st.latestDate, st.latestDate);
           else if (p === 'week') setDates(st.weekStart, st.latestDate);
-          else if (p === 'month') setDates(st.monthStart, st.latestDate);
+          else if (p === 'month') setDates(st.monthStart, st.monthEnd);
           else if (p === 'all') setDates(...fullRange());
           dateChanged();
         };
@@ -498,7 +502,7 @@ function initDateSlider() {
       const p = btn.dataset.p;
       const on = (p === 'today' && S.f.from === stats.latestDate && S.f.to === stats.latestDate) ||
                  (p === 'week' && S.f.from === stats.weekStart && S.f.to === stats.latestDate) ||
-                 (p === 'month' && S.f.from === stats.monthStart && S.f.to === stats.latestDate) ||
+                 (p === 'month' && S.f.from === stats.monthStart && S.f.to === stats.monthEnd) ||
                  (p === 'all' && S.f.from === stats.minDate && S.f.to === stats.latestDate);
       btn.classList.toggle('on', !!on);
     });
