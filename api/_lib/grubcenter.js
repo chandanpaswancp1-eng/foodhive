@@ -4,7 +4,7 @@
  * module-level variable, since nothing here can rely on surviving between
  * invocations other than what's written to the Blob store. */
 const N = require('../../public/normalize.js');
-const { readOrders, writeOrders, readItems, readMeta, writeMeta, readBlobJson } = require('./store');
+const { readOrders, writeOrders, readItems, readOrderItems, writeOrderItems, readMeta, writeMeta, readBlobJson } = require('./store');
 
 const E = process.env;
 const CFG = {
@@ -22,6 +22,7 @@ const CFG = {
   opsPath: '/operations-data/location-performance/report/',
   cancelPath: '/sales-data/cancelled-orders/report/',
   itemsPath: E.GRUBCENTER_ITEMS_PATH || '/operations-data/item-availability/snapshot/',
+  orderItemsPath: E.GRUBCENTER_ORDER_ITEMS_PATH || '/menu-data/menu-items/order-items-sales/',
   pageSize: +E.GRUBCENTER_PAGE_SIZE || 200
 };
 
@@ -185,10 +186,11 @@ async function syncOnce(from, to) {
   const session = await ensureSession(meta.session);
   const f = from || daysAgo(45), t = to || today();
 
-  const [rawSales, rawOps, rawCancels] = await Promise.all([
+  const [rawSales, rawOps, rawCancels, rawOrderItems] = await Promise.all([
     fetchPaged(CFG.ordersPath, f, t, 25, session),
     fetchPaged(CFG.opsPath, f, t, 20, session).catch(() => []),
-    fetchPaged(CFG.cancelPath, f, t, 10, session).catch(() => [])
+    fetchPaged(CFG.cancelPath, f, t, 10, session).catch(() => []),
+    fetchPaged(CFG.orderItemsPath, f, t, 25, session).catch(() => [])
   ]);
 
   const opsMap = new Map();
@@ -260,6 +262,19 @@ async function syncOnce(from, to) {
 
   const ordersArray = [...ordersMap.values()];
   await writeOrders(ordersArray);
+
+  // Line items: [f, t] is re-fetched in full each sync, so it's the
+  // authoritative set for every day in that window -- replace whatever the
+  // store already held for those days rather than merge-by-guessed-key, and
+  // leave anything older than the window untouched.
+  const normOrderItems = N.normalizeOrderItems(rawOrderItems);
+  const touchedDays = new Set(dayChunks(f, t));
+  const existingOrderItems = await readOrderItems();
+  const orderItemsArray = existingOrderItems
+    .filter(x => !touchedDays.has(dubaiDateKey(x.at)))
+    .concat(normOrderItems);
+  await writeOrderItems(orderItemsArray);
+
   await writeMeta({
     lastSync: Date.now(),
     session,
@@ -267,11 +282,11 @@ async function syncOnce(from, to) {
     liveCancelCount: rawCancels.length
   });
 
-  return { ok: true, total: ordersArray.length, newCount, opsCount: rawOps.length, cancelCount: rawCancels.length };
+  return { ok: true, total: ordersArray.length, newCount, opsCount: rawOps.length, cancelCount: rawCancels.length, orderItemsCount: orderItemsArray.length };
 }
 
 // Optional brand allow-list, same convention as server.js's data/official_foodhive_brands.json,
 // seeded into the Blob store once (see scripts/seed-blob.js) rather than read off local disk.
 const readBlobOfficialBrands = () => readBlobJson('official_foodhive_brands.json', null);
 
-module.exports = { CFG, configured, ensureSession, findPartnerId, syncOnce, readOrders, writeOrders, readItems, readMeta, dubaiDateKey };
+module.exports = { CFG, configured, ensureSession, findPartnerId, syncOnce, readOrders, writeOrders, readItems, readOrderItems, writeOrderItems, readMeta, dubaiDateKey };

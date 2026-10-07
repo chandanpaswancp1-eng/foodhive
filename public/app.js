@@ -77,7 +77,7 @@ function orderRating(o) {
 
 // ---------------- state ----------------
 const S = {
-  orders: [], items: [], source: 'none', page: 'sales', loadedRange: null,
+  orders: [], items: [], lineItems: [], source: 'none', page: 'sales', loadedRange: null,
   f: {
     from: '', to: '', channel: 'All', brand: 'All', location: 'All', payment: 'All',
     day: 'All', partner: 'All', reason: 'All', post: 'All', ratingFilter: 'all',
@@ -87,7 +87,7 @@ const S = {
   ui: {
     metric: 'sales', group: 'cuisine', grain: 'Daily', cmetric: 'orders',
     cgroup: 'brand', pgroup: 'brand', rgroup: 'cuisine', igroup: 'brand',
-    dgroup: 'brand', rmode: 'estimated', activeStage: null
+    dgroup: 'brand', rmode: 'estimated', activeStage: null, itemsView: '86'
   },
   rng: {}, selBrands: new Set(), selLocs: new Set()
 };
@@ -115,12 +115,24 @@ window.charts = charts;
 function destroyAllCharts() {
   Object.keys(charts).forEach(id => { charts[id].destroy(); delete charts[id]; });
 }
+// Tried animating the chart panel itself (the canvas's .pb parent) with
+// Element.animate() on every mk() call as a "chart refreshed" flash. Verified
+// in-browser that this reliably throws inside Chart.js's own event dispatch
+// ("Cannot read properties of undefined (reading 'handleEvent')") during the
+// destroy+recreate cycle mk() already does on every render -- confirmed by
+// neutering Element.prototype.animate and watching the errors disappear.
+// That .pb element is exactly what Chart.js's `responsive: true` resize
+// handling watches, so animating it mid-recreate reintroduces the same class
+// of crash commit 7455703 fixed (see the Chart.defaults.animation comment
+// above). All chart-adjacent motion was removed for that reason; KPI tiles
+// (plain DOM, never touched by Chart.js) are the safe place for motion.
 function mk(id, cfg) {
   if (charts[id]) charts[id].destroy();
   const el = document.getElementById(id); if (!el) return;
   const p = el.parentElement; $$('.empty', p).forEach(e => e.remove());
   if (cfg.__empty) {
-    const e = document.createElement('div'); e.className = 'empty'; e.textContent = 'No data for current filters'; p.appendChild(e); return;
+    const e = document.createElement('div'); e.className = 'empty'; e.textContent = 'No data for current filters'; p.appendChild(e);
+    return;
   }
   charts[id] = new Chart(el, cfg);
 }
@@ -344,7 +356,8 @@ const FILTERS = {
   items: [['location', 'Location'], ['brand', 'Brand'], ['dates', 'Received At']],
   delayed: [['brand', 'Brand'], ['location', 'Branch'], ['dates', 'Received At']],
   commission: [['dates', 'Received At'], ['channel', 'Channel'], ['brand', 'Brand'], ['location', 'Location']],
-  ebitda: [['dates', 'Received At'], ['channel', 'Channel'], ['brand', 'Brand'], ['location', 'Location']]
+  ebitda: [['dates', 'Received At'], ['channel', 'Channel'], ['brand', 'Brand'], ['location', 'Location']],
+  export: [['dates', 'Received At'], ['brand', 'Brand'], ['location', 'Location']]
 };
 
 function optionsFor(key) {
@@ -582,6 +595,7 @@ function buildToggles() {
       add(top, 'Rating Mode', 'rmode', [['estimated', 'Operational (Live)'], ['strict', 'External Aggregator']]);
       break;
     case 'items':
+      add(top, '86 Items | Item Sales', 'itemsView', [['86', '86 Items'], ['sales', 'Item Sales']]);
       add(btm, '86 by Brands | Cuisine', 'igroup', [['brand', 'Brand'], ['cuisine', 'Cuisine Cluster']]);
       break;
     case 'delayed':
@@ -594,16 +608,17 @@ function buildToggles() {
 function kpis(id, list) {
   const container = $('#' + id);
   if (!container) return;
-  const prevVals = {};
+  const prevVals = {}, prevActive = {};
   container.querySelectorAll('.kpi').forEach(el => {
     const h = $('.kh', el), v = $('.kv', el);
-    if (h && v) prevVals[h.textContent] = v.textContent;
+    if (h && v) { prevVals[h.textContent] = v.textContent; prevActive[h.textContent] = el.classList.contains('active'); }
   });
 
-  container.innerHTML = list.map(([h, v, wide, , isActive, tooltip], idx) => {
+  container.innerHTML = list.map(([h, v, wide, , isActive, tooltip, kind], idx) => {
     const act = isActive ? ' active' : '';
+    const kindCls = kind && kind !== 'filter' ? ` kpi--${kind}` : '';
     const tip = tooltip ? ` title="${esc(tooltip)}"` : ' title="Click to filter/reflect data"';
-    return `<div class="kpi${wide ? ' wide' : ''}${act}" data-idx="${idx}"${tip} role="button" tabindex="0">
+    return `<div class="kpi${wide ? ' wide' : ''}${act}${kindCls}" data-idx="${idx}"${tip} role="button" tabindex="0">
       <div class="kh">${h}</div>
       <div class="kv">${v}</div>
     </div>`;
@@ -623,6 +638,9 @@ function kpis(id, list) {
     const h = $('.kh', el), v = $('.kv', el);
     if (h && v && prevVals[h.textContent] !== undefined && prevVals[h.textContent] !== v.textContent) {
       v.classList.add('kv-bump');
+    }
+    if (h && el.classList.contains('active') && prevActive[h.textContent] === false) {
+      el.classList.add('kpi-activate');
     }
   });
 }
@@ -775,6 +793,132 @@ function renderDailyBreakdownTable() {
   });
 }
 
+// ---------------- generic KPI drill-down modal ----------------
+// Shared shell for every drill-down below. Each one follows the same proven
+// shape as openDailyBreakdownModal()/renderDailyBreakdownTable() above: an
+// open*() that shows the modal, and an idempotent render*Body() that row
+// clicks self-invoke again after changing a filter, so the modal always
+// repaints from live state instead of a stale closure.
+function openKpiModal(title, subtitle) {
+  $('#kpiModalTitle').textContent = title;
+  $('#kpiModalSubtitle').textContent = subtitle || '';
+  const modal = $('#kpiModal');
+  if (modal) modal.hidden = false;
+}
+
+function openCommissionDrillModal() {
+  renderCommissionDrillBody();
+  openKpiModal('Commission by Channel', 'Click a channel to cross-filter the whole Commission page by it.');
+}
+function renderCommissionDrillBody() {
+  const body = $('#kpiModalBody');
+  if (!body) return;
+  const { net, commission, chanAgg } = commissionChannelAgg();
+  const rows = chanAgg.slice().sort((a, b) => b.commission - a.commission);
+  const totOrders = sum(rows, r => r.orders);
+  body.innerHTML = `
+    <div class="a-ratecard">
+      <table>
+        <thead><tr><th>Channel</th><th style="text-align:right">Orders</th><th style="text-align:right">Net Sales</th><th style="text-align:right">Commission</th><th style="text-align:right">Eff. Rate</th><th style="text-align:center">Cross-Filter</th></tr></thead>
+        <tbody>
+          <tr style="background:#1d1d1d;color:#FCD258;font-weight:700">
+            <td>TOTAL</td><td style="text-align:right">${cnt(totOrders)}</td><td style="text-align:right">${money(net)}</td><td style="text-align:right">${money(commission)}</td><td style="text-align:right">${net ? pc(commission / net, 1) : '0%'}</td><td style="text-align:center">–</td>
+          </tr>
+          ${rows.map(r => {
+            const isActive = S.f.channel === r.k;
+            return `<tr class="kpi-drill-row" data-channel="${esc(r.k)}" style="cursor:pointer;background:${isActive ? '#FFFDF2' : '#fff'};transition:background-color .15s ease">
+              <td style="font-weight:600;${isActive ? 'color:#b38600' : ''}">${isActive ? '● ' : ''}${esc(r.k)}</td>
+              <td style="text-align:right">${cnt(r.orders)}</td>
+              <td style="text-align:right">${money(r.netSales)}</td>
+              <td style="text-align:right;font-weight:600">${money(r.commission)}</td>
+              <td style="text-align:right">${(r.effRate * 100).toFixed(1)}%</td>
+              <td style="text-align:center"><button class="btn-yellow" style="padding:2px 8px;font-size:10px">${isActive ? 'Clear' : 'Filter'}</button></td>
+            </tr>`;
+          }).join('')}
+        </tbody>
+      </table>
+    </div>`;
+  body.querySelectorAll('.kpi-drill-row').forEach(tr => {
+    const ch = tr.dataset.channel;
+    tr.onclick = () => {
+      S.f.channel = (S.f.channel === ch ? 'All' : ch);
+      syncFilterUI();
+      renderCommission();
+      renderCommissionDrillBody();
+    };
+  });
+}
+
+function openEbitdaDrillModal() {
+  renderEbitdaDrillBody();
+  openKpiModal('P&L Waterfall — Gross Sales to EBITDA', 'Read-only summary for the current filter and date range.');
+}
+function renderEbitdaDrillBody() {
+  const body = $('#kpiModalBody');
+  if (!body || !lastPL) return;
+  const net = lastPL.net;
+  body.innerHTML = `
+    <div class="a-plwaterfall">
+      <table>
+        <thead><tr><th>Line</th><th>AED</th><th>% of Net Sales</th></tr></thead>
+        <tbody>
+          ${lastPL.rows.map(r => `<tr class="${r.cls}"><td>${esc(r.label)}</td><td class="cost-amt">${money(r.amount)}</td><td class="cost-amt">${net ? pc(r.amount / net, 1) : '–'}</td></tr>`).join('')}
+        </tbody>
+      </table>
+      <div class="pl-memo">Prime Cost (COGS + Labor): ${money(lastPL.primeCost)} — ${net ? pc(lastPL.primeCost / net, 1) : '0%'} of Net Sales</div>
+    </div>`;
+}
+
+function openItemSalesDrillModal() {
+  renderItemSalesDrillBody();
+  openKpiModal('Item Sales — Daily Breakdown', 'Click a day to slice Item Sales (and the whole dashboard) to that date.');
+}
+function renderItemSalesDrillBody() {
+  const body = $('#kpiModalBody');
+  if (!body) return;
+  const { soldBase, revenueOf } = itemSalesBase();
+  const I = soldBase.filter(x => dateOk(x.at));
+  const byDay = groupBy(I, x => dkey(x.at)).map(g => {
+    const qty = sum(g.rows, x => x.qty);
+    const revenue = sum(g.rows, revenueOf);
+    const orders = uniq(g.rows.map(x => x.orderId)).length;
+    return { date: g.k, qty, revenue, orders, avg: orders ? qty / orders : 0 };
+  }).sort((a, b) => (a.date < b.date ? 1 : -1));
+  const totQty = sum(byDay, d => d.qty);
+  const totRevenue = sum(byDay, d => d.revenue);
+  const totOrders = sum(byDay, d => d.orders);
+  body.innerHTML = `
+    <div class="tbl-wrap">
+      <table style="width:100%;border-collapse:collapse;font-size:12px;">
+        <thead><tr><th>Date</th><th style="text-align:right">Items Sold</th><th style="text-align:right">Items Net Sales</th><th style="text-align:right">Orders</th><th style="text-align:right">Avg Items/Order</th><th style="text-align:center">Cross-Filter</th></tr></thead>
+        <tbody>
+          <tr style="background:#1d1d1d;color:#FCD258;font-weight:700">
+            <td>TOTAL (${byDay.length} Days)</td><td style="text-align:right">${cnt(totQty)}</td><td style="text-align:right">${money(totRevenue)}</td><td style="text-align:right">${cnt(totOrders)}</td><td style="text-align:right">${totOrders ? (totQty / totOrders).toFixed(2) : '0'}</td><td style="text-align:center">–</td>
+          </tr>
+          ${byDay.map(d => {
+            const isSlice = S.f.from === d.date && S.f.to === d.date;
+            return `<tr class="kpi-drill-row" data-date="${d.date}" style="cursor:pointer;background:${isSlice ? '#FFFDF2' : '#fff'};transition:background-color .15s ease">
+              <td style="font-weight:600;${isSlice ? 'color:#b38600' : ''}">${isSlice ? '● ' : ''}${d.date}</td>
+              <td style="text-align:right">${cnt(d.qty)}</td>
+              <td style="text-align:right;font-weight:600">${money(d.revenue)}</td>
+              <td style="text-align:right">${cnt(d.orders)}</td>
+              <td style="text-align:right">${d.avg.toFixed(2)}</td>
+              <td style="text-align:center"><button class="btn-yellow" style="padding:2px 8px;font-size:10px">${isSlice ? 'Clear' : 'Slice'}</button></td>
+            </tr>`;
+          }).join('')}
+        </tbody>
+      </table>
+    </div>`;
+  body.querySelectorAll('.kpi-drill-row').forEach(tr => {
+    const dt = tr.dataset.date;
+    tr.onclick = () => {
+      if (S.f.from === dt && S.f.to === dt) setDates(...fullRange()); else setDates(dt, dt);
+      dateChanged();
+      renderItemSalesDrillBody();
+    };
+  });
+}
+
 function renderSales() {
   const all = base('sales'); const O = all.filter(o => !o.cancelled);
   const net = sum(O, o => o.netSales), rec = sum(O, o => o.receiptTotal), disc = sum(O, o => o.discount), n = O.length;
@@ -845,7 +989,7 @@ function renderSales() {
 
     ['Daily Sales Breakdown', `${money(run)}/d`, false, () => {
       openDailyBreakdownModal();
-    }, isDailyActive, `Click to open interactive Daily Sales Breakdown table and switch charts to Daily grain (Avg ${money(run)}/day over ${days} days)`],
+    }, isDailyActive, `Click to open interactive Daily Sales Breakdown table and switch charts to Daily grain (Avg ${money(run)}/day over ${days} days)`, 'drill'],
 
     ['Top Performing Brand', top ? esc(top.k) : '–', true, () => {
       if (!top) return;
@@ -1361,7 +1505,16 @@ function fillList(ul, input, values, set) {
 }
 
 // ================= PAGE 5: 86 ITEMS =================
-function renderItems() {
+function renderItemsPage() {
+  const sales = S.ui.itemsView === 'sales';
+  $('#kpi-items').hidden = sales;
+  $('#grid-items').hidden = sales;
+  $('#kpi-item-sales').hidden = !sales;
+  $('#grid-item-sales').hidden = !sales;
+  if (sales) renderItemSales(); else renderItems86();
+}
+
+function renderItems86() {
   const f = S.f;
   const I = S.items.filter(x => dateOk(x.at) && eq(x.brand, f.brand) && eq(x.location, f.location) && (f.item === 'All' || x.item === f.item) && (f.source === 'All' || x.source === f.source) && (f.type === 'All' || x.type === f.type));
   const n = I.length;
@@ -1380,7 +1533,7 @@ function renderItems() {
       S.f.source = 'All';
       S.f.type = 'All';
       syncFilterUI();
-      renderItems();
+      renderItems86();
     }, isAllActive, 'Click to reset all 86 filters to show full inventory stock-outs'],
     ['Brand with Most 86 Items', topB ? esc(topB.k) : '–', true, () => {
       if (!topB) return;
@@ -1448,6 +1601,105 @@ function renderItems() {
   [['c-ibrand', bRows], ['c-iloc', lRows]].forEach(([id, rows]) => {
     const c = charts[id]; if (c && c.data.datasets[1]) { c.data.datasets[1].data = rows.map(r => r.v / tot * 100); c.update('none'); }
   });
+}
+
+// ---------------- PAGE 5b: ITEM SALES (items sold by time) ----------------
+// Correctness rules (see plan): a cancelled order's items were never actually
+// sold, and a bundle/combo order emits one base-item row plus several
+// zero-price modifier rows under the same orderId -- summing qty across those
+// would overcount "items sold" (confirmed against the live GrubCENTER data:
+// one "Burger Box for 4" order produced 9 rows, 8 of them modifiers). Both
+// must be excluded before any sold-item KPI or chart is computed.
+//
+// GrubCENTER's itemTotalPrice only nets out ITEM-level discounts -- an
+// order-level promo code/voucher discount (applied at checkout, not per
+// line) never shows up in it. Confirmed against the live data: for orders
+// with a sizable order-level discount, summing itemTotalPrice across their
+// lines reproduces receiptTotal (gross) almost exactly, not netSales --
+// overstating revenue by the full discount amount. netSales in
+// all_orders.json is the already-audited figure, so line-item revenue is
+// prorated against it per order rather than trusted raw. grossByOrder/
+// revenueOf are computed before the item-name filter so the ratio reflects
+// the WHOLE order, not just whichever item the user has drilled into.
+// Shared by renderItemSales() and the Items-Net-Sales/Avg-Items-per-Order
+// drill-down modal, so neither can drift out of sync with the other.
+function itemSalesBase() {
+  const f = S.f;
+  const cancelledIds = new Set(S.orders.filter(o => o.cancelled).map(o => o.id));
+  const preItemFilter = S.lineItems.filter(x =>
+    !cancelledIds.has(x.orderId) && x.type === 'Menu Item' &&
+    eq(x.brand, f.brand) && eq(x.location, f.location) && eq(x.channel, f.channel)
+  );
+  const ordersById = new Map(S.orders.map(o => [o.id, o]));
+  const grossByOrder = new Map();
+  preItemFilter.forEach(x => grossByOrder.set(x.orderId, (grossByOrder.get(x.orderId) || 0) + x.lineTotal));
+  const revenueOf = x => {
+    const o = ordersById.get(x.orderId), gross = grossByOrder.get(x.orderId);
+    return (o && gross) ? x.lineTotal * (o.netSales / gross) : x.lineTotal;
+  };
+  const soldBase = preItemFilter.filter(x => f.item === 'All' || x.item === f.item);
+  return { soldBase, revenueOf };
+}
+
+function renderItemSales() {
+  const f = S.f;
+  const { soldBase, revenueOf } = itemSalesBase();
+  const I = soldBase.filter(x => dateOk(x.at));
+  const qtyAgg = (arr, kf) => groupBy(arr, kf).map(g => ({ k: g.k, v: sum(g.rows, x => x.qty) }));
+
+  const totalQty = sum(I, x => x.qty);
+  const totalRevenue = sum(I, revenueOf);
+  const orderCount = uniq(I.map(x => x.orderId)).length;
+  const topItem = qtyAgg(I, x => x.item).sort((a, b) => b.v - a.v)[0];
+  const isItemActive = !!(topItem && f.item === topItem.k);
+
+  kpis('kpi-item-sales', [
+    ['Total Items Sold', cnt(totalQty), false, () => {
+      S.f.item = 'All'; S.f.hour = 'All'; S.f.slot = 'All';
+      syncFilterUI(); renderItemSales();
+    }, f.item === 'All' && f.hour === 'All' && f.slot === 'All', 'Click to reset item/hour/slot filters'],
+    ['Top Selling Item', topItem ? esc(topItem.k) : '–', true, () => {
+      if (!topItem) return;
+      S.f.item = (S.f.item === topItem.k ? 'All' : topItem.k);
+      syncFilterUI(); renderItemSales();
+    }, isItemActive, topItem ? (isItemActive ? `Currently showing "${topItem.k}" (click to reset)` : `Click to filter Item Sales for "${topItem.k}"`) : ''],
+    ['Items Net Sales', money(totalRevenue), false, () => { openItemSalesDrillModal(); }, false, 'Sum of item price net of item-level discount, excluding cancelled orders and modifier lines. Click to view the daily breakdown.', 'drill'],
+    ['Avg Items per Order', orderCount ? (totalQty / orderCount).toFixed(2) : '0', false, () => { openItemSalesDrillModal(); }, false, 'Total items sold ÷ distinct orders containing at least one sold item. Click to view the daily breakdown.', 'drill']
+  ]);
+
+  const hr = Array.from({ length: 24 }, (_, h) => ({ k: String(h), v: 0 }));
+  I.forEach(x => { hr[dubaiHour(x.at)].v += x.qty; });
+  combo('c-isoldhour', hr, { name: 'Items Sold', pctName: '%GT Items Sold', fmt: cnt, filterKey: 'hour' });
+
+  const slRows = qtyAgg(I, x => slotOf(dubaiHour(x.at))).sort((a, b) => SLOTS.findIndex(s => s[0] === a.k) - SLOTS.findIndex(s => s[0] === b.k));
+  combo('c-isoldslot', slRows, { name: 'Items Sold', pctName: '%GT Items Sold', fmt: cnt, filterKey: 'slot' });
+
+  const topRows = qtyAgg(I, x => x.item).sort((a, b) => b.v - a.v).slice(0, 10);
+  hbar('c-itopsold', topRows, { fmt: cnt, name: 'Items Sold', filterKey: 'item' });
+
+  // Trend ignores the active date range (same convention as the 86-items
+  // trend chart) so the full history stays click-to-drill-able.
+  const tr = qtyAgg(soldBase, x => dkey(x.at)).sort((a, b) => (a.k < b.k ? -1 : 1));
+  const trColors = tr.map(r => (S.f.from === r.k && S.f.to === r.k ? '#1d1d1d' : Y));
+  const trendOpts = baseOpts({
+    onHover: (e, el) => { if (e.native && e.native.target) e.native.target.style.cursor = el && el.length ? 'pointer' : 'default'; },
+    onClick: (e, elements) => {
+      if (!elements || !elements.length) return;
+      const row = tr[elements[0].index];
+      if (!row) return;
+      if (S.f.from === row.k && S.f.to === row.k) setDates(...fullRange()); else setDates(row.k, row.k);
+      dateChanged();
+    },
+    scales: {
+      x: { ...gridless, ticks: { maxTicksLimit: 25, font: { size: 10 } } },
+      y: { beginAtZero: true, ticks: { callback: cnt, maxTicksLimit: 5 }, grid: { color: '#eee' } }
+    }
+  });
+  mk('c-isoldtrend', tr.length ? {
+    type: 'bar',
+    data: { labels: tr.map(r => r.k.slice(5)), datasets: [{ label: 'Items Sold', data: tr.map(r => r.v), backgroundColor: trColors, datalabels: tr.length > 25 ? { display: false } : lbl(cnt) }] },
+    options: trendOpts
+  } : { __empty: true });
 }
 
 // ================= PAGE 6: DELAYED =================
@@ -1541,25 +1793,34 @@ function renderDelayed() {
 }
 
 // ================= PAGE 7: COMMISSION =================
-function renderCommission() {
+// Shared by renderCommission() and the "Blended Commission %" drill-down
+// modal, so the two can never drift apart -- both read FHCommission's
+// contracted per-channel rates through this one place.
+function commissionChannelAgg() {
   const O = base('commission').filter(o => !o.cancelled);
   const net = sum(O, o => o.netSales);
   const commission = sum(O, o => FHCommission.commissionForOrder(o));
-
   const chanAgg = groupBy(O, o => o.channel).map(g => {
     const cNet = sum(g.rows, o => o.netSales);
     const cComm = sum(g.rows, o => FHCommission.commissionForOrder(o));
     return { k: g.k, netSales: cNet, commission: cComm, orders: g.rows.length, effRate: cNet ? cComm / cNet : 0 };
   });
+  return { net, commission, chanAgg };
+}
+
+function renderCommission() {
+  const { net, commission, chanAgg } = commissionChannelAgg();
   const topComm = chanAgg.slice().sort((a, b) => b.commission - a.commission)[0];
 
   kpis('kpi-commission', [
     ['Total Commission', money(commission), false, () => {
       const el = document.getElementById('c-commchan');
       if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    }, false, 'Total aggregator commission owed across all channels for the current filter, computed from each portal\'s signed contract rate'],
+    }, false, 'Total aggregator commission owed across all channels for the current filter, computed from each portal\'s signed contract rate', 'nav'],
 
-    ['Blended Commission %', net ? pc(commission / net, 1) : '0%', false, () => {}, false, 'Total Commission / Net Sales across all channels'],
+    ['Blended Commission %', net ? pc(commission / net, 1) : '0%', false, () => {
+      openCommissionDrillModal();
+    }, false, 'Total Commission / Net Sales across all channels. Click to view the full per-channel breakdown.', 'drill'],
 
     ['Highest-Commission Channel', topComm ? esc(topComm.k) : '–', true, () => {
       if (!topComm) return;
@@ -1830,25 +2091,25 @@ function renderEbitda() {
   const eb = FHCommission.ebitda(net, commission, costs.total);
 
   kpis('kpi-ebitda', [
-    ['Net Sales', money(net), false, () => {}, false, 'Net Sales for the current filter'],
+    ['Net Sales', money(net), false, () => { openEbitdaDrillModal(); }, false, 'Net Sales for the current filter. Click to view the full P&L waterfall.', 'drill'],
 
     ['Food Cost %', net ? pc(costs.cogs / net, 1) : '0%', false, () => {
       const el = document.getElementById('costsBuilder'); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    }, false, 'Cost of Goods Sold / Net Sales'],
+    }, false, 'Cost of Goods Sold / Net Sales', 'nav'],
 
-    ['Prime Cost %', net ? pc(primeCost / net, 1) : '0%', false, () => {}, false, 'Prime Cost = COGS + Labor, as % of Net Sales. The single most-watched F&B health metric — most operators target ≤60-65%.'],
+    ['Prime Cost %', net ? pc(primeCost / net, 1) : '0%', false, () => { openEbitdaDrillModal(); }, false, 'Prime Cost = COGS + Labor, as % of Net Sales. The single most-watched F&B health metric — most operators target ≤60-65%. Click to view the full P&L waterfall.', 'drill'],
 
     ['Portal Commission %', net ? pc(commission / net, 1) : '0%', false, () => {
       show('commission');
-    }, false, 'Commission / Net Sales. Click to see the full channel breakdown on the Commission page.'],
+    }, false, 'Commission / Net Sales. Click to see the full channel breakdown on the Commission page.', 'nav'],
 
-    ['Controllable Profit %', net ? pc(controllableProfit / net, 1) : '0%', false, () => {}, false, 'Controllable Profit = Gross Profit − Labor − Commission − Other Controllable Expenses, as % of Net Sales'],
+    ['Controllable Profit %', net ? pc(controllableProfit / net, 1) : '0%', false, () => { openEbitdaDrillModal(); }, false, 'Controllable Profit = Gross Profit − Labor − Commission − Other Controllable Expenses, as % of Net Sales. Click to view the full P&L waterfall.', 'drill'],
 
-    ['EBITDA', money(eb), false, () => {}, false, 'Net Sales − Commission − all Operating Costs (COGS, Labor, Controllable, Occupancy, G&A)'],
+    ['EBITDA', money(eb), false, () => { openEbitdaDrillModal(); }, false, 'Net Sales − Commission − all Operating Costs (COGS, Labor, Controllable, Occupancy, G&A). Click to view the full P&L waterfall.', 'drill'],
 
-    ['EBITDA Margin %', net ? pc(eb / net, 1) : '0%', false, () => {}, false, 'EBITDA / Net Sales'],
+    ['EBITDA Margin %', net ? pc(eb / net, 1) : '0%', false, () => { openEbitdaDrillModal(); }, false, 'EBITDA / Net Sales. Click to view the full P&L waterfall.', 'drill'],
 
-    ['Download P&L (PDF)', '⬇ PDF', false, downloadPLPdf, false, 'Download the P&L Summary above as a formatted PDF report for the current date range and filters']
+    ['Download P&L (PDF)', '⬇ PDF', false, downloadPLPdf, false, 'Download the P&L Summary above as a formatted PDF report for the current date range and filters', 'download']
   ]);
 
   const plRows = [
@@ -1869,7 +2130,8 @@ function renderEbitda() {
     gross, disc, net, cogs: costs.cogs, grossProfit,
     labor: costs.labor, commission, controllable: costs.controllable, occupancy: costs.occupancy, ga: costs.ga,
     eb, primeCost,
-    from: S.f.from, to: S.f.to, channel: S.f.channel, brand: S.f.brand, location: S.f.location
+    from: S.f.from, to: S.f.to, channel: S.f.channel, brand: S.f.brand, location: S.f.location,
+    rows: plRows
   };
 
   const pl = $('#plTable');
@@ -1901,7 +2163,7 @@ function renderEbitda() {
 }
 
 // ---------------- render & navigation ----------------
-const RENDER = { sales: renderSales, cancel: renderCancel, prep: renderPrep, ratings: renderRatings, items: renderItems, delayed: renderDelayed, commission: renderCommission, ebitda: renderEbitda };
+const RENDER = { sales: renderSales, cancel: renderCancel, prep: renderPrep, ratings: renderRatings, items: renderItemsPage, delayed: renderDelayed, commission: renderCommission, ebitda: renderEbitda, export: renderExport };
 function render() { RENDER[S.page](); }
 
 function show(page) {
@@ -1967,9 +2229,10 @@ $('#btnPrev').onclick = () => {
 };
 
 // ---------------- data loading ----------------
-function setData(orders, items, source, label) {
+function setData(orders, items, lineItems, source, label) {
   if (orders) S.orders = orders;
   if (items) S.items = items;
+  if (lineItems) S.lineItems = lineItems;
   S.source = source;
   const badge = $('#srcBadge');
   if (badge) {
@@ -1990,19 +2253,22 @@ async function loadLive(from, to) {
   log('Contacting GrubCENTER…');
   try {
     const q = from && to ? `?from=${from}&to=${to}` : '';
-    const [ordRes, availRes] = await Promise.all([
+    const [ordRes, availRes, oiRes] = await Promise.all([
       fetch('/api/orders' + q),
-      fetch('/api/availability' + q)
+      fetch('/api/availability' + q),
+      fetch('/api/order-items' + q)
     ]);
     const j = await ordRes.json();
     if (!ordRes.ok) throw new Error(j.error || 'Failed to fetch orders');
     let items = [];
     try { items = (await availRes.json()).items || []; } catch (_) {}
+    let lineItems = [];
+    try { lineItems = (await oiRes.json()).items || []; } catch (_) {}
     S.loadedRange = [from || dkey(Date.now() - 45 * 864e5), to || dkey(Date.now())];
     if (!j.orders.length) { log('GrubCENTER returned 0 orders for that range.'); }
     else log(`Loaded ${j.orders.length} orders.`);
     const keepFrom = from, keepTo = to;
-    setData(j.orders, items.length ? items : S.items, 'live', `● Live · GrubCENTER (${j.orders.length})`);
+    setData(j.orders, items.length ? items : S.items, lineItems.length ? lineItems : S.lineItems, 'live', `● Live · GrubCENTER (${j.orders.length})`);
     if (keepFrom) setDates(keepFrom, keepTo); else setDates(...fullRange());
     render();
     return true;
@@ -2011,6 +2277,215 @@ async function loadLive(from, to) {
     $('#srcBadge').textContent = 'Live unavailable'; $('#srcBadge').className = 'src-badge err';
     return false;
   }
+}
+
+// ================= PAGE 9: DATA EXPORT =================
+// Raw-record export, deliberately separate from base()'s page-specific
+// business rules (cancelled-exclusion, modifier-exclusion, revenue
+// proration): this page exports the underlying records as they are, not a
+// dashboard metric, so analysts can filter/dedupe themselves downstream.
+function fmtDubaiTs(ms) {
+  if (ms == null) return '';
+  const d = dubaiDate(ms);
+  return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}`;
+}
+function csvCell(v) {
+  if (v == null) return '';
+  if (typeof v === 'boolean') return v ? 'true' : 'false';
+  const s = String(v);
+  return /["\n\r,]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+}
+function toCSV(headers, rows) {
+  const lines = [headers.map(csvCell).join(',')];
+  rows.forEach(r => lines.push(headers.map(h => csvCell(r[h])).join(',')));
+  return lines.join('\r\n');
+}
+function downloadBlob(filename, content, mime) {
+  const blob = new Blob([content], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+function downloadCSV(filename, headers, rows) {
+  downloadBlob(filename, '﻿' + toCSV(headers, rows), 'text/csv;charset=utf-8;');
+}
+// Styled via xlsx-js-style (a drop-in SheetJS fork -- same XLSX.* API the
+// CSV/XLSX import path already uses -- that additionally writes the `s`
+// cell-style property: SheetJS Community Edition silently drops it).
+const XLS_HEADER_STYLE = { font: { bold: true, color: { rgb: 'FFFFFF' } }, fill: { fgColor: { rgb: '1D1D1D' } }, alignment: { horizontal: 'center', vertical: 'center', wrapText: true }, border: { bottom: { style: 'thin', color: { rgb: '000000' } } } };
+const XLS_TOTAL_STYLE = { font: { bold: true }, fill: { fgColor: { rgb: 'FDCB3C' } }, border: { top: { style: 'thin', color: { rgb: '000000' } } } };
+const XLS_SUBTOTAL_STYLE = { font: { bold: true }, fill: { fgColor: { rgb: 'F7F3E4' } } };
+const XLS_MONEY_FMT = '#,##0.00';
+const XLS_PCT_FMT = '0.0%';
+function xlsCell(r, c, cell) { return { addr: XLSX.utils.encode_cell({ r, c }), cell }; }
+
+// Builds a header row + one row per record + a bottom TOTAL row with live
+// SUM() formulas over the numeric/money columns -- "full of formula" per the
+// brief, applied as a real spreadsheet total rather than a pre-computed
+// static number, so it recalculates if a cell is edited.
+function downloadXLSX(filename, sheetName, headers, rows, moneyHeaders) {
+  const wb = XLSX.utils.book_new();
+  const ws = {};
+  const moneySet = new Set(moneyHeaders || []);
+  headers.forEach((h, c) => { const { addr, cell } = xlsCell(0, c, { t: 's', v: h, s: XLS_HEADER_STYLE }); ws[addr] = cell; });
+  rows.forEach((row, ri) => {
+    const r = ri + 1;
+    headers.forEach((h, c) => {
+      const v = row[h];
+      let cell;
+      if (typeof v === 'number') cell = { t: 'n', v, ...(moneySet.has(h) ? { z: XLS_MONEY_FMT } : {}) };
+      else if (typeof v === 'boolean') cell = { t: 'b', v };
+      else cell = { t: 's', v: v == null ? '' : String(v) };
+      ws[XLSX.utils.encode_cell({ r, c })] = cell;
+    });
+  });
+  const totalR = rows.length + 1;
+  headers.forEach((h, c) => {
+    const addr = XLSX.utils.encode_cell({ r: totalR, c });
+    if (c === 0) { ws[addr] = { t: 's', v: `TOTAL (${rows.length})`, s: XLS_TOTAL_STYLE }; return; }
+    const isNumericCol = rows.length > 0 && typeof rows[0][h] === 'number';
+    if (!isNumericCol) { ws[addr] = { t: 's', v: '', s: XLS_TOTAL_STYLE }; return; }
+    const col = XLSX.utils.encode_col(c);
+    ws[addr] = { t: 'n', f: `SUM(${col}2:${col}${rows.length + 1})`, s: XLS_TOTAL_STYLE, ...(moneySet.has(h) ? { z: XLS_MONEY_FMT } : {}) };
+  });
+  ws['!ref'] = XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: totalR, c: headers.length - 1 } });
+  ws['!cols'] = headers.map(h => ({ wch: Math.max(h.length + 2, 12) }));
+  XLSX.utils.book_append_sheet(wb, ws, sheetName);
+  XLSX.writeFile(wb, filename);
+}
+
+// Dedicated P&L workbook: unlike the raw-data exports above, this is NOT a
+// record dump -- it's a financial statement, so the waterfall subtotals
+// (Net Sales, Gross Profit, Controllable Profit, EBITDA) are written as
+// live formulas referencing the input lines, and the % column is a formula
+// against the Net Sales cell, not a pre-computed static value. Editing an
+// input cell (e.g. COGS) recalculates every subtotal and percentage below it,
+// same as a real accounting template.
+function downloadPlXlsx(filename, pl) {
+  const wb = XLSX.utils.book_new();
+  const ws = {};
+  const set = (r, c, cell) => { ws[XLSX.utils.encode_cell({ r, c })] = cell; };
+  set(0, 0, { t: 's', v: `FoodHive P&L Report — ${pl.from} to ${pl.to}`, s: { font: { bold: true, sz: 13 }, fill: { fgColor: { rgb: 'FDCB3C' } }, alignment: { horizontal: 'center' } } });
+  ['Line', 'Amount (AED)', '% of Net Sales'].forEach((h, c) => set(1, c, { t: 's', v: h, s: XLS_HEADER_STYLE }));
+
+  // r = 0-indexed sheet row; NET_R is the Net Sales row, referenced by every % formula.
+  const money = v => ({ t: 'n', v: round2(v), z: XLS_MONEY_FMT });
+  const pct = r => ({ t: 'n', f: `B${r + 1}/$B$${NET_R + 1}`, z: XLS_PCT_FMT });
+  const label = (r, text, style) => set(r, 0, { t: 's', v: text, s: style });
+  const NET_R = 4, GP_R = 6, CP_R = 10, EB_R = 13;
+
+  label(2, 'Gross Sales'); set(2, 1, money(pl.gross)); set(2, 2, pct(2));
+  label(3, '(−) Discounts'); set(3, 1, money(pl.disc)); set(3, 2, pct(3));
+  label(NET_R, '= Net Sales', XLS_SUBTOTAL_STYLE); set(NET_R, 1, { t: 'n', f: `B3-B4`, z: XLS_MONEY_FMT, s: XLS_SUBTOTAL_STYLE }); set(NET_R, 2, { ...pct(NET_R), s: XLS_SUBTOTAL_STYLE });
+  label(5, '(−) Cost of Goods Sold'); set(5, 1, money(pl.cogs)); set(5, 2, pct(5));
+  label(GP_R, '= Gross Profit', XLS_SUBTOTAL_STYLE); set(GP_R, 1, { t: 'n', f: `B${NET_R + 1}-B6`, z: XLS_MONEY_FMT, s: XLS_SUBTOTAL_STYLE }); set(GP_R, 2, { ...pct(GP_R), s: XLS_SUBTOTAL_STYLE });
+  label(7, '(−) Labor Cost'); set(7, 1, money(pl.labor)); set(7, 2, pct(7));
+  label(8, '(−) Portal / Aggregator Commission'); set(8, 1, money(pl.commission)); set(8, 2, pct(8));
+  label(9, '(−) Other Controllable Expenses'); set(9, 1, money(pl.controllable)); set(9, 2, pct(9));
+  label(CP_R, '= Controllable Profit', XLS_SUBTOTAL_STYLE); set(CP_R, 1, { t: 'n', f: `B${GP_R + 1}-B8-B9-B10`, z: XLS_MONEY_FMT, s: XLS_SUBTOTAL_STYLE }); set(CP_R, 2, { ...pct(CP_R), s: XLS_SUBTOTAL_STYLE });
+  label(11, '(−) Occupancy Costs'); set(11, 1, money(pl.occupancy)); set(11, 2, pct(11));
+  label(12, '(−) General & Administrative'); set(12, 1, money(pl.ga)); set(12, 2, pct(12));
+  label(EB_R, '= EBITDA', XLS_TOTAL_STYLE); set(EB_R, 1, { t: 'n', f: `B${CP_R + 1}-B12-B13`, z: XLS_MONEY_FMT, s: XLS_TOTAL_STYLE }); set(EB_R, 2, { ...pct(EB_R), s: XLS_TOTAL_STYLE });
+  label(15, 'Prime Cost (COGS + Labor)'); set(15, 1, { t: 'n', f: 'B6+B8', z: XLS_MONEY_FMT }); set(15, 2, pct(15));
+
+  ws['!ref'] = XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: 15, c: 2 } });
+  ws['!cols'] = [{ wch: 34 }, { wch: 16 }, { wch: 14 }];
+  ws['!merges'] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: 2 } }];
+  XLSX.utils.book_append_sheet(wb, ws, 'P&L');
+  XLSX.writeFile(wb, filename);
+}
+
+const ORDER_COLUMNS = ['Order ID', 'Received At', 'Accepted At', 'Started At', 'Prepared At', 'Sent to Dispatcher At', 'Dispatched At', 'Delivered At', 'Brand', 'Cuisine', 'Location', 'Channel', 'Payment Method', 'Delivery Partner', 'Net Sales (AED)', 'Receipt Total (AED)', 'Discount (AED)', 'Cancelled', 'Cancelled After Accept', 'Cancellation Reason', 'Rating', 'Estimated Prep Time (min)'];
+const round2 = n => Math.round((n || 0) * 100) / 100;
+function mapOrderRow(o) {
+  return {
+    'Order ID': o.id, 'Received At': fmtDubaiTs(o.receivedAt), 'Accepted At': fmtDubaiTs(o.acceptedAt),
+    'Started At': fmtDubaiTs(o.startedAt), 'Prepared At': fmtDubaiTs(o.preparedAt), 'Sent to Dispatcher At': fmtDubaiTs(o.stdAt),
+    'Dispatched At': fmtDubaiTs(o.dispatchedAt), 'Delivered At': fmtDubaiTs(o.deliveredAt),
+    Brand: o.brand, Cuisine: o.cuisine, Location: o.location, Channel: o.channel, 'Payment Method': o.payment, 'Delivery Partner': o.partner,
+    'Net Sales (AED)': round2(o.netSales), 'Receipt Total (AED)': round2(o.receiptTotal), 'Discount (AED)': round2(o.discount),
+    Cancelled: o.cancelled, 'Cancelled After Accept': o.postCancelled, 'Cancellation Reason': o.reason,
+    Rating: o.rating == null ? '' : o.rating, 'Estimated Prep Time (min)': o.estPrep == null ? '' : o.estPrep
+  };
+}
+
+const LINE_ITEM_COLUMNS = ['Order ID', 'Item', 'Item ID', 'Modifier', 'Modifier ID', 'Line Type', 'Quantity', 'Unit Price (AED)', 'Line Total (AED)', 'Item Discount (AED)', 'Brand', 'Location', 'Channel', 'Order Date/Time'];
+function mapLineItemRow(x) {
+  return {
+    'Order ID': x.orderId, Item: x.item, 'Item ID': x.itemId, Modifier: x.modifier, 'Modifier ID': x.modifierId, 'Line Type': x.type,
+    Quantity: x.qty, 'Unit Price (AED)': round2(x.unitPrice), 'Line Total (AED)': round2(x.lineTotal), 'Item Discount (AED)': round2(x.discount),
+    Brand: x.brand, Location: x.location, Channel: x.channel, 'Order Date/Time': fmtDubaiTs(x.at)
+  };
+}
+
+const EVENT_COLUMNS = ['Item', 'Brand', 'Cuisine', 'Location', 'Type', 'Source', 'Event Date/Time'];
+function mapEventRow(x) {
+  return { Item: x.item, Brand: x.brand, Cuisine: x.cuisine, Location: x.location, Type: x.type, Source: x.source, 'Event Date/Time': fmtDubaiTs(x.at) };
+}
+
+const PL_COLUMNS = ['Line', 'Amount (AED)', '% of Net Sales'];
+function mapPlRow(r, net) {
+  return { Line: r.label, 'Amount (AED)': round2(r.amount), '% of Net Sales': net ? pc(r.amount / net, 1) : '–' };
+}
+
+function exportOrdersInRange() {
+  return S.orders.filter(o => dateOk(o.receivedAt) && eq(o.brand, S.f.brand) && eq(o.location, S.f.location));
+}
+function exportLineItemsInRange() {
+  return S.lineItems.filter(x => dateOk(x.at) && eq(x.brand, S.f.brand) && eq(x.location, S.f.location));
+}
+function exportEventsInRange() {
+  return S.items.filter(x => dateOk(x.at) && eq(x.brand, S.f.brand) && eq(x.location, S.f.location));
+}
+// renderEbitda() computes the P&L through base('ebitda'), which also filters
+// on channel/payment/partner/day/slot/hour -- global S.f fields that persist
+// from whatever page the user was last on and aren't shown on this page's
+// filter bar. Neutralizing them here guarantees the exported P&L is governed
+// by only the 3 filters visible on screen, not a hidden leftover filter.
+function computeExportPL() {
+  const neutral = ['channel', 'payment', 'partner', 'day', 'slot', 'hour'];
+  const saved = {};
+  neutral.forEach(k => { saved[k] = S.f[k]; S.f[k] = 'All'; });
+  try { renderEbitda(); return lastPL; }
+  finally { neutral.forEach(k => { S.f[k] = saved[k]; }); }
+}
+
+function renderExport() {
+  const orders = exportOrdersInRange();
+  const lines = exportLineItemsInRange();
+  const events = exportEventsInRange();
+  $('#expOrdersCount').textContent = `${cnt(orders.length)} orders in range`;
+  $('#expItemsCount').textContent = `${cnt(lines.length)} item-sale lines in range`;
+  $('#expEventsCount').textContent = `${cnt(events.length)} 86/out-of-stock events in range`;
+  const pl = computeExportPL();
+  $('#expPLSummary').textContent = pl ? `Net Sales ${money(pl.net)} · EBITDA ${money(pl.eb)} in range` : 'No data for range';
+}
+
+const ORDER_MONEY_COLS = ['Net Sales (AED)', 'Receipt Total (AED)', 'Discount (AED)'];
+const LINE_ITEM_MONEY_COLS = ['Unit Price (AED)', 'Line Total (AED)', 'Item Discount (AED)'];
+
+function wireExportButtons() {
+  const fname = (name, ext) => `FoodHive_${name}_${S.f.from || 'all'}_to_${S.f.to || 'all'}.${ext}`;
+  $('#expOrdersCsv').onclick = () => downloadCSV(fname('Orders', 'csv'), ORDER_COLUMNS, exportOrdersInRange().map(mapOrderRow));
+  $('#expOrdersXlsx').onclick = () => downloadXLSX(fname('Orders', 'xlsx'), 'Orders', ORDER_COLUMNS, exportOrdersInRange().map(mapOrderRow), ORDER_MONEY_COLS);
+  $('#expItemsCsv').onclick = () => downloadCSV(fname('ItemSales', 'csv'), LINE_ITEM_COLUMNS, exportLineItemsInRange().map(mapLineItemRow));
+  $('#expItemsXlsx').onclick = () => downloadXLSX(fname('ItemSales', 'xlsx'), 'Item Sales', LINE_ITEM_COLUMNS, exportLineItemsInRange().map(mapLineItemRow), LINE_ITEM_MONEY_COLS);
+  $('#expEventsCsv').onclick = () => downloadCSV(fname('86Events', 'csv'), EVENT_COLUMNS, exportEventsInRange().map(mapEventRow));
+  $('#expEventsXlsx').onclick = () => downloadXLSX(fname('86Events', 'xlsx'), '86 Events', EVENT_COLUMNS, exportEventsInRange().map(mapEventRow), []);
+  $('#expPlCsv').onclick = () => {
+    const pl = computeExportPL(); if (!pl) return;
+    downloadCSV(fname('PL', 'csv'), PL_COLUMNS, pl.rows.map(r => mapPlRow(r, pl.net)));
+  };
+  $('#expPlXlsx').onclick = () => {
+    const pl = computeExportPL(); if (!pl) return;
+    downloadPlXlsx(fname('PL', 'xlsx'), pl);
+  };
+  $('#expPlPdf').onclick = () => {
+    const pl = computeExportPL(); if (!pl) return;
+    downloadPLPdf();
+  };
 }
 
 // CSV / XLSX import
@@ -2042,7 +2517,7 @@ $('#mFile').onchange = async e => {
       else { const o = NZ.normalizeOrders(rows); orders = (orders || []).concat(o); log(`${f.name}: ${o.length} orders`); }
     } catch (err) { log(`✗ ${f.name}: ${err.message} (password-protected workbooks can't be read – save a copy without a password)`); }
   }
-  if (orders || items) { setData(orders, items, 'import', `Imported file data (${(orders || S.orders).length})`); setDates(...fullRange()); render(); }
+  if (orders || items) { setData(orders, items, null, 'import', `Imported file data (${(orders || S.orders).length})`); setDates(...fullRange()); render(); }
   e.target.value = '';
 };
 $('#mDemo').onclick = () => { loadDemo(); log('Demo data loaded.'); };
@@ -2073,11 +2548,13 @@ async function syncNow() {
       if (Date.now() > deadline) { done('Still syncing in the background — check back shortly'); return; }
       const st = await fetch('/api/status').then(r => r.json()).catch(() => null);
       if (st && st.lastSync > before) {
-        const [ordRes, availRes] = await Promise.all([fetch('/api/orders'), fetch('/api/availability')]);
+        const [ordRes, availRes, oiRes] = await Promise.all([fetch('/api/orders'), fetch('/api/availability'), fetch('/api/order-items')]);
         const ordData = await ordRes.json();
         let items = S.items;
         try { const itJson = await availRes.json(); if (itJson.items) items = itJson.items; } catch (_) {}
-        setData(ordData.orders, items, 'live', `● Live · GrubCENTER (${ordData.orders.length})`);
+        let lineItems = S.lineItems;
+        try { const oiJson = await oiRes.json(); if (oiJson.items) lineItems = oiJson.items; } catch (_) {}
+        setData(ordData.orders, items, lineItems, 'live', `● Live · GrubCENTER (${ordData.orders.length})`);
         done(`✓ Synced — ${ordData.orders.length} orders`, 'ok');
         return;
       }
@@ -2097,6 +2574,14 @@ if ($('#dailyModal')) {
     if (e.target === $('#dailyModal')) $('#dailyModal').hidden = true;
   };
 }
+if ($('#kpiModalClose')) $('#kpiModalClose').onclick = () => { $('#kpiModal').hidden = true; };
+if ($('#kpiModalClose2')) $('#kpiModalClose2').onclick = () => { $('#kpiModal').hidden = true; };
+if ($('#kpiModal')) {
+  $('#kpiModal').onclick = e => {
+    if (e.target === $('#kpiModal')) $('#kpiModal').hidden = true;
+  };
+}
+if ($('#expOrdersCsv')) wireExportButtons();
 
 async function loadCached() {
   log('Loading FoodHive decrypted exports…');
@@ -2105,7 +2590,7 @@ async function loadCached() {
     const j = await r.json();
     if (!j.orders || !j.orders.length) throw new Error('No export orders found.');
     log(`Loaded ${j.orders.length} orders & ${(j.items || []).length} 86-items.`);
-    setData(j.orders, j.items || [], 'exports', `● FoodHive Exports (${j.orders.length})`);
+    setData(j.orders, j.items || [], j.orderItems || [], 'exports', `● FoodHive Exports (${j.orders.length})`);
     setDates(...fullRange());
     render();
     $('#modal').hidden = true;
@@ -2153,7 +2638,21 @@ function loadDemo() {
     const [brand, cuisine] = pick(brands, brands.map(b => b[2])); const t = new Date(now); t.setDate(t.getDate() - Math.floor(rnd() * 30)); t.setHours(Math.floor(rnd() * 24));
     items.push({ item: pick(itemNames[cuisine] || ['Special Combo']), brand, cuisine, location: 'Motor City', type: 'Menu Item', source: pick(['Master GrubKDS', 'Master'], [8, 2]), at: t.getTime() });
   }
-  setData(orders, items, 'demo', '◌ Demo data (not live)');
+  const lineItems = [];
+  orders.forEach(o => {
+    if (o.cancelled) return;
+    const names = itemNames[o.cuisine] || ['Special Combo'];
+    const lineCount = pick([1, 2], [3, 1]);
+    for (let n = 0; n < lineCount; n++) {
+      const qty = pick([1, 1, 1, 2], null);
+      lineItems.push({
+        orderId: o.id, item: pick(names), itemId: '', modifier: '', modifierId: '', type: 'Menu Item',
+        qty, unitPrice: o.receiptTotal / lineCount, lineTotal: (o.netSales / lineCount) * qty, discount: o.discount / lineCount,
+        brand: o.brand, location: o.location, channel: o.channel, at: o.receivedAt
+      });
+    }
+  });
+  setData(orders, items, lineItems, 'demo', '◌ Demo data (not live)');
   setDates(...fullRange()); render();
 }
 
@@ -2163,16 +2662,19 @@ function loadDemo() {
 
   // 1. Immediately fetch pre-warmed FoodHive master orders in parallel (<15ms)
   try {
-    const [ordRes, availRes] = await Promise.all([
+    const [ordRes, availRes, oiRes] = await Promise.all([
       fetch('/api/orders'),
-      fetch('/api/availability')
+      fetch('/api/availability'),
+      fetch('/api/order-items')
     ]);
     if (ordRes.ok) {
       const ordData = await ordRes.json();
       let items = [];
       try { items = (await availRes.json()).items || []; } catch (_) {}
+      let lineItems = [];
+      try { lineItems = (await oiRes.json()).items || []; } catch (_) {}
       if (ordData && ordData.orders && ordData.orders.length) {
-        setData(ordData.orders, items, 'live', `● Live · GrubCENTER (${ordData.orders.length})`);
+        setData(ordData.orders, items, lineItems, 'live', `● Live · GrubCENTER (${ordData.orders.length})`);
         setDates(...getDefaultPeriod());
         show(initialPage);
       }
@@ -2201,16 +2703,19 @@ function loadDemo() {
   // 3. Client auto-refresh every 10 minutes from server
   setInterval(async () => {
     try {
-      const [ordRes, availRes] = await Promise.all([
+      const [ordRes, availRes, oiRes] = await Promise.all([
         fetch('/api/orders'),
-        fetch('/api/availability')
+        fetch('/api/availability'),
+        fetch('/api/order-items')
       ]);
       if (ordRes.ok) {
         const ordData = await ordRes.json();
         let items = S.items;
         try { const itJson = await availRes.json(); if (itJson.items) items = itJson.items; } catch (_) {}
+        let lineItems = S.lineItems;
+        try { const oiJson = await oiRes.json(); if (oiJson.items) lineItems = oiJson.items; } catch (_) {}
         if (ordData && ordData.orders && ordData.orders.length) {
-          setData(ordData.orders, items, 'live', `● Live · GrubCENTER (${ordData.orders.length})`);
+          setData(ordData.orders, items, lineItems, 'live', `● Live · GrubCENTER (${ordData.orders.length})`);
           render();
         }
       }

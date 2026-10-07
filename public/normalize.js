@@ -183,5 +183,48 @@
     })).filter(x => x.at);
   }
 
-  return { normalizeOrders, normalizeItems, isItemDataset, toDate, key };
+  // per-order line-item sales ("menu item sold" rows, incl. modifier sub-rows)
+  const ORDER_ITEM_ALIASES = {
+    orderId: ['orderid', 'uniqueorderid', 'orderexternalid', 'externalid'],
+    item: ['recipename', 'item', 'itemname', 'menuitem', 'product'],
+    itemId: ['recipeexternalid', 'itemexternalid', 'itemid', 'sku'],
+    modifier: ['modifiername'],
+    modifierId: ['modifierexternalid'],
+    qty: ['quantity', 'qty', 'itemquantity'],
+    unitPrice: ['itemprice', 'unitprice'],
+    lineTotal: ['itemtotalprice', 'itemtotalsalesamount', 'linetotal'],
+    discount: ['itemdiscount', 'discountedamount'],
+    brand: ['brandname', ...ALIASES.brand],
+    location: ['locationname', ...ALIASES.location],
+    channel: ['channelname', ...ALIASES.channel],
+    at: ['date', 'createdat', 'ordercreatedtime', ...ALIASES.receivedAt]
+  };
+  function normalizeOrderItems(rows) {
+    if (!rows.length) return [];
+    const lookup = {};
+    Object.keys(rows[0]).forEach(k => (lookup[key(k)] = k));
+    const map = {};
+    for (const f in ORDER_ITEM_ALIASES) for (const a of ORDER_ITEM_ALIASES[f]) if (lookup[a]) { map[f] = lookup[a]; break; }
+    return rows.map(r => {
+      const modifier = str(r[map.modifier]);
+      return {
+        orderId: str(r[map.orderId]),
+        item: str(r[map.item]) || '(Blank)',
+        itemId: str(r[map.itemId]),
+        modifier,
+        modifierId: str(r[map.modifierId]),
+        type: modifier ? 'Modifier' : 'Menu Item',
+        qty: num(r[map.qty]) || 0,
+        unitPrice: num(r[map.unitPrice]),
+        lineTotal: num(r[map.lineTotal]),
+        discount: Math.abs(num(r[map.discount])),
+        brand: str(r[map.brand]) || '(Blank)',
+        location: str(r[map.location]) || '(Blank)',
+        channel: str(r[map.channel]) || '(Blank)',
+        at: toDate(r[map.at])
+      };
+    }).filter(x => x.orderId && x.at);
+  }
+
+  return { normalizeOrders, normalizeItems, normalizeOrderItems, isItemDataset, toDate, key };
 });

@@ -327,6 +327,7 @@ nav a.on { background: #fff; border-color: var(--k); }
 
 /* ================= KPIS ================= */
 .kpis { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
+.kpis[hidden], .grid[hidden] { display: none; }
 .kpi {
   background: #fff;
   border: 1px solid #ced5d7;
@@ -342,6 +343,10 @@ nav a.on { background: #fff; border-color: var(--k); }
   transform: translateY(-2px);
   border-color: #b38600;
   box-shadow: 0 4px 10px rgba(0,0,0,0.08);
+}
+.kpi:active {
+  transform: scale(.97);
+  box-shadow: 0 1px 4px rgba(0,0,0,0.12);
 }
 .kpi.active {
   border: 2px solid #b38600;
@@ -362,6 +367,11 @@ nav a.on { background: #fff; border-color: var(--k); }
   color: var(--k);
   position: relative;
 }
+/* Kind glyphs: hint what a tile's click will do, so a dead-looking tile
+   never looks identical to a working one (filter tiles get no glyph). */
+.kpi--drill .kh::after { content: '⤢'; position: absolute; right: 6px; top: 3px; font-size: 10px; opacity: .6; }
+.kpi--download .kh::after { content: '⬇'; position: absolute; right: 6px; top: 3px; font-size: 10px; opacity: .6; }
+.kpi--nav .kh::after { content: '→'; position: absolute; right: 6px; top: 3px; font-size: 10px; opacity: .6; }
 .kpi .kv {
   text-align: center;
   font-size: 28px;
@@ -650,7 +660,22 @@ td:first-child { text-align: left; font-weight: 700; }
 .i-typ { grid-area: t; height: 195px; }
 .i-trend { grid-area: r; height: 200px; }
 
+/* Items Sold (by time) */
+.g-item-sales {
+  grid-template-columns: repeat(12, 1fr);
+  grid-template-areas:
+    "h h h h h h sl sl sl sl sl sl"
+    "tp tp tp tp tp tp tp tr tr tr tr tr";
+}
+.is-hour { grid-area: h; height: 290px; }
+.is-slot { grid-area: sl; height: 290px; }
+.is-top { grid-area: tp; height: auto; }
+.is-trend { grid-area: tr; height: 200px; }
+
 /* Delayed */
+.g-export { grid-template-columns: repeat(2, 1fr); }
+.g-export .panel { height: auto; }
+
 .g-delayed { grid-template-columns: 7fr 5fr; }
 .g-delayed .panel { height: 320px; }
 .g-delayed .panel:nth-child(3) { height: 340px; }
@@ -701,8 +726,8 @@ td:first-child { text-align: left; font-weight: 700; }
 }
 
 @media (max-width: 1100px) {
-  .g-sales, .g-cancel, .g-items, .g-commission, .g-ebitda { display: block; }
-  .g-sales .panel, .g-cancel .panel, .g-items .panel, .g-commission .panel, .g-ebitda .panel { margin-bottom: 10px; height: 300px !important; }
+  .g-sales, .g-cancel, .g-items, .g-item-sales, .g-commission, .g-ebitda { display: block; }
+  .g-sales .panel, .g-cancel .panel, .g-items .panel, .g-item-sales .panel, .g-commission .panel, .g-ebitda .panel { margin-bottom: 10px; height: 300px !important; }
   .g-commission .a-ratecard, .g-ebitda .a-costs, .g-ebitda .a-plwaterfall { height: auto !important; }
   .g-prep { grid-template-columns: 1fr 1fr; }
   .g-ratings { grid-template-columns: 1fr; }
@@ -737,12 +762,28 @@ td:first-child { text-align: left; font-weight: 700; }
   to { opacity: 1; transform: none; }
 }
 .kpi .kv { transform-origin: center; }
-.kpi .kv.kv-bump { animation: kvBump 0.34s ease; }
+.kpi .kv.kv-bump { animation: kvBump 0.42s cubic-bezier(.22,.9,.32,1); }
 @keyframes kvBump {
-  0% { transform: scale(1); }
-  35% { transform: scale(1.1); color: #b38600; }
-  100% { transform: scale(1); }
+  0% { transform: scale(1) translateY(0); }
+  30% { transform: scale(1.16) translateY(-3px); color: #b38600; text-shadow: 0 0 10px rgba(253,203,60,.55); }
+  65% { transform: scale(.98) translateY(0); }
+  100% { transform: scale(1) translateY(0); color: inherit; text-shadow: none; }
 }
+/* One-shot pulse when a tile's cross-filter is switched ON (distinct from
+   the persistent .active styling, which stays on while filtered) -- makes
+   the moment of filtering feel alive instead of just snapping to gold. */
+.kpi.kpi-activate { animation: kpiActivate 0.5s cubic-bezier(.22,.9,.32,1); }
+@keyframes kpiActivate {
+  0% { box-shadow: 0 2px 8px rgba(253,203,60,.45); }
+  40% { box-shadow: 0 0 0 6px rgba(253,203,60,.28), 0 2px 8px rgba(253,203,60,.45); }
+  100% { box-shadow: 0 2px 8px rgba(253,203,60,.45); }
+}
+/* Kind glyphs ease in rather than appear instantly */
+.kpi--drill .kh::after, .kpi--download .kh::after, .kpi--nav .kh::after {
+  animation: glyphIn 0.3s ease both;
+  animation-delay: 0.1s;
+}
+@keyframes glyphIn { from { opacity: 0; transform: translateX(3px); } to { opacity: .6; transform: none; } }
 
 /* Panels: staggered entrance per page + hover lift */
 .page.on .panel { animation: panelIn 0.36s cubic-bezier(.22,.9,.32,1) both; }

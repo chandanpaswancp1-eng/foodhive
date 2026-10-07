@@ -38,6 +38,7 @@ const CFG = {
   opsPath: '/operations-data/location-performance/report/',
   cancelPath: '/sales-data/cancelled-orders/report/',
   itemsPath: E.GRUBCENTER_ITEMS_PATH || '/operations-data/item-availability/snapshot/',
+  orderItemsPath: E.GRUBCENTER_ORDER_ITEMS_PATH || '/menu-data/menu-items/order-items-sales/',
   pageSize: +E.GRUBCENTER_PAGE_SIZE || 200
 };
 
@@ -201,6 +202,7 @@ const STORE = {
   ordersMap: new Map(),
   ordersArray: [],
   itemsArray: [],
+  orderItemsArray: [],
   lastSync: 0,
   syncing: false,
   liveOpsCount: 0,
@@ -213,6 +215,7 @@ function preloadData() {
   const allFile = path.join(__dirname, 'data', 'all_orders.json');
   const cachedFile = path.join(__dirname, 'data', 'cached_orders.json');
   const itemsFile = path.join(__dirname, 'data', 'cached_items.json');
+  const orderItemsFile = path.join(__dirname, 'data', 'order_items.json');
 
   let list = [];
   if (fs.existsSync(allFile)) {
@@ -236,7 +239,11 @@ function preloadData() {
     try { STORE.itemsArray = N.normalizeItems(JSON.parse(fs.readFileSync(itemsFile, 'utf8'))); } catch (_) {}
   }
 
-  console.log(`[Cache Preload] Loaded ${STORE.ordersArray.length} master FoodHive orders & ${STORE.itemsArray.length} items in ${Date.now() - t0}ms`);
+  if (fs.existsSync(orderItemsFile)) {
+    try { STORE.orderItemsArray = JSON.parse(fs.readFileSync(orderItemsFile, 'utf8')); } catch (_) {}
+  }
+
+  console.log(`[Cache Preload] Loaded ${STORE.ordersArray.length} master FoodHive orders, ${STORE.itemsArray.length} 86-items & ${STORE.orderItemsArray.length} order line items in ${Date.now() - t0}ms`);
 }
 preloadData();
 
@@ -256,6 +263,7 @@ async function syncGrubcenter(from, to) {
     const rawSales = await fetchPaged(CFG.ordersPath, f, t, 25);
     const rawOps = await fetchPaged(CFG.opsPath, f, t, 20).catch(err => { console.warn('Ops warning:', err.message); return []; });
     const rawCancels = await fetchPaged(CFG.cancelPath, f, t, 10).catch(err => { console.warn('Cancel warning:', err.message); return []; });
+    const rawOrderItems = await fetchPaged(CFG.orderItemsPath, f, t, 25).catch(err => { console.warn('Order-items warning:', err.message); return []; });
 
     const opsMap = new Map();
     rawOps.forEach(o => {
@@ -338,8 +346,20 @@ async function syncGrubcenter(from, to) {
     STORE.lastSync = Date.now();
     console.log(`[GrubCENTER Sync Complete] Master now has ${STORE.ordersArray.length} orders (+${newCount} new, ${rawOps.length} ops timings attached)`);
 
+    // Line items: re-fetching [f, t] returns the complete, authoritative set
+    // of rows for every day in that window, so replace (not merge-by-guessed-key)
+    // whatever this sync's days already held in the store, then keep anything
+    // older than the window untouched.
+    const normOrderItems = N.normalizeOrderItems(rawOrderItems);
+    const touchedDays = new Set(dayChunks(f, t));
+    STORE.orderItemsArray = STORE.orderItemsArray
+      .filter(x => !touchedDays.has(dubaiDateKey(x.at)))
+      .concat(normOrderItems);
+    console.log(`[GrubCENTER Sync Complete] ${STORE.orderItemsArray.length} order line items in store (${normOrderItems.length} refreshed for this window)`);
+
     // Async persist to disk
     fs.writeFile(path.join(__dirname, 'data', 'all_orders.json'), JSON.stringify(STORE.ordersArray), () => {});
+    fs.writeFile(path.join(__dirname, 'data', 'order_items.json'), JSON.stringify(STORE.orderItemsArray), () => {});
   } catch (err) {
     console.error('[GrubCENTER Sync Error]', err.message);
   } finally {
@@ -432,10 +452,29 @@ http.createServer(async (req, res) => {
       });
     }
 
+    if (u.pathname === '/api/order-items') {
+      const from = u.searchParams.get('from'), to = u.searchParams.get('to');
+      let filtered = STORE.orderItemsArray;
+      if (from || to) {
+        filtered = STORE.orderItemsArray.filter(x => {
+          if (!x.at) return false;
+          const d = dubaiDateKey(x.at);
+          return (!from || d >= from) && (!to || d <= to);
+        });
+      }
+      return sendGzip(req, res, 200, {
+        count: filtered.length,
+        totalInStore: STORE.orderItemsArray.length,
+        items: filtered,
+        lastSync: STORE.lastSync
+      });
+    }
+
     if (u.pathname === '/api/cached-exports') {
       return sendGzip(req, res, 200, {
         orders: STORE.ordersArray,
         items: STORE.itemsArray,
+        orderItems: STORE.orderItemsArray,
         count: STORE.ordersArray.length,
         itemsCount: STORE.itemsArray.length
       });

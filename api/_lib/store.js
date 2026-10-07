@@ -8,6 +8,7 @@ const { put, get } = require('@vercel/blob');
 
 const ORDERS_KEY = 'orders.json';
 const ITEMS_KEY = 'items.json';
+const ORDER_ITEMS_KEY = 'order_items.json';
 const META_KEY = 'meta.json';
 
 async function streamToString(stream) {
@@ -44,7 +45,9 @@ const readOrders = () => readBlobJson(ORDERS_KEY, []);
 const writeOrders = arr => writeBlobJson(ORDERS_KEY, arr);
 const readItems = () => readBlobJson(ITEMS_KEY, []);
 const writeItems = arr => writeBlobJson(ITEMS_KEY, arr);
+const readOrderItems = () => readBlobJson(ORDER_ITEMS_KEY, []);
+const writeOrderItems = arr => writeBlobJson(ORDER_ITEMS_KEY, arr);
 const readMeta = () => readBlobJson(META_KEY, { lastSync: 0, session: null, liveOpsCount: 0, liveCancelCount: 0 });
 const writeMeta = meta => writeBlobJson(META_KEY, meta);
 
-module.exports = { readOrders, writeOrders, readItems, writeItems, readMeta, writeMeta, readBlobJson, writeBlobJson };
+module.exports = { readOrders, writeOrders, readItems, writeItems, readOrderItems, writeOrderItems, readMeta, writeMeta, readBlobJson, writeBlobJson };

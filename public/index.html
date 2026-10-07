@@ -5,10 +5,13 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>FOOD HIVE · Operations &amp; Sales Dashboard</title>
 <link rel="icon" href="assets/favicon.png">
-<link rel="stylesheet" href="style.css?v=3.10">
+<link rel="stylesheet" href="style.css?v=3.12">
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.2.0/dist/chartjs-plugin-datalabels.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<!-- xlsx-js-style: a drop-in SheetJS fork (same XLSX.* API used for CSV/XLSX import)
+     that additionally supports writing cell styles (bold/fill/borders) and number
+     formats, needed for the formatted, formula-driven Data Export XLSX reports. -->
+<script src="https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.bundle.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.2/dist/jspdf.plugin.autotable.min.js"></script>
 </head>
@@ -38,6 +41,7 @@
       <a data-page="delayed"><img src="assets/delayed.png" alt=""><span>Delayed Orders</span></a>
       <a data-page="commission"><img src="assets/commission.svg" alt=""><span>Commission</span></a>
       <a data-page="ebitda"><img src="assets/ebitda.svg" alt=""><span>EBITDA</span></a>
+      <a data-page="export"><img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48' width='48' height='48'%3E%3Ccircle cx='24' cy='24' r='20' fill='%23FDCB3C' stroke='%231d1d1d' stroke-width='2.5'/%3E%3Cline x1='24' y1='12' x2='24' y2='28' stroke='%231d1d1d' stroke-width='2.6' stroke-linecap='round'/%3E%3Cpolyline points='17,21 24,28 31,21' fill='none' stroke='%231d1d1d' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cpolyline points='13,30 13,36 35,36 35,30' fill='none' stroke='%231d1d1d' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E" alt=""><span>Data Export</span></a>
     </nav>
 
     <!-- Toggles placed below nav on Pages 1, 2, 5, 6 -->
@@ -203,7 +207,7 @@
       </div>
     </section>
 
-    <!-- PAGE 5 : ITEMS DETAIL (86 ITEMS) -->
+    <!-- PAGE 5 : ITEMS DETAIL (86 ITEMS / ITEM SALES) -->
     <section class="page" id="page-items">
       <div class="top-row-flex">
         <div class="kpis" id="kpi-items">
@@ -211,15 +215,22 @@
           <div class="kpi"><div class="kh">Brand with Most 86 Items</div><div class="kv">House Of Fatayer</div></div>
           <div class="kpi"><div class="kh">Location with Most 86 Items</div><div class="kv">Motor City</div></div>
         </div>
+        <div class="kpis" id="kpi-item-sales" hidden></div>
         <header class="filters" id="filters-items"></header>
       </div>
-      <div class="grid g-items">
+      <div class="grid g-items" id="grid-items">
         <div class="panel i-brand"><div class="ph" id="t-ibrand">86 Items and %GT 86 Items by Brand</div><div class="pb"><canvas id="c-ibrand"></canvas></div></div>
         <div class="panel i-loc"><div class="ph">86 Items and %GT 86 Items by Location</div><div class="pb"><canvas id="c-iloc"></canvas></div></div>
         <div class="panel i-dist"><div class="ph">Total 86 Items Distribution</div><div class="pb"><canvas id="c-idist"></canvas></div></div>
         <div class="panel i-src"><div class="ph">Distribution by Source</div><div class="pb"><canvas id="c-isrc"></canvas></div></div>
         <div class="panel i-typ"><div class="ph">Distribution by Type</div><div class="pb"><canvas id="c-ityp"></canvas></div></div>
         <div class="panel i-trend"><div class="ph">86 Items Trend</div><div class="pb"><canvas id="c-itrend"></canvas></div></div>
+      </div>
+      <div class="grid g-item-sales" id="grid-item-sales" hidden>
+        <div class="panel is-hour"><div class="ph">Items Sold by Hour</div><div class="pb"><canvas id="c-isoldhour"></canvas></div></div>
+        <div class="panel is-slot"><div class="ph">Items Sold by Time Slot</div><div class="pb"><canvas id="c-isoldslot"></canvas></div></div>
+        <div class="panel is-top"><div class="ph">Top Items Sold</div><div class="pb"><canvas id="c-itopsold"></canvas></div></div>
+        <div class="panel is-trend"><div class="ph">Items Sold Trend</div><div class="pb"><canvas id="c-isoldtrend"></canvas></div></div>
       </div>
     </section>
 
@@ -301,6 +312,59 @@
         </div>
       </div>
     </section>
+
+    <!-- PAGE 9 : DATA EXPORT -->
+    <section class="page" id="page-export">
+      <header class="filters" id="filters-export"></header>
+      <p class="muted small" style="margin:0 0 10px 0;">Exports the raw underlying records for the date range and brand/location filters above — not the dashboard's aggregated KPIs. Pick a dataset below and a format.</p>
+      <div class="grid g-export">
+        <div class="panel">
+          <div class="ph">Orders</div>
+          <div class="pb" style="display:block; padding:10px;">
+            <p class="muted small">One row per order: timestamps, brand/location/channel, Net Sales, Receipt Total, Discount, cancellation status, rating.</p>
+            <p id="expOrdersCount" class="small" style="font-weight:700; margin:6px 0;">–</p>
+            <div class="row" style="gap:8px;">
+              <button class="btn-yellow" id="expOrdersCsv">Export CSV</button>
+              <button class="btn-dark" id="expOrdersXlsx">Export XLSX</button>
+            </div>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="ph">Item Sales</div>
+          <div class="pb" style="display:block; padding:10px;">
+            <p class="muted small">One row per order line (menu item or modifier), raw and un-deduplicated — not the Item Sales page's prorated revenue.</p>
+            <p id="expItemsCount" class="small" style="font-weight:700; margin:6px 0;">–</p>
+            <div class="row" style="gap:8px;">
+              <button class="btn-yellow" id="expItemsCsv">Export CSV</button>
+              <button class="btn-dark" id="expItemsXlsx">Export XLSX</button>
+            </div>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="ph">86 / Out-of-Stock Events</div>
+          <div class="pb" style="display:block; padding:10px;">
+            <p class="muted small">One row per stock-availability event: item, brand/location, type, source, timestamp.</p>
+            <p id="expEventsCount" class="small" style="font-weight:700; margin:6px 0;">–</p>
+            <div class="row" style="gap:8px;">
+              <button class="btn-yellow" id="expEventsCsv">Export CSV</button>
+              <button class="btn-dark" id="expEventsXlsx">Export XLSX</button>
+            </div>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="ph">P&amp;L Report</div>
+          <div class="pb" style="display:block; padding:10px;">
+            <p class="muted small">The full Gross Sales → EBITDA waterfall for the range above, governed only by the filters on this page (a channel/payment/partner filter left over from another page is ignored).</p>
+            <p id="expPLSummary" class="small" style="font-weight:700; margin:6px 0;">–</p>
+            <div class="row" style="gap:8px;">
+              <button class="btn-yellow" id="expPlCsv">Export CSV</button>
+              <button class="btn-dark" id="expPlXlsx">Export XLSX</button>
+              <button class="btn-dark" id="expPlPdf">Export PDF</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
   </main>
 </div>
 
@@ -335,6 +399,21 @@
     <div class="row end" style="margin-top:12px; gap:8px;">
       <button class="btn-yellow" id="dailyModalReset" style="font-size:12px; padding:6px 12px;">Reset to All Dates</button>
       <button class="btn-dark" id="dailyModalClose2" style="font-size:12px; padding:6px 12px;">Done</button>
+    </div>
+  </div>
+</div>
+
+<!-- GENERIC KPI DRILL-DOWN MODAL -->
+<div class="modal" id="kpiModal" hidden>
+  <div class="modal-card" style="max-width: 760px; max-height: 88vh; display: flex; flex-direction: column;">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 8px;">
+      <h3 style="margin:0; font-size:18px;" id="kpiModalTitle">KPI Detail</h3>
+      <button class="btn-dark" id="kpiModalClose" style="padding:4px 10px; font-size:12px;">✕ Close</button>
+    </div>
+    <p class="muted small" id="kpiModalSubtitle" style="margin:0 0 10px 0;"></p>
+    <div style="flex:1; overflow-y:auto; max-height: 64vh;" id="kpiModalBody"></div>
+    <div class="row end" style="margin-top:12px; gap:8px;">
+      <button class="btn-dark" id="kpiModalClose2" style="font-size:12px; padding:6px 12px;">Done</button>
     </div>
   </div>
 </div>
