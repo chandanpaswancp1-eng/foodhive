@@ -468,6 +468,50 @@ nav a.on { background: #fff; border-color: var(--k); }
 .a-dow { grid-column: span 5; }
 .a-disc { grid-column: span 12; height: 285px; }
 
+/* Commission */
+.g-commission { grid-template-columns: repeat(12, 1fr); }
+.a-commchan { grid-column: span 6; height: 285px; }
+.a-commbar { grid-column: span 6; height: 285px; }
+.a-ratecard { grid-column: span 12; }
+.a-ratecard table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.a-ratecard th, .a-ratecard td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+.a-ratecard th { background: var(--y); color: var(--k); font-weight: 700; }
+.a-ratecard td.rc-note { color: #666; font-size: 11px; }
+
+/* EBITDA */
+.g-ebitda { grid-template-columns: repeat(12, 1fr); }
+.a-plwaterfall { grid-column: span 12; }
+.a-plwaterfall table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.a-plwaterfall th, .a-plwaterfall td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+.a-plwaterfall th { background: var(--y); color: var(--k); font-weight: 700; }
+.a-plwaterfall td.cost-amt { text-align: right; width: 140px; }
+.a-plwaterfall tr.pl-sub td { font-weight: 700; background: #f7f3e4; }
+.a-plwaterfall tr.pl-total td { font-weight: 800; background: var(--y); color: var(--k); font-size: 13px; }
+.pl-memo { padding: 8px 10px; font-size: 12px; font-weight: 600; color: #555; }
+
+.a-ebitdatrend { grid-column: span 12; height: 285px; }
+
+.a-costs { grid-column: span 12; }
+.cost-cat { margin-bottom: 14px; }
+.cost-cat:last-child { margin-bottom: 0; }
+.cost-cat table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.cost-cat th, .cost-cat td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+.cost-cat th { background: var(--y); color: var(--k); font-weight: 700; }
+.cost-cat td.cost-amt { text-align: right; width: 160px; }
+.cost-cat td.cost-del { width: 40px; text-align: center; }
+.cost-cat tr.cost-ro td { color: #777; font-style: italic; font-size: 11.5px; }
+.cost-cat tr.cost-sub td { font-weight: 700; background: #f7f3e4; }
+.cost-cat input[type="text"], .cost-cat input[type="number"] {
+  width: 100%; border: 1px solid var(--line); border-radius: 4px; padding: 5px 7px;
+  font: inherit; font-size: 12px; color: var(--k); background: #fff;
+}
+.cost-cat input[type="number"] { text-align: right; }
+.cost-cat .btn-del-cost {
+  border: none; background: transparent; color: #b3261e; font-size: 15px; cursor: pointer; line-height: 1;
+}
+.cost-cat .btn-del-cost:hover { color: #7a1a15; }
+.btn-add-cat { margin: 8px 10px 0; font-size: 12px; padding: 6px 12px; }
+
 /* Cancellations */
 .g-cancel { grid-template-columns: repeat(12, 1fr); }
 .g-cancel .panel { height: 285px; }
@@ -657,9 +701,133 @@ td:first-child { text-align: left; font-weight: 700; }
 }
 
 @media (max-width: 1100px) {
-  .g-sales, .g-cancel, .g-items { display: block; }
-  .g-sales .panel, .g-cancel .panel, .g-items .panel { margin-bottom: 10px; height: 300px !important; }
+  .g-sales, .g-cancel, .g-items, .g-commission, .g-ebitda { display: block; }
+  .g-sales .panel, .g-cancel .panel, .g-items .panel, .g-commission .panel, .g-ebitda .panel { margin-bottom: 10px; height: 300px !important; }
+  .g-commission .a-ratecard, .g-ebitda .a-costs, .g-ebitda .a-plwaterfall { height: auto !important; }
   .g-prep { grid-template-columns: 1fr 1fr; }
   .g-ratings { grid-template-columns: 1fr; }
   .g-ratings .panel.wide { grid-column: auto; }
+}
+
+/* ================= MOTION ================= */
+/* Chart.js data-draw animation stays OFF (app.js) -- a shared animation-frame
+   bug there can abort mid-paint and starve other charts. All motion below is
+   CSS/DOM only, so it can't touch that. */
+
+.page.on { animation: pageIn 0.32s cubic-bezier(.22,.9,.32,1) both; }
+@keyframes pageIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* KPI tiles: staggered refresh-in + value-change pulse */
+.kpi { animation: kpiIn 0.34s cubic-bezier(.22,.9,.32,1) both; }
+.kpi:nth-child(1) { animation-delay: 0ms; }
+.kpi:nth-child(2) { animation-delay: 28ms; }
+.kpi:nth-child(3) { animation-delay: 56ms; }
+.kpi:nth-child(4) { animation-delay: 84ms; }
+.kpi:nth-child(5) { animation-delay: 112ms; }
+.kpi:nth-child(6) { animation-delay: 140ms; }
+.kpi:nth-child(7) { animation-delay: 168ms; }
+.kpi:nth-child(8) { animation-delay: 196ms; }
+.kpi:nth-child(9) { animation-delay: 224ms; }
+.kpi:nth-child(10) { animation-delay: 252ms; }
+@keyframes kpiIn {
+  from { opacity: 0; transform: translateY(7px) scale(.96); }
+  to { opacity: 1; transform: none; }
+}
+.kpi .kv { transform-origin: center; }
+.kpi .kv.kv-bump { animation: kvBump 0.34s ease; }
+@keyframes kvBump {
+  0% { transform: scale(1); }
+  35% { transform: scale(1.1); color: #b38600; }
+  100% { transform: scale(1); }
+}
+
+/* Panels: staggered entrance per page + hover lift */
+.page.on .panel { animation: panelIn 0.36s cubic-bezier(.22,.9,.32,1) both; }
+.panel:nth-child(1) { animation-delay: 0ms; }
+.panel:nth-child(2) { animation-delay: 35ms; }
+.panel:nth-child(3) { animation-delay: 70ms; }
+.panel:nth-child(4) { animation-delay: 105ms; }
+.panel:nth-child(5) { animation-delay: 140ms; }
+.panel:nth-child(6) { animation-delay: 175ms; }
+.panel:nth-child(7) { animation-delay: 210ms; }
+.panel:nth-child(8) { animation-delay: 245ms; }
+.panel:nth-child(9) { animation-delay: 280ms; }
+@keyframes panelIn {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: none; }
+}
+.panel { transition: transform 0.18s ease, box-shadow 0.18s ease; }
+.panel:hover { transform: translateY(-2px); box-shadow: 0 8px 18px rgba(0,0,0,0.08); }
+.pb canvas { transition: filter 0.15s ease; }
+.panel:hover .pb canvas { filter: brightness(1.02); }
+
+/* Sidebar nav motion */
+nav a { transition: background 0.2s ease, transform 0.15s ease, box-shadow 0.2s ease; }
+nav a:hover { transform: translateX(3px); }
+nav a.on { animation: navPop 0.28s ease; box-shadow: 0 2px 6px rgba(0,0,0,0.12); }
+@keyframes navPop {
+  0% { transform: scale(.93); }
+  55% { transform: scale(1.03); }
+  100% { transform: scale(1); }
+}
+nav a img { transition: transform 0.2s ease; }
+nav a:hover img { transform: scale(1.08) rotate(-2deg); }
+
+/* Buttons: press + hover feedback */
+.btn-dark, .btn-yellow { transition: transform 0.12s ease, box-shadow 0.12s ease; }
+.btn-dark:hover, .btn-yellow:hover { box-shadow: 0 2px 8px rgba(0,0,0,0.15); }
+.btn-dark:active, .btn-yellow:active { transform: scale(.96); }
+.btn-sync:active:not(:disabled) { transform: scale(.97); }
+.btn-sync:disabled { animation: syncPulse 1.1s ease-in-out infinite; }
+@keyframes syncPulse {
+  0%, 100% { opacity: .72; }
+  50% { opacity: 1; }
+}
+
+/* Live connection badge: gentle pulse */
+.src-badge.live { animation: liveGlow 2.6s ease-in-out infinite; }
+@keyframes liveGlow {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(23,105,47,0); }
+  50% { box-shadow: 0 0 0 5px rgba(23,105,47,0.14); }
+}
+
+/* Modal entrance */
+.modal:not([hidden]) { animation: modalBgIn 0.18s ease; }
+.modal:not([hidden]) .modal-card { animation: modalCardIn 0.26s cubic-bezier(.3,1.4,.6,1); }
+@keyframes modalBgIn { from { opacity: 0; } to { opacity: 1; } }
+@keyframes modalCardIn {
+  from { opacity: 0; transform: translateY(14px) scale(.96); }
+  to { opacity: 1; transform: none; }
+}
+
+/* Filter pills / toggles / segmented controls: press feedback */
+.pp-btn, .tg, .seg button { transition-property: background, color, box-shadow, transform; transition-duration: 0.15s; transition-timing-function: ease; }
+.pp-btn:active, .tg:active, .seg button:active { transform: scale(.96); }
+
+/* Listbox rows */
+.listbox li { animation: liFade 0.18s ease both; transition: background 0.15s ease, padding-left 0.15s ease; }
+.listbox li:hover { padding-left: 11px; }
+@keyframes liFade { from { opacity: 0; } to { opacity: 1; } }
+
+/* Dual-range slider thumbs grow on hover/drag */
+.dual-slider input[type=range]::-webkit-slider-thumb { transition: transform 0.12s ease, box-shadow 0.12s ease; }
+.dual-slider input[type=range]:hover::-webkit-slider-thumb,
+.dual-slider input[type=range]:active::-webkit-slider-thumb { transform: scale(1.25); }
+.dual-slider input[type=range]::-moz-range-thumb { transition: transform 0.12s ease; }
+.dual-slider input[type=range]:hover::-moz-range-thumb,
+.dual-slider input[type=range]:active::-moz-range-thumb { transform: scale(1.25); }
+
+/* Clickable table rows: hover feedback without disturbing inline status colors */
+tbody tr[onclick], tr.daily-row { transition: filter 0.12s ease; }
+tbody tr[onclick]:hover, tr.daily-row:hover { filter: brightness(0.95); }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
 }

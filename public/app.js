@@ -323,7 +323,7 @@ function base(page) {
   return S.orders.filter(o => {
     if (!dateOk(o.receivedAt)) return false;
     if (!eq(o.brand, f.brand) || !eq(o.location, f.location)) return false;
-    if (page === 'sales') {
+    if (page === 'sales' || page === 'commission' || page === 'ebitda') {
       if (!eq(o.channel, f.channel) || !eq(o.payment, f.payment) || !eq(o.partner, f.partner)) return false;
       if (f.day !== 'All' && dowOf(o.receivedAt) !== f.day) return false;
       if (f.slot && f.slot !== 'All' && slotOf(dubaiHour(o.receivedAt)) !== f.slot) return false;
@@ -342,7 +342,9 @@ const FILTERS = {
   prep: [['location', 'Location'], ['brand', 'Brand']],
   ratings: [['dates', 'Received At']],
   items: [['location', 'Location'], ['brand', 'Brand'], ['dates', 'Received At']],
-  delayed: [['brand', 'Brand'], ['location', 'Branch'], ['dates', 'Received At']]
+  delayed: [['brand', 'Brand'], ['location', 'Branch'], ['dates', 'Received At']],
+  commission: [['dates', 'Received At'], ['channel', 'Channel'], ['brand', 'Brand'], ['location', 'Location']],
+  ebitda: [['dates', 'Received At'], ['channel', 'Channel'], ['brand', 'Brand'], ['location', 'Location']]
 };
 
 function optionsFor(key) {
@@ -592,6 +594,12 @@ function buildToggles() {
 function kpis(id, list) {
   const container = $('#' + id);
   if (!container) return;
+  const prevVals = {};
+  container.querySelectorAll('.kpi').forEach(el => {
+    const h = $('.kh', el), v = $('.kv', el);
+    if (h && v) prevVals[h.textContent] = v.textContent;
+  });
+
   container.innerHTML = list.map(([h, v, wide, , isActive, tooltip], idx) => {
     const act = isActive ? ' active' : '';
     const tip = tooltip ? ` title="${esc(tooltip)}"` : ' title="Click to filter/reflect data"';
@@ -611,6 +619,10 @@ function kpis(id, list) {
       };
       el.onclick = handler;
       el.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handler(e); } };
+    }
+    const h = $('.kh', el), v = $('.kv', el);
+    if (h && v && prevVals[h.textContent] !== undefined && prevVals[h.textContent] !== v.textContent) {
+      v.classList.add('kv-bump');
     }
   });
 }
@@ -1528,8 +1540,368 @@ function renderDelayed() {
   }).join('')}</tbody>`;
 }
 
+// ================= PAGE 7: COMMISSION =================
+function renderCommission() {
+  const O = base('commission').filter(o => !o.cancelled);
+  const net = sum(O, o => o.netSales);
+  const commission = sum(O, o => FHCommission.commissionForOrder(o));
+
+  const chanAgg = groupBy(O, o => o.channel).map(g => {
+    const cNet = sum(g.rows, o => o.netSales);
+    const cComm = sum(g.rows, o => FHCommission.commissionForOrder(o));
+    return { k: g.k, netSales: cNet, commission: cComm, orders: g.rows.length, effRate: cNet ? cComm / cNet : 0 };
+  });
+  const topComm = chanAgg.slice().sort((a, b) => b.commission - a.commission)[0];
+
+  kpis('kpi-commission', [
+    ['Total Commission', money(commission), false, () => {
+      const el = document.getElementById('c-commchan');
+      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, false, 'Total aggregator commission owed across all channels for the current filter, computed from each portal\'s signed contract rate'],
+
+    ['Blended Commission %', net ? pc(commission / net, 1) : '0%', false, () => {}, false, 'Total Commission / Net Sales across all channels'],
+
+    ['Highest-Commission Channel', topComm ? esc(topComm.k) : '–', true, () => {
+      if (!topComm) return;
+      S.f.channel = S.f.channel === topComm.k ? 'All' : topComm.k;
+      syncFilterUI();
+      render();
+    }, topComm && S.f.channel === topComm.k, topComm ? `Click to filter dashboard for "${topComm.k}" (click again to reset)` : '']
+  ]);
+
+  const dc = chanAgg.filter(r => r.commission > 0).sort((a, b) => b.commission - a.commission).map(r => ({ k: r.k, v: r.commission }));
+  donut('c-commchan', dc, { legend: 'left', filterKey: 'channel' });
+  $('#commTotal').textContent = money(commission);
+
+  const rateRows = chanAgg.filter(r => r.netSales > 0).sort((a, b) => b.effRate - a.effRate).map(r => ({ k: r.k, v: r.effRate * 100 }));
+  hbar('c-commbar', rateRows, { fmt: v => v.toFixed(1) + '%', name: 'Effective Commission Rate', filterKey: 'channel' });
+
+  const rc = $('#rateCardTable');
+  if (rc) {
+    rc.innerHTML = `<thead><tr><th>Portal</th><th>Contracted Structure</th><th>Notes (not applied)</th></tr></thead><tbody>${
+      FHCommission.RATE_CARD.map(r => `<tr><td><b>${esc(r.channel)}</b></td><td>${esc(r.structure)}</td><td class="rc-note">${esc(r.note)}</td></tr>`).join('')
+    }</tbody>`;
+  }
+}
+
+// ================= PAGE 8: EBITDA =================
+// Manual cost categories (COGS, Labor, Controllable, Occupancy, G&A) are not
+// derivable from order data, so the user enters them directly on this page,
+// following the standard F&B operating P&L structure:
+//   Net Sales - COGS = Gross Profit
+//   Gross Profit - Labor - Commission - Other Controllable = Controllable Profit
+//   Controllable Profit - Occupancy - G&A = EBITDA
+// Persisted per-browser via localStorage -- there's no backend database for
+// this app to store them in.
+const COSTS_KEY = 'fh_ebitda_costs';
+const COST_CATEGORIES = [
+  { key: 'cogs', label: 'Cost of Goods Sold (Food & Beverage)', defaults: ['Food Cost', 'Beverage Cost / Packaging'] },
+  { key: 'labor', label: 'Labor Cost', defaults: ['Kitchen / Hourly Labor', 'Management & Admin Payroll', 'Payroll Taxes & Benefits'] },
+  { key: 'controllable', label: 'Other Controllable Expenses', defaults: ['Marketing (non-portal)', 'Repairs & Maintenance', 'Utilities', 'Supplies & Small Equipment'] },
+  { key: 'occupancy', label: 'Occupancy Costs', defaults: ['Kitchen Rent / Lease', 'Insurance', 'Property Tax / CAM'] },
+  { key: 'ga', label: 'General & Administrative (G&A)', defaults: ['Admin Salaries (HQ)', 'Professional Fees (Legal/Accounting)', 'Software & Subscriptions', 'Bank Charges'] }
+];
+// Best-guess keyword routing used only once, to migrate rows saved by the
+// earlier flat (non-categorized) version of this panel.
+const MIGRATE_KEYWORDS = [
+  { key: 'occupancy', re: /rent|lease|insuranc|property|\bcam\b/i },
+  { key: 'labor', re: /payroll|labor|labour|wage|salary/i },
+  { key: 'cogs', re: /food|beverage|cogs/i },
+  { key: 'controllable', re: /marketing|utilit|repair|maint|supplies/i }
+];
+
+function defaultCosts() {
+  const o = {};
+  COST_CATEGORIES.forEach(c => { o[c.key] = c.defaults.map(label => ({ label, amount: 0 })); });
+  return o;
+}
+function loadCosts() {
+  try {
+    const raw = localStorage.getItem(COSTS_KEY);
+    if (!raw) return defaultCosts();
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) {
+      // Old flat-list format from the earlier version of this panel --
+      // migrate each row into a category by keyword match, G&A as catch-all,
+      // so nothing the user already entered is lost.
+      const migrated = defaultCosts();
+      COST_CATEGORIES.forEach(c => { migrated[c.key] = []; });
+      parsed.forEach(row => {
+        const hit = MIGRATE_KEYWORDS.find(m => m.re.test(row.label || ''));
+        migrated[hit ? hit.key : 'ga'].push({ label: row.label || '', amount: +row.amount || 0 });
+      });
+      try { localStorage.setItem(COSTS_KEY, JSON.stringify(migrated)); } catch (_) {}
+      return migrated;
+    }
+    // Already-categorized format -- make sure every category key exists.
+    COST_CATEGORIES.forEach(c => { if (!Array.isArray(parsed[c.key])) parsed[c.key] = []; });
+    return parsed;
+  } catch (_) { return defaultCosts(); }
+}
+function saveCosts() {
+  try { localStorage.setItem(COSTS_KEY, JSON.stringify(manualCosts)); } catch (_) {}
+}
+let manualCosts = loadCosts();
+
+function catSubtotal(key) {
+  return sum(manualCosts[key] || [], r => +r.amount || 0);
+}
+
+function renderCostsBuilder(commission) {
+  const root = $('#costsBuilder');
+  if (root) {
+    root.innerHTML = COST_CATEGORIES.map(c => {
+      const rows = manualCosts[c.key] || [];
+      const sub = sum(rows, r => +r.amount || 0);
+      const commRow = c.key === 'controllable'
+        ? `<tr class="cost-ro"><td>Portal / Aggregator Commission <span class="muted small">(auto-computed — see Commission page)</span></td><td class="cost-amt">${money(commission)}</td><td></td></tr>`
+        : '';
+      return `<div class="cost-cat" data-cat="${c.key}">
+        <table>
+          <thead><tr><th>${esc(c.label)}</th><th>Amount (AED)</th><th></th></tr></thead>
+          <tbody>
+            ${commRow}
+            ${rows.map((r, i) => `<tr>
+              <td><input type="text" data-cat="${c.key}" data-idx="${i}" data-f="label" value="${esc(r.label)}" placeholder="e.g. ${esc(c.defaults ? c.defaults[0] : 'Item')}"></td>
+              <td class="cost-amt"><input type="number" step="0.01" min="0" data-cat="${c.key}" data-idx="${i}" data-f="amount" value="${r.amount}"></td>
+              <td class="cost-del"><button type="button" class="btn-del-cost" data-cat="${c.key}" data-idx="${i}" title="Remove this cost row">✕</button></td>
+            </tr>`).join('')}
+            <tr class="cost-sub"><td colspan="2">Subtotal — ${esc(c.label)}</td><td class="cost-amt">${money(sub)}</td></tr>
+          </tbody>
+        </table>
+        <button type="button" class="btn-yellow btn-add-cat" data-cat="${c.key}">+ Add to ${esc(c.label)}</button>
+      </div>`;
+    }).join('');
+
+    root.querySelectorAll('input').forEach(inp => {
+      inp.onchange = () => {
+        const cat = inp.dataset.cat, idx = +inp.dataset.idx, f = inp.dataset.f;
+        manualCosts[cat][idx][f] = f === 'amount' ? (parseFloat(inp.value) || 0) : inp.value;
+        saveCosts();
+        renderEbitda();
+      };
+    });
+    root.querySelectorAll('.btn-del-cost').forEach(btn => {
+      btn.onclick = () => {
+        manualCosts[btn.dataset.cat].splice(+btn.dataset.idx, 1);
+        saveCosts();
+        renderEbitda();
+      };
+    });
+    root.querySelectorAll('.btn-add-cat').forEach(btn => {
+      btn.onclick = () => {
+        manualCosts[btn.dataset.cat].push({ label: '', amount: 0 });
+        saveCosts();
+        renderEbitda();
+      };
+    });
+  }
+  const totals = {};
+  COST_CATEGORIES.forEach(c => { totals[c.key] = catSubtotal(c.key); });
+  totals.total = COST_CATEGORIES.reduce((s, c) => s + totals[c.key], 0);
+  return totals;
+}
+
+// Holds the most recently rendered P&L waterfall + its context, so the
+// "Download P&L" KPI tile can export exactly what's on screen without
+// recomputing it.
+let lastPL = null;
+
+// Fetches assets/logo.png and re-encodes it as a PNG data URL via canvas, so
+// jsPDF (which needs a data URL/ArrayBuffer, not a plain <img> src) can embed
+// it. Same-origin, so the canvas is never tainted. Resolves null on any
+// failure -- the PDF renders fine without the logo, it's cosmetic only.
+function loadLogoDataUrl() {
+  return new Promise(resolve => {
+    try {
+      const img = new Image();
+      img.onload = () => {
+        try {
+          // Downscale before encoding -- the PDF only ever shows this at
+          // ~32mm wide, so re-encoding the full source resolution (which can
+          // be several MB once canvas PNG-encodes it) just bloats the file.
+          const MAX_W = 440;
+          const scale = Math.min(1, MAX_W / img.naturalWidth);
+          const c = document.createElement('canvas');
+          c.width = Math.round(img.naturalWidth * scale);
+          c.height = Math.round(img.naturalHeight * scale);
+          c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+          resolve(c.toDataURL('image/png'));
+        } catch (_) { resolve(null); }
+      };
+      img.onerror = () => resolve(null);
+      img.src = 'assets/logo.png';
+    } catch (_) { resolve(null); }
+  });
+}
+
+async function downloadPLPdf() {
+  if (!lastPL) return;
+  if (!window.jspdf || !window.jspdf.jsPDF) { alert('PDF library failed to load (offline?) -- use the CSV download instead.'); return; }
+  const { gross, disc, net, cogs, grossProfit, labor, commission, controllable, occupancy, ga, eb, primeCost, from, to, channel, brand, location } = lastPL;
+  const pctOf = v => net ? (Math.abs(v) / net * 100).toFixed(1) + '%' : '0.0%';
+  const fmtAmt = v => (v < 0 ? '(' + Math.abs(v).toFixed(2) + ')' : v.toFixed(2));
+  const ded = v => fmtAmt(-Math.abs(v));
+  const opexTotal = labor + commission + controllable + occupancy + ga;
+
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF();
+  const pageW = doc.internal.pageSize.getWidth();
+  let y = 16;
+
+  const logo = await loadLogoDataUrl();
+  if (logo) { try { doc.addImage(logo, 'PNG', pageW / 2 - 16, y, 32, 16); y += 20; } catch (_) {} }
+
+  doc.setFont('helvetica', 'bold'); doc.setFontSize(16); doc.setTextColor(29, 29, 29);
+  doc.text('FOODHIVE PROFIT & LOSS STATEMENT', pageW / 2, y, { align: 'center' });
+  y += 4;
+  doc.setDrawColor(29, 29, 29); doc.setLineWidth(0.5); doc.line(20, y, pageW - 20, y);
+  y += 8;
+
+  doc.setFont('helvetica', 'normal'); doc.setFontSize(10); doc.setTextColor(60, 60, 60);
+  doc.text(`Period: ${from} to ${to}`, 20, y);
+  const ctx = [];
+  if (channel !== 'All') ctx.push(`Channel: ${channel}`);
+  if (brand !== 'All') ctx.push(`Brand: ${brand}`);
+  if (location !== 'All') ctx.push(`Location: ${location}`);
+  if (ctx.length) { y += 6; doc.text(ctx.join(' | '), 20, y); }
+  y += 8;
+
+  const body = [
+    ['REVENUE', '', '', ''],
+    ['Revenue', 'Gross Sales', gross.toFixed(2), pctOf(gross)],
+    ['Revenue', '(-) Discounts', ded(disc), pctOf(disc)],
+    ['Revenue', 'Net Sales (Total)', net.toFixed(2), '100.0%'],
+    ['COST OF GOODS SOLD (COGS)', '', '', ''],
+    ['COGS', 'Food & Beverage Cost', ded(cogs), pctOf(cogs)],
+    ['GROSS PROFIT', '', fmtAmt(grossProfit), pctOf(grossProfit)],
+    ['OPERATING EXPENSES', '', '', ''],
+    ['Expenses', 'Labor Cost', ded(labor), pctOf(labor)],
+    ['Expenses', 'Portal / Aggregator Commission', ded(commission), pctOf(commission)],
+    ['Expenses', 'Other Controllable Expenses', ded(controllable), pctOf(controllable)],
+    ['Expenses', 'Occupancy Costs', ded(occupancy), pctOf(occupancy)],
+    ['Expenses', 'General & Administrative', ded(ga), pctOf(ga)],
+    ['Expenses', 'Total', ded(opexTotal), pctOf(opexTotal)],
+    ['EBITDA', '', fmtAmt(eb), pctOf(eb)]
+  ];
+  const sectionRows = [0, 4, 7], highlightRows = [6, 14], subtotalRows = [13];
+
+  doc.autoTable({
+    startY: y,
+    head: [['Category', 'Description', 'Amount (AED)', 'Percentage']],
+    body,
+    theme: 'grid',
+    styles: { font: 'helvetica', fontSize: 9, cellPadding: 2.4, lineColor: [217, 223, 225], textColor: [29, 29, 29] },
+    headStyles: { fillColor: [29, 29, 29], textColor: [255, 255, 255], fontStyle: 'bold' },
+    columnStyles: { 2: { halign: 'right' }, 3: { halign: 'right' } },
+    didParseCell(data) {
+      const i = data.row.index;
+      if (sectionRows.includes(i) || highlightRows.includes(i)) {
+        data.cell.styles.fillColor = [253, 203, 60]; data.cell.styles.fontStyle = 'bold';
+      } else if (subtotalRows.includes(i)) {
+        data.cell.styles.fillColor = [250, 240, 210]; data.cell.styles.fontStyle = 'bold';
+      }
+    }
+  });
+
+  let fy = doc.lastAutoTable.finalY + 8;
+  doc.setFont('helvetica', 'italic'); doc.setFontSize(9); doc.setTextColor(90, 90, 90);
+  doc.text(`Memo: Prime Cost (COGS + Labor) ${primeCost.toFixed(2)} AED, ${pctOf(primeCost)} of Net Sales`, 20, fy);
+  fy += 12;
+  doc.setDrawColor(217, 223, 225); doc.line(20, fy - 5, pageW - 20, fy - 5);
+  doc.setFont('helvetica', 'normal'); doc.setFontSize(8.5); doc.setTextColor(90, 90, 90);
+  doc.text(`Prepared by: FoodHive Operations & Sales Dashboard | Date: ${new Date().toLocaleDateString()} | FoodHive.com`, pageW / 2, fy, { align: 'center' });
+
+  doc.save(`FoodHive_PL_${from}_to_${to}.pdf`);
+}
+
+function renderEbitda() {
+  const O = base('ebitda').filter(o => !o.cancelled);
+  const gross = sum(O, o => o.receiptTotal), disc = sum(O, o => o.discount), net = sum(O, o => o.netSales);
+  const commission = sum(O, o => FHCommission.commissionForOrder(o));
+  const costs = renderCostsBuilder(commission);
+
+  const grossProfit = net - costs.cogs;
+  const primeCost = costs.cogs + costs.labor;
+  const afterLabor = grossProfit - costs.labor;
+  const afterCommission = afterLabor - commission;
+  const controllableProfit = afterCommission - costs.controllable;
+  const afterOccupancy = controllableProfit - costs.occupancy;
+  const eb = FHCommission.ebitda(net, commission, costs.total);
+
+  kpis('kpi-ebitda', [
+    ['Net Sales', money(net), false, () => {}, false, 'Net Sales for the current filter'],
+
+    ['Food Cost %', net ? pc(costs.cogs / net, 1) : '0%', false, () => {
+      const el = document.getElementById('costsBuilder'); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, false, 'Cost of Goods Sold / Net Sales'],
+
+    ['Prime Cost %', net ? pc(primeCost / net, 1) : '0%', false, () => {}, false, 'Prime Cost = COGS + Labor, as % of Net Sales. The single most-watched F&B health metric — most operators target ≤60-65%.'],
+
+    ['Portal Commission %', net ? pc(commission / net, 1) : '0%', false, () => {
+      show('commission');
+    }, false, 'Commission / Net Sales. Click to see the full channel breakdown on the Commission page.'],
+
+    ['Controllable Profit %', net ? pc(controllableProfit / net, 1) : '0%', false, () => {}, false, 'Controllable Profit = Gross Profit − Labor − Commission − Other Controllable Expenses, as % of Net Sales'],
+
+    ['EBITDA', money(eb), false, () => {}, false, 'Net Sales − Commission − all Operating Costs (COGS, Labor, Controllable, Occupancy, G&A)'],
+
+    ['EBITDA Margin %', net ? pc(eb / net, 1) : '0%', false, () => {}, false, 'EBITDA / Net Sales'],
+
+    ['Download P&L (PDF)', '⬇ PDF', false, downloadPLPdf, false, 'Download the P&L Summary above as a formatted PDF report for the current date range and filters']
+  ]);
+
+  const plRows = [
+    { label: 'Gross Sales', amount: gross, cls: '' },
+    { label: '(−) Discounts', amount: disc, cls: '' },
+    { label: '= Net Sales', amount: net, cls: 'pl-sub' },
+    { label: '(−) Cost of Goods Sold', amount: costs.cogs, cls: '' },
+    { label: '= Gross Profit', amount: grossProfit, cls: 'pl-sub' },
+    { label: '(−) Labor Cost', amount: costs.labor, cls: '' },
+    { label: '(−) Portal / Aggregator Commission', amount: commission, cls: '' },
+    { label: '(−) Other Controllable Expenses', amount: costs.controllable, cls: '' },
+    { label: '= Controllable Profit', amount: controllableProfit, cls: 'pl-sub' },
+    { label: '(−) Occupancy Costs', amount: costs.occupancy, cls: '' },
+    { label: '(−) General & Administrative', amount: costs.ga, cls: '' },
+    { label: '= EBITDA', amount: eb, cls: 'pl-total' }
+  ];
+  lastPL = {
+    gross, disc, net, cogs: costs.cogs, grossProfit,
+    labor: costs.labor, commission, controllable: costs.controllable, occupancy: costs.occupancy, ga: costs.ga,
+    eb, primeCost,
+    from: S.f.from, to: S.f.to, channel: S.f.channel, brand: S.f.brand, location: S.f.location
+  };
+
+  const pl = $('#plTable');
+  if (pl) {
+    pl.innerHTML = `<thead><tr><th>Line</th><th>AED</th><th>% of Net Sales</th></tr></thead><tbody>
+      ${plRows.map(r => `<tr class="${r.cls}"><td>${esc(r.label)}</td><td class="cost-amt">${money(r.amount)}</td><td class="cost-amt">${net ? pc(r.amount / net, 1) : '–'}</td></tr>`).join('')}
+    </tbody>`;
+  }
+  const memo = $('#plMemo');
+  if (memo) memo.textContent = `Prime Cost (COGS + Labor): ${money(primeCost)} — ${net ? pc(primeCost / net, 1) : '0%'} of Net Sales`;
+
+  const dates = uniq(O.map(o => dkey(o.receivedAt))).sort();
+  const byDate = {};
+  O.forEach(o => {
+    const k = dkey(o.receivedAt);
+    const row = byDate[k] || (byDate[k] = { net: 0, comm: 0 });
+    row.net += o.netSales;
+    row.comm += FHCommission.commissionForOrder(o);
+  });
+  // Operating costs are entered as one lump sum for the whole selected
+  // period, so they're spread evenly across the days shown here for the
+  // trend line; the KPI tile above uses the exact lump-sum total.
+  const dailyOtherCosts = dates.length ? costs.total / dates.length : 0;
+  lineChart('c-ebitdatrend', dates, [
+    { name: 'Net Sales', color: Y, data: dates.map(d => byDate[d] ? byDate[d].net : 0) },
+    { name: 'Commission', color: '#e53935', data: dates.map(d => byDate[d] ? byDate[d].comm : 0) },
+    { name: 'EBITDA', color: BLUE, data: dates.map(d => { const r = byDate[d] || { net: 0, comm: 0 }; return FHCommission.ebitda(r.net, r.comm, dailyOtherCosts); }) }
+  ], { fmt: money });
+}
+
 // ---------------- render & navigation ----------------
-const RENDER = { sales: renderSales, cancel: renderCancel, prep: renderPrep, ratings: renderRatings, items: renderItems, delayed: renderDelayed };
+const RENDER = { sales: renderSales, cancel: renderCancel, prep: renderPrep, ratings: renderRatings, items: renderItems, delayed: renderDelayed, commission: renderCommission, ebitda: renderEbitda };
 function render() { RENDER[S.page](); }
 
 function show(page) {

@@ -5,10 +5,12 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>FOOD HIVE · Operations &amp; Sales Dashboard</title>
 <link rel="icon" href="assets/favicon.png">
-<link rel="stylesheet" href="style.css?v=3.3">
+<link rel="stylesheet" href="style.css?v=3.10">
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.2.0/dist/chartjs-plugin-datalabels.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.2/dist/jspdf.plugin.autotable.min.js"></script>
 </head>
 <body>
 <div class="app">
@@ -34,6 +36,8 @@
       <a data-page="ratings"><img src="assets/ratings.png" alt=""><span>Ratings</span></a>
       <a data-page="items"><img src="assets/items.png" alt=""><span>Items Detail</span></a>
       <a data-page="delayed"><img src="assets/delayed.png" alt=""><span>Delayed Orders</span></a>
+      <a data-page="commission"><img src="assets/commission.svg" alt=""><span>Commission</span></a>
+      <a data-page="ebitda"><img src="assets/ebitda.svg" alt=""><span>EBITDA</span></a>
     </nav>
 
     <!-- Toggles placed below nav on Pages 1, 2, 5, 6 -->
@@ -236,6 +240,67 @@
         <div class="panel"><div class="tbl-wrap"><table id="delayTable"></table></div></div>
       </div>
     </section>
+
+    <!-- PAGE 7 : COMMISSION -->
+    <section class="page" id="page-commission">
+      <header class="filters" id="filters-commission"></header>
+      <div class="kpis" id="kpi-commission">
+        <div class="kpi"><div class="kh">Total Commission</div><div class="kv">–</div></div>
+        <div class="kpi"><div class="kh">Blended Commission %</div><div class="kv">–</div></div>
+        <div class="kpi wide"><div class="kh">Highest-Commission Channel</div><div class="kv">–</div></div>
+      </div>
+      <div class="grid g-commission">
+        <div class="panel a-commchan">
+          <div class="ph">Commission by Channel</div>
+          <div class="pb">
+            <canvas id="c-commchan"></canvas>
+            <div class="donut-total">
+              <span>Total Commission</span>
+              <b id="commTotal">–</b>
+            </div>
+          </div>
+        </div>
+        <div class="panel a-commbar">
+          <div class="ph">Effective Commission Rate % by Channel</div>
+          <div class="pb"><canvas id="c-commbar"></canvas></div>
+        </div>
+        <div class="panel a-ratecard">
+          <div class="ph">Portal Rate Card <span class="muted small">(contracted terms, for reference)</span></div>
+          <div class="tbl-wrap"><table id="rateCardTable"></table></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- PAGE 8 : EBITDA -->
+    <section class="page" id="page-ebitda">
+      <header class="filters" id="filters-ebitda"></header>
+      <div class="kpis" id="kpi-ebitda">
+        <div class="kpi"><div class="kh">Net Sales</div><div class="kv">–</div></div>
+        <div class="kpi"><div class="kh">Food Cost %</div><div class="kv">–</div></div>
+        <div class="kpi"><div class="kh">Prime Cost %</div><div class="kv">–</div></div>
+        <div class="kpi"><div class="kh">Portal Commission %</div><div class="kv">–</div></div>
+        <div class="kpi"><div class="kh">Controllable Profit %</div><div class="kv">–</div></div>
+        <div class="kpi"><div class="kh">EBITDA</div><div class="kv">–</div></div>
+        <div class="kpi"><div class="kh">EBITDA Margin %</div><div class="kv">–</div></div>
+      </div>
+      <div class="grid g-ebitda">
+        <div class="panel a-plwaterfall">
+          <div class="ph">P&amp;L Summary <span class="muted small">(Gross Sales down to EBITDA)</span></div>
+          <div class="tbl-wrap">
+            <table id="plTable"></table>
+            <div class="pl-memo" id="plMemo"></div>
+          </div>
+        </div>
+        <div class="panel a-ebitdatrend">
+          <div class="ph">Net Sales, Commission &amp; EBITDA Over Time</div>
+          <div class="pb"><canvas id="c-ebitdatrend"></canvas></div>
+        </div>
+        <div class="panel a-costs">
+          <div class="ph">Operating Cost Inputs <span class="muted small">(by category, entered manually for selected period)</span></div>
+          <div id="costsBuilder"></div>
+        </div>
+      </div>
+    </section>
   </main>
 </div>
 
@@ -274,7 +339,8 @@
   </div>
 </div>
 
-<script src="normalize.js?v=3.3"></script>
-<script src="app.js?v=3.3"></script>
+<script src="normalize.js?v=3.10"></script>
+<script src="commission.js?v=3.10"></script>
+<script src="app.js?v=3.10"></script>
 </body>
 </html>
