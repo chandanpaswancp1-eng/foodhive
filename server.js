@@ -247,13 +247,18 @@ function preloadData() {
 }
 preloadData();
 
-const REOPENED_RE = /reopen/i;
+const REOPENED_RE = /\breopen(ed)?\b/i;
 
 // 2. Synchronize live GrubCENTER data into master store
-async function syncGrubcenter(from, to) {
+async function syncGrubcenter(from, to, itemsFrom) {
   if (STORE.syncing) return;
   STORE.syncing = true;
   const f = from || daysAgo(45), t = to || today();
+  // order-items can get its own, narrower window than orders/ops/cancel --
+  // see api/_lib/grubcenter.js's syncOnce() for why (far more rows/page per
+  // day). Defaults to the same window as everything else when not given
+  // explicitly, i.e. today's behavior is unchanged unless a caller opts in.
+  const oiFrom = itemsFrom || from || f;
   try {
     console.log(`[GrubCENTER Sync] Pulling live data (${f} to ${t})...`);
     // Sequential, not parallel: each of these already fans out multiple
@@ -263,7 +268,7 @@ async function syncGrubcenter(from, to) {
     const rawSales = await fetchPaged(CFG.ordersPath, f, t, 25);
     const rawOps = await fetchPaged(CFG.opsPath, f, t, 20).catch(err => { console.warn('Ops warning:', err.message); return []; });
     const rawCancels = await fetchPaged(CFG.cancelPath, f, t, 10).catch(err => { console.warn('Cancel warning:', err.message); return []; });
-    const rawOrderItems = await fetchPaged(CFG.orderItemsPath, f, t, 25).catch(err => { console.warn('Order-items warning:', err.message); return []; });
+    const rawOrderItems = await fetchPaged(CFG.orderItemsPath, oiFrom, t, 25).catch(err => { console.warn('Order-items warning:', err.message); return []; });
 
     const opsMap = new Map();
     rawOps.forEach(o => {
@@ -346,12 +351,13 @@ async function syncGrubcenter(from, to) {
     STORE.lastSync = Date.now();
     console.log(`[GrubCENTER Sync Complete] Master now has ${STORE.ordersArray.length} orders (+${newCount} new, ${rawOps.length} ops timings attached)`);
 
-    // Line items: re-fetching [f, t] returns the complete, authoritative set
-    // of rows for every day in that window, so replace (not merge-by-guessed-key)
-    // whatever this sync's days already held in the store, then keep anything
-    // older than the window untouched.
+    // Line items: re-fetching [oiFrom, t] returns the complete, authoritative
+    // set of rows for every day in THAT window, so replace (not
+    // merge-by-guessed-key) whatever this sync's days already held in the
+    // store, then keep anything older untouched -- a deeper local backfill
+    // must not be wiped out just because this sync only covers oiFrom..t.
     const normOrderItems = N.normalizeOrderItems(rawOrderItems);
-    const touchedDays = new Set(dayChunks(f, t));
+    const touchedDays = new Set(dayChunks(oiFrom, t));
     STORE.orderItemsArray = STORE.orderItemsArray
       .filter(x => !touchedDays.has(dubaiDateKey(x.at)))
       .concat(normOrderItems);
@@ -372,18 +378,25 @@ setTimeout(() => {
   if (CFG.email && CFG.password) syncGrubcenter().catch(() => {});
 }, 500);
 
-// Background refresh every 10 minutes. Scoped to a narrow recent window
-// (not the full 45-day default) so each tick is fast and reliably keeps
-// today's running totals current -- a full 45-day resync (as the boot sync
-// above does) takes several minutes, so if the routine refresh re-pulled
-// the whole window every 10 minutes it would often still be mid-sync when
-// the next tick fired, letting "today" drift stale against GrubCENTER's
-// own live totals between ticks. Settled older orders rarely change, so
-// the boot-time full sync plus this frequent recent-window refresh is
-// enough to stay accurate without the wasted work.
+// Background refresh every 10 minutes. Scoped to a narrower-than-45-day
+// window so each tick is fast and reliably keeps today's running totals
+// current -- a full 45-day resync (as the boot sync above does) takes
+// several minutes, so if the routine refresh re-pulled the whole window
+// every 10 minutes it would often still be mid-sync when the next tick
+// fired, letting "today" drift stale against GrubCENTER's own live totals
+// between ticks.
+//
+// orders/ops/cancellations get 14 days here, not order-items' 7: they're
+// confirmed lightweight (complete even at the full 45-day window -- 7 days
+// was specifically forced by order-items' much heavier per-day pagination),
+// and a late cancellation/ops update can land on an order received many
+// days ago. Too narrow a window risks never refetching it until the next
+// full resync, which on this long-running process only happens at the next
+// restart -- 14 days leaves meaningful headroom to catch that without
+// reintroducing the slowness that forced order-items down to 7.
 const SYNC_INTERVAL_MS = 10 * 60 * 1000;
 setInterval(() => {
-  if (CFG.email && CFG.password) syncGrubcenter(daysAgo(3), today()).catch(() => {});
+  if (CFG.email && CFG.password) syncGrubcenter(daysAgo(14), today(), daysAgo(7)).catch(() => {});
 }, SYNC_INTERVAL_MS);
 
 // ---------- HTTP SERVER ----------

@@ -26,6 +26,7 @@
     receiptTotal: ['receipttotal', 'totalreceipttotal', 'grossprice', 'totalprice', 'grosssales', 'grosstotal', 'total', 'ordertotal', 'totalamount', 'ordervalue', 'grossamount', 'subtotal'],
     discount: ['discount', 'discountedamount', 'discountamount', 'totaldiscount', 'discounts', 'promodiscount'],
     status: ['orderstatus', 'status', 'state', 'finalstatus'],
+    cancelled: ['cancelled', 'iscancelled', 'cancelledyn', 'cancelflag'],
     reason: ['cancellationreason', 'cancelreason', 'reason', 'rejectionreason'],
     postCancelled: ['postcancelled', 'postcancel', 'cancelledafteraccept', 'cancelledafteracceptance'],
     rating: ['rating', 'orderrating', 'customerrating', 'stars', 'reviewrating', 'score'],
@@ -37,6 +38,16 @@
     if (v instanceof Date) return isNaN(v) ? null : v.getTime();
     if (typeof v === 'number') return v > 1e11 ? v : (v > 20000 && v < 80000 ? Math.round((v - 25569) * 864e5) : v * 1000); // ms | excel serial | s
     const s = String(v).trim();
+    // A zone-less string here (e.g. "2026-01-15T23:50:00") parses via the
+    // HOST RUNTIME's local timezone, not Dubai's -- inconsistent with the
+    // rest of this codebase's explicit Dubai-offset handling (see
+    // dubaiDateKey() in server.js/api/_lib/grubcenter.js, built for exactly
+    // this class of bug). No confirmed live occurrence from GrubCENTER
+    // (every synced timestamp carries an explicit Z/offset) and no raw
+    // payload sample exists in this repo to verify an import-file case
+    // against, so left as host-local parsing rather than risk changing
+    // behavior for the many other formats this function already handles
+    // correctly (ISO-with-zone, Excel serials, epoch ms/s, dd/mm/yyyy).
     const t = Date.parse(s);
     if (!isNaN(t)) return t;
     // dd/mm/yyyy [hh:mm[:ss]]
@@ -111,6 +122,14 @@
     return 'Other';
   }
 
+  // GrubCENTER's actual relationship (confirmed by reconciling the real
+  // 2622-order dataset): receiptTotal = netSales * (1 + VAT_RATE) + discount
+  // -- netSales is VAT-exclusive, receipt/discount are VAT-inclusive (UAE 5%
+  // VAT). Only used by the fallback formulas below when one of the two
+  // fields is missing from an imported file; live-synced data always has
+  // netSales directly from the API, so this never fires for it.
+  const VAT_RATE = 0.05;
+
   function normalizeOrders(rows) {
     if (!rows.length) return [];
     const flat = rows.map(r => flatten(r));
@@ -118,10 +137,22 @@
     return flat.map((r, i) => {
       const g = f => (map[f] !== undefined ? r[map[f]] : undefined);
       const status = str(g('status')).toLowerCase();
-      const cancelled = typeof r.cancelled === 'boolean' ? r.cancelled : /cancel|reject|fail|void/.test(status);
+      // A dedicated Yes/No "Cancelled" column (map.cancelled) is checked
+      // alongside the free-text status/reason regex -- some import files
+      // carry cancellation only as that kind of flag column, with no
+      // status/reason text for the regex to match against. The live-sync
+      // path always sets r.cancelled as a literal boolean beforehand, which
+      // short-circuits before either of these is evaluated, so it's
+      // completely unaffected by this.
+      const cancelledFlag = map.cancelled !== undefined && truthy(g('cancelled'));
+      const cancelled = typeof r.cancelled === 'boolean' ? r.cancelled : (cancelledFlag || /cancel|reject|fail|void/.test(status));
       const receipt = num(g('receiptTotal'));
       const discount = Math.abs(num(g('discount')));
-      const net = map.netSales !== undefined ? num(g('netSales')) : Math.max(receipt - discount, 0);
+      // Fallback only (live data always has netSales from the API): GrubCENTER's
+      // netSales is VAT-exclusive while receiptTotal/discount are VAT-inclusive
+      // (see VAT_RATE above), so a plain receipt-discount subtraction overstates
+      // net by the VAT amount.
+      const net = map.netSales !== undefined ? num(g('netSales')) : Math.max((receipt - discount) / (1 + VAT_RATE), 0);
       const brandStr = str(g('brand')) || '(Blank)';
       const cuisineStr = inferCuisine(brandStr, str(g('cuisine')));
       return {
@@ -140,7 +171,7 @@
         payment: str(g('payment')) || '(Blank)',
         partner: str(g('partner')) || '(Blank)',
         netSales: net,
-        receiptTotal: g('receiptTotal') !== undefined ? receipt : net + discount,
+        receiptTotal: g('receiptTotal') !== undefined ? receipt : net * (1 + VAT_RATE) + discount,
         discount,
         cancelled,
         postCancelled: cancelled && (map.postCancelled !== undefined ? truthy(g('postCancelled')) : (r.postCancelled || !!toDate(g('acceptedAt')))),

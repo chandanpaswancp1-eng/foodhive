@@ -175,12 +175,12 @@ function dubaiDateKey(ms) {
 }
 const today = () => dubaiDateKey(Date.now());
 const daysAgo = n => dubaiDateKey(Date.now() - n * 864e5);
-const REOPENED_RE = /reopen/i;
+const REOPENED_RE = /\breopen(ed)?\b/i;
 
 /** Fetch new GrubCENTER data and merge it into the persisted orders blob.
  * Mirrors server.js's syncGrubcenter(), but reads/writes the Blob store
  * instead of an in-memory STORE + local disk. Returns a short summary. */
-async function syncOnce(from, to) {
+async function syncOnce(from, to, itemsFrom) {
   if (!configured()) return { skipped: true, reason: 'not configured' };
   const meta = await readMeta();
   const session = await ensureSession(meta.session);
@@ -197,7 +197,7 @@ async function syncOnce(from, to) {
   // trustworthy; the per-day merge-by-touched-days logic below only
   // replaces these recent days, so older order-items history already in
   // the blob (e.g. backfilled locally) is left alone, not truncated.
-  const orderItemsFrom = from || daysAgo(7);
+  const orderItemsFrom = itemsFrom || from || daysAgo(7);
 
   // Sequential, not parallel: each of these already fans out multiple
   // concurrent day-chunked requests internally (see fetchPaged), and

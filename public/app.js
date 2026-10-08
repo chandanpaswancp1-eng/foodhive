@@ -85,7 +85,7 @@ const S = {
     source: 'All', type: 'All'
   },
   ui: {
-    metric: 'sales', group: 'cuisine', grain: 'Daily', cmetric: 'orders',
+    metric: 'gross', group: 'cuisine', grain: 'Daily', cmetric: 'orders',
     cgroup: 'brand', pgroup: 'brand', rgroup: 'cuisine', igroup: 'brand',
     dgroup: 'brand', rmode: 'estimated', activeStage: null, itemsView: '86'
   },
@@ -379,11 +379,19 @@ function getPeriodStats() {
   const ts = S.orders.map(o => o.receivedAt);
   if (!ts.length) return null;
   const latestDate = dkey(Math.max(...ts));
-  const [minDate] = fullRange();
+  const [minDate, maxDate] = fullRange();
 
   // Today
   const todayOrders = S.orders.filter(o => !o.cancelled && dkey(o.receivedAt) === latestDate);
   const todayNet = sum(todayOrders, o => o.netSales);
+
+  // Yesterday -- same "one day before the latest full-dataset date" anchor
+  // the #btnPrev nav button already uses, so the two never disagree.
+  const yd = new Date(maxDate + 'T00:00:00');
+  yd.setDate(yd.getDate() - 1);
+  const yesterdayKey = dkey(yd);
+  const yesterdayOrders = S.orders.filter(o => !o.cancelled && dkey(o.receivedAt) === yesterdayKey);
+  const yesterdayNet = sum(yesterdayOrders, o => o.netSales);
 
   // This Week (from Monday of latestDate)
   const ld = new Date(latestDate + 'T00:00:00');
@@ -406,16 +414,31 @@ function getPeriodStats() {
   const allOrders = S.orders.filter(o => !o.cancelled);
   const allNet = sum(allOrders, o => o.netSales);
 
+  // Current (in-progress) Month-to-Date, for the Projected Month-End KPI.
+  // Unlike `month` above (the full PRIOR calendar month), this uses
+  // latestDate's own in-progress calendar month, day 1 through latestDate.
+  const curMonthStart = latestDate.slice(0, 7) + '-01';
+  const mtdOrders = S.orders.filter(o => !o.cancelled && dkey(o.receivedAt) >= curMonthStart && dkey(o.receivedAt) <= latestDate);
+  const monthToDateNet = sum(mtdOrders, o => o.netSales);
+  const daysElapsed = ld.getDate();
+  const daysInMonth = new Date(ld.getFullYear(), ld.getMonth() + 1, 0).getDate();
+  const avgDaily = daysElapsed ? monthToDateNet / daysElapsed : 0;
+  const projectedNet = avgDaily * daysInMonth;
+
   return {
     latestDate,
     weekStart,
     monthStart,
     monthEnd,
     minDate,
+    yesterdayKey,
+    curMonthStart,
     today: { count: todayOrders.length, net: todayNet },
+    yesterday: { count: yesterdayOrders.length, net: yesterdayNet },
     week: { count: weekOrders.length, net: weekNet },
     month: { count: monthOrders.length, net: monthNet },
-    all: { count: allOrders.length, net: allNet }
+    all: { count: allOrders.length, net: allNet },
+    projection: { mtdNet: monthToDateNet, daysElapsed, daysInMonth, avgDaily, value: projectedNet }
   };
 }
 
@@ -435,6 +458,7 @@ function buildFilters() {
     const d = document.createElement('div');
     if (key === 'dates') {
       const stats = getPeriodStats();
+      const isYesterday = stats && S.f.from === stats.yesterdayKey && S.f.to === stats.yesterdayKey;
       const isToday = stats && S.f.from === stats.latestDate && S.f.to === stats.latestDate;
       const isWeek = stats && S.f.from === stats.weekStart && S.f.to === stats.latestDate;
       const isMonth = stats && S.f.from === stats.monthStart && S.f.to === stats.monthEnd;
@@ -445,6 +469,7 @@ function buildFilters() {
         <label>${label} <span class="chevron">⌄</span></label>
         ${stats ? `
         <div class="period-pill-row">
+          <button type="button" class="pp-btn${isYesterday ? ' on' : ''}" data-p="yesterday" title="Yesterday (${stats.yesterdayKey}): ${stats.yesterday.count} orders · ${money(stats.yesterday.net)} Net">Yesterday</button>
           <button type="button" class="pp-btn${isToday ? ' on' : ''}" data-p="today" title="Today (${stats.latestDate}): ${stats.today.count} orders · ${money(stats.today.net)} Net">Today</button>
           <button type="button" class="pp-btn${isWeek ? ' on' : ''}" data-p="week" title="This Week (${stats.weekStart} to ${stats.latestDate}): ${stats.week.count} orders · ${money(stats.week.net)} Net">Week</button>
           <button type="button" class="pp-btn${isMonth ? ' on' : ''}" data-p="month" title="Previous Month (${stats.monthStart} to ${stats.monthEnd}): ${stats.month.count} orders · ${money(stats.month.net)} Net">Month</button>
@@ -466,7 +491,8 @@ function buildFilters() {
           const p = btn.dataset.p;
           const st = getPeriodStats();
           if (!st) return;
-          if (p === 'today') setDates(st.latestDate, st.latestDate);
+          if (p === 'yesterday') setDates(st.yesterdayKey, st.yesterdayKey);
+          else if (p === 'today') setDates(st.latestDate, st.latestDate);
           else if (p === 'week') setDates(st.weekStart, st.latestDate);
           else if (p === 'month') setDates(st.monthStart, st.monthEnd);
           else if (p === 'all') setDates(...fullRange());
@@ -515,7 +541,8 @@ function initDateSlider() {
     if (!stats) return;
     $$('.pp-btn').forEach(btn => {
       const p = btn.dataset.p;
-      const on = (p === 'today' && S.f.from === stats.latestDate && S.f.to === stats.latestDate) ||
+      const on = (p === 'yesterday' && S.f.from === stats.yesterdayKey && S.f.to === stats.yesterdayKey) ||
+                 (p === 'today' && S.f.from === stats.latestDate && S.f.to === stats.latestDate) ||
                  (p === 'week' && S.f.from === stats.weekStart && S.f.to === stats.latestDate) ||
                  (p === 'month' && S.f.from === stats.monthStart && S.f.to === stats.monthEnd) ||
                  (p === 'all' && S.f.from === stats.minDate && S.f.to === stats.latestDate);
@@ -580,7 +607,7 @@ function buildToggles() {
 
   switch (S.page) {
     case 'sales':
-      add(top, 'Sales Metric', 'metric', [['gross', 'Gross Sales'], ['sales', 'Net Sales'], ['orders', 'Total Orders']]);
+      add(top, 'Sales Metric', 'metric', [['gross', 'Gross Sales'], ['orders', 'Total Orders']]);
       add(btm, 'Brand | Cuisine', 'group', [['cuisine', 'Cuisine'], ['brand', 'Brand']]);
       break;
     case 'cancel':
@@ -678,124 +705,9 @@ function timeRangeForGrain(key, grain) {
   return [key, key];
 }
 
-function openDailyBreakdownModal() {
-  S.ui.grain = 'Daily';
-  renderSales();
-  const modal = $('#dailyModal');
-  if (modal) {
-    renderDailyBreakdownTable();
-    modal.hidden = false;
-  }
-  const el = document.getElementById('c-time');
-  if (el) {
-    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    const p = el.closest('.panel') || el;
-    p.style.transition = 'all 0.3s ease';
-    p.style.outline = '3px solid #FDCB3C';
-    p.style.boxShadow = '0 0 16px rgba(253, 203, 60, 0.6)';
-    setTimeout(() => { p.style.outline = ''; p.style.boxShadow = ''; }, 1600);
-  }
-}
-
-function renderDailyBreakdownTable() {
-  const all = base('sales'); const O = all.filter(o => !o.cancelled);
-  const byDay = groupBy(O, o => dkey(o.receivedAt)).map(g => {
-    const gross = sum(g.rows, o => o.receiptTotal);
-    const net = sum(g.rows, o => o.netSales);
-    const disc = sum(g.rows, o => o.discount);
-    const count = g.rows.length;
-    const aov = count ? net / count : 0;
-    const discPctGross = gross ? (disc / gross) * 100 : 0;
-    const discPctNet = net ? (disc / net) * 100 : 0;
-    return {
-      date: g.k,
-      dow: dowOf(g.rows[0].receivedAt),
-      gross,
-      net,
-      disc,
-      count,
-      aov,
-      discPctGross,
-      discPctNet
-    };
-  }).sort((a, b) => (a.date < b.date ? 1 : -1));
-
-  const tbl = $('#dailyBreakdownTable');
-  if (!tbl) return;
-
-  const totalGross = sum(byDay, d => d.gross);
-  const totalNet = sum(byDay, d => d.net);
-  const totalOrders = sum(byDay, d => d.count);
-  const totalDisc = sum(byDay, d => d.disc);
-  const totalAov = totalOrders ? totalNet / totalOrders : 0;
-  const totDiscGross = totalGross ? (totalDisc / totalGross) * 100 : 0;
-  const totDiscNet = totalNet ? (totalDisc / totalNet) * 100 : 0;
-
-  tbl.innerHTML = `
-    <thead>
-      <tr>
-        <th style="text-align:left;position:sticky;top:0;background:#FCD258;color:#000;padding:6px;z-index:2">Trading Date</th>
-        <th style="text-align:left;position:sticky;top:0;background:#FCD258;color:#000;padding:6px;z-index:2">Day</th>
-        <th style="text-align:right;position:sticky;top:0;background:#FCD258;color:#000;padding:6px;z-index:2">Gross Sales</th>
-        <th style="text-align:right;position:sticky;top:0;background:#FCD258;color:#000;padding:6px;z-index:2">Net Sales</th>
-        <th style="text-align:right;position:sticky;top:0;background:#FCD258;color:#000;padding:6px;z-index:2">Orders</th>
-        <th style="text-align:right;position:sticky;top:0;background:#FCD258;color:#000;padding:6px;z-index:2">AOV</th>
-        <th style="text-align:right;position:sticky;top:0;background:#FCD258;color:#000;padding:6px;z-index:2">Discount</th>
-        <th style="text-align:right;position:sticky;top:0;background:#FCD258;color:#000;padding:6px;z-index:2">Disc % (Gross)</th>
-        <th style="text-align:right;position:sticky;top:0;background:#FCD258;color:#000;padding:6px;z-index:2">Disc % (Net)</th>
-        <th style="text-align:center;position:sticky;top:0;background:#FCD258;color:#000;padding:6px;z-index:2">Cross-Filter</th>
-      </tr>
-      <tr style="background:#1d1d1d;color:#FCD258;font-weight:700">
-        <td style="text-align:left;padding:6px">TOTAL (${byDay.length} Days)</td>
-        <td style="padding:6px">–</td>
-        <td style="text-align:right;padding:6px">${money(totalGross)}</td>
-        <td style="text-align:right;padding:6px">${money(totalNet)}</td>
-        <td style="text-align:right;padding:6px">${cnt(totalOrders)}</td>
-        <td style="text-align:right;padding:6px">${money(totalAov)}</td>
-        <td style="text-align:right;padding:6px">${money(totalDisc)}</td>
-        <td style="text-align:right;padding:6px">${totDiscGross.toFixed(1)}%</td>
-        <td style="text-align:right;padding:6px">${totDiscNet.toFixed(1)}%</td>
-        <td style="text-align:center;padding:6px">–</td>
-      </tr>
-    </thead>
-    <tbody>
-      ${byDay.map((d, i) => {
-        const isSlice = S.f.from === d.date && S.f.to === d.date;
-        return `
-          <tr class="daily-row" data-date="${d.date}" style="cursor:pointer;background:${isSlice ? '#FFFDF2' : (i % 2 ? '#fafafa' : '#fff')};outline:${isSlice ? '2px solid #b38600' : 'none'}">
-            <td style="font-weight:600;color:${isSlice ? '#b38600' : '#1d1d1d'};padding:6px">${isSlice ? '● ' : ''}${d.date}</td>
-            <td style="padding:6px">${d.dow}</td>
-            <td style="text-align:right;font-weight:600;padding:6px">${money(d.gross)}</td>
-            <td style="text-align:right;font-weight:700;color:#000;padding:6px">${money(d.net)}</td>
-            <td style="text-align:right;padding:6px">${cnt(d.count)}</td>
-            <td style="text-align:right;padding:6px">${money(d.aov)}</td>
-            <td style="text-align:right;color:#777;padding:6px">${money(d.disc)}</td>
-            <td style="text-align:right;font-weight:600;color:#2e7d32;padding:6px">${d.discPctGross.toFixed(1)}%</td>
-            <td style="text-align:right;font-weight:600;color:${d.discPctNet > 50 ? '#ee2a5c' : '#555'};padding:6px">${d.discPctNet.toFixed(1)}%</td>
-            <td style="text-align:center;padding:6px"><button class="btn-yellow" style="padding:2px 8px;font-size:10px">${isSlice ? 'Clear' : 'Slice'}</button></td>
-          </tr>
-        `;
-      }).join('')}
-    </tbody>
-  `;
-
-  tbl.querySelectorAll('.daily-row').forEach(tr => {
-    const dt = tr.dataset.date;
-    tr.onclick = () => {
-      if (S.f.from === dt && S.f.to === dt) {
-        setDates(...fullRange());
-      } else {
-        setDates(dt, dt);
-      }
-      dateChanged();
-      renderDailyBreakdownTable();
-    };
-  });
-}
-
 // ---------------- generic KPI drill-down modal ----------------
 // Shared shell for every drill-down below. Each one follows the same proven
-// shape as openDailyBreakdownModal()/renderDailyBreakdownTable() above: an
+// shape as openItemSalesDrillModal()/renderItemSalesDrillBody() below: an
 // open*() that shows the modal, and an idempotent render*Body() that row
 // clicks self-invoke again after changing a filter, so the modal always
 // repaints from live state instead of a stale closure.
@@ -922,9 +834,8 @@ function renderItemSalesDrillBody() {
 function renderSales() {
   const all = base('sales'); const O = all.filter(o => !o.cancelled);
   const net = sum(O, o => o.netSales), rec = sum(O, o => o.receiptTotal), disc = sum(O, o => o.discount), n = O.length;
-  const days = uniq(O.map(o => dkey(o.receivedAt))).length || 1;
-  const run = net / days;
   const top = salesAgg(O, o => o.brand).sort((a, b) => b.sales - a.sales)[0];
+  const stats = getPeriodStats();
 
   const m = S.ui.metric;
   const mnameMap = {
@@ -940,7 +851,6 @@ function renderSales() {
   };
   const mname = mnameMap[m] || (m === 'gross' ? 'Gross Sales' : 'Net Sales');
   const mf = metricFmt(m);
-  const isDailyActive = S.ui.grain === 'Daily';
 
   kpis('kpi-sales', [
     ['Gross Sales', money(rec), false, () => {
@@ -987,10 +897,6 @@ function renderSales() {
       renderSales();
     }, m === 'discPctNet', 'Click to view Discount as % of Net Sales: Total Discount / Net Sales'],
 
-    ['Daily Sales Breakdown', `${money(run)}/d`, false, () => {
-      openDailyBreakdownModal();
-    }, isDailyActive, `Click to open interactive Daily Sales Breakdown table and switch charts to Daily grain (Avg ${money(run)}/day over ${days} days)`, 'drill'],
-
     ['Top Performing Brand', top ? esc(top.k) : '–', true, () => {
       if (!top) return;
       if (S.f.brand === top.k) {
@@ -1000,7 +906,14 @@ function renderSales() {
       }
       syncFilterUI();
       render();
-    }, top && S.f.brand === top.k, top ? `Click to filter dashboard for "${top.k}" (click again to reset)` : '']
+    }, top && S.f.brand === top.k, top ? `Click to filter dashboard for "${top.k}" (click again to reset)` : ''],
+
+    ['Projected Month-End', stats ? `${money(stats.projection.value)}<div style="font-size:9.5px;font-weight:600;color:#555;margin-top:2px;">Assuming ${money(stats.projection.avgDaily)}/day · MTD thru ${stats.latestDate}: ${money(stats.projection.mtdNet)}</div>` : '0.00', false, () => {
+      if (!stats) return;
+      setDates(stats.curMonthStart, stats.latestDate);
+      dateChanged();
+    }, !!stats && S.f.from === stats.curMonthStart && S.f.to === stats.latestDate,
+      stats ? `Straight-line projection: Month-to-date Net Sales (${money(stats.projection.mtdNet)}) ÷ ${stats.projection.daysElapsed} days elapsed × ${stats.projection.daysInMonth} days in month = ${money(stats.projection.value)}. Not a true forecast. Click to filter to month-to-date (${stats.curMonthStart} → ${stats.latestDate}).` : 'Straight-line month-end Net Sales projection']
   ]);
 
   const grpName = S.ui.group === 'brand' ? 'Brands' : 'Cuisines';
@@ -1033,11 +946,9 @@ function renderSales() {
   if (phTime) {
     phTime.textContent = `${mname} Over time`;
     phTime.style.cursor = 'pointer';
-    phTime.title = `Currently viewing ${mname}. Click to toggle Gross Sales | Net Sales | Total Orders`;
+    phTime.title = `Currently viewing ${mname}. Click to toggle Gross Sales | Total Orders`;
     phTime.onclick = () => {
-      if (S.ui.metric === 'gross') S.ui.metric = 'sales';
-      else if (S.ui.metric === 'sales') S.ui.metric = 'orders';
-      else S.ui.metric = 'gross';
+      S.ui.metric = (S.ui.metric === 'gross' ? 'orders' : 'gross');
       buildToggles();
       renderSales();
     };
@@ -1107,7 +1018,34 @@ function renderSales() {
   combo('c-slot', sl.map(r => ({ k: r.k, v: metricOf(r, m) })), { name: mname, pctName: '%GT Total Orders', filterKey: 'slot', fmt: mf });
   patchPct('c-slot', sl, n);
 
-  hbar('c-chan', salesAgg(O, o => o.channel).map(r => ({ k: r.k, v: metricOf(r, m) })).sort((a, b) => b.v - a.v), { fmt: mf, name: mname, filterKey: 'channel' });
+  // Fixed dual-metric view (Net Sales + Orders together) -- does not track
+  // the Sales Metric toggle like the rest of this page's charts.
+  const chanRows = salesAgg(O, o => o.channel).sort((a, b) => b.sales - a.sales);
+  const curChan = S.f.channel;
+  const chanNetColors = chanRows.map(r => (curChan !== 'All' ? (String(r.k) === String(curChan) ? '#1d1d1d' : '#FEEBB4') : Y));
+  const chanOrdColors = chanRows.map(r => (curChan !== 'All' ? (String(r.k) === String(curChan) ? '#1d1d1d' : '#FEEBB4') : BLUE));
+  const chanOpts = baseOpts({
+    indexAxis: 'y',
+    layout: { padding: { right: 38, top: 2 } },
+    plugins: { legend: { display: true, position: 'top', align: 'start', labels: { boxWidth: 8, boxHeight: 8, font: { size: 10 } } } },
+    scales: {
+      y: { ...gridless, ticks: { font: { size: 10 }, autoSkip: false, callback(v) { return trunc(this.getLabelForValue(v), 20); } } },
+      x: { beginAtZero: true, position: 'bottom', ticks: { callback: money, maxTicksLimit: 5 }, grid: { color: '#eee' } },
+      x1: { beginAtZero: true, position: 'top', grid: { display: false }, ticks: { callback: cnt, maxTicksLimit: 5 } }
+    }
+  });
+  addBarClick(chanOpts, r => r.k, 'channel');
+  mk('c-chan', chanRows.length ? {
+    type: 'bar',
+    data: {
+      labels: chanRows.map(r => r.k),
+      datasets: [
+        { label: 'Net Sales', data: chanRows.map(r => r.sales), backgroundColor: chanNetColors, xAxisID: 'x', yAxisID: 'y', datalabels: lbl(money, { align: 'end', anchor: 'end' }) },
+        { label: 'Total Orders', data: chanRows.map(r => r.orders), backgroundColor: chanOrdColors, xAxisID: 'x1', yAxisID: 'y', datalabels: lbl(cnt, { align: 'end', anchor: 'end' }) }
+      ]
+    },
+    options: chanOpts
+  } : { __empty: true });
 
   // date & time of day
   const tods = ['Morning', 'Afternoon', 'Evening', 'Night'];
@@ -1633,9 +1571,25 @@ function itemSalesBase() {
   const ordersById = new Map(S.orders.map(o => [o.id, o]));
   const grossByOrder = new Map();
   preItemFilter.forEach(x => grossByOrder.set(x.orderId, (grossByOrder.get(x.orderId) || 0) + x.lineTotal));
+  // gross (sum of item-level-discounted lineTotal for the order) is normally
+  // close to netSales (plus/minus a typical order-level discount, which
+  // rarely exceeds ~50-70% in this business's data) -- a ratio this high
+  // only happens when item-level discounts have shrunk gross toward zero
+  // while netSales reflects charges (delivery/service fees) with no
+  // corresponding Menu-Item line. Raw lineTotal is the safer, bounded
+  // fallback there instead of an unbounded multiple (confirmed reproducible:
+  // a near-zero-gross order inflated one line's reported revenue 40x+).
+  const MAX_PRORATION_RATIO = 3;
   const revenueOf = x => {
     const o = ordersById.get(x.orderId), gross = grossByOrder.get(x.orderId);
-    return (o && gross) ? x.lineTotal * (o.netSales / gross) : x.lineTotal;
+    if (!o || !gross) return x.lineTotal;
+    const ratio = o.netSales / gross;
+    // ratio === 0 is a legitimate, common case (a 100%-discounted/comped
+    // order -- netSales genuinely 0) and must still apply, not fall back to
+    // raw lineTotal, or every comped order's items would wrongly show full
+    // price as "revenue". Only an abnormally HIGH ratio (near-zero gross
+    // against nonzero netSales) is the failure mode this guards against.
+    return (ratio >= 0 && ratio <= MAX_PRORATION_RATIO) ? x.lineTotal * ratio : x.lineTotal;
   };
   const soldBase = preItemFilter.filter(x => f.item === 'All' || x.item === f.item);
   return { soldBase, revenueOf };
@@ -1902,7 +1856,26 @@ function loadCosts() {
 function saveCosts() {
   try { localStorage.setItem(COSTS_KEY, JSON.stringify(manualCosts)); } catch (_) {}
 }
+// Tracks which date range the currently-saved cost figures were entered
+// for, so a stale lump sum left over from a wider range (e.g. a month's
+// COGS) can be flagged rather than silently applied as-is to a narrower
+// range the user has since filtered down to.
+const COSTS_RANGE_KEY = 'fh_ebitda_costs_range';
+function loadCostsRange() {
+  try {
+    const raw = localStorage.getItem(COSTS_RANGE_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch (_) { return null; }
+}
+function saveCostsRange() {
+  try { localStorage.setItem(COSTS_RANGE_KEY, JSON.stringify(costsRange)); } catch (_) {}
+}
+function touchCostsRange() {
+  costsRange = { from: S.f.from, to: S.f.to };
+  saveCostsRange();
+}
 let manualCosts = loadCosts();
+let costsRange = loadCostsRange();
 
 function catSubtotal(key) {
   return sum(manualCosts[key] || [], r => +r.amount || 0);
@@ -1939,6 +1912,7 @@ function renderCostsBuilder(commission) {
         const cat = inp.dataset.cat, idx = +inp.dataset.idx, f = inp.dataset.f;
         manualCosts[cat][idx][f] = f === 'amount' ? (parseFloat(inp.value) || 0) : inp.value;
         saveCosts();
+        touchCostsRange();
         renderEbitda();
       };
     });
@@ -1946,6 +1920,7 @@ function renderCostsBuilder(commission) {
       btn.onclick = () => {
         manualCosts[btn.dataset.cat].splice(+btn.dataset.idx, 1);
         saveCosts();
+        touchCostsRange();
         renderEbitda();
       };
     });
@@ -1953,6 +1928,7 @@ function renderCostsBuilder(commission) {
       btn.onclick = () => {
         manualCosts[btn.dataset.cat].push({ label: '', amount: 0 });
         saveCosts();
+        touchCostsRange();
         renderEbitda();
       };
     });
@@ -1960,6 +1936,28 @@ function renderCostsBuilder(commission) {
   const totals = {};
   COST_CATEGORIES.forEach(c => { totals[c.key] = catSubtotal(c.key); });
   totals.total = COST_CATEGORIES.reduce((s, c) => s + totals[c.key], 0);
+
+  // Flag a stale cost range rather than silently applying it to whatever
+  // date range is now active -- see Fix 1 in the data-accuracy plan. Never
+  // warn on the empty default state, and never false-positive on data saved
+  // before this range-tracking existed (silently adopt the current view
+  // once instead).
+  const hasAnyCost = COST_CATEGORIES.some(c => (manualCosts[c.key] || []).some(r => +r.amount > 0));
+  const banner = $('#costsRangeBanner');
+  if (banner) {
+    if (!hasAnyCost) {
+      banner.hidden = true;
+    } else if (!costsRange) {
+      costsRange = { from: S.f.from, to: S.f.to };
+      saveCostsRange();
+      banner.hidden = true;
+    } else if (S.f.from && S.f.to && (costsRange.from !== S.f.from || costsRange.to !== S.f.to)) {
+      banner.hidden = false;
+      banner.innerHTML = `⚠ These costs were last saved for <b>${esc(costsRange.from)} to ${esc(costsRange.to)}</b> — your current filter is <b>${esc(S.f.from)} to ${esc(S.f.to)}</b>. The EBITDA figures below use that older lump sum as-is and may be wrong for this range. Edit/re-save any amount to apply it to the current range.`;
+    } else {
+      banner.hidden = true;
+    }
+  }
   return totals;
 }
 
@@ -2566,14 +2564,6 @@ async function syncNow() {
 }
 if ($('#btnSync')) $('#btnSync').onclick = syncNow;
 $('#mClose').onclick = () => { $('#modal').hidden = true; };
-if ($('#dailyModalClose')) $('#dailyModalClose').onclick = () => { $('#dailyModal').hidden = true; };
-if ($('#dailyModalClose2')) $('#dailyModalClose2').onclick = () => { $('#dailyModal').hidden = true; };
-if ($('#dailyModalReset')) $('#dailyModalReset').onclick = () => { setDates(...fullRange()); dateChanged(); renderDailyBreakdownTable(); };
-if ($('#dailyModal')) {
-  $('#dailyModal').onclick = e => {
-    if (e.target === $('#dailyModal')) $('#dailyModal').hidden = true;
-  };
-}
 if ($('#kpiModalClose')) $('#kpiModalClose').onclick = () => { $('#kpiModal').hidden = true; };
 if ($('#kpiModalClose2')) $('#kpiModalClose2').onclick = () => { $('#kpiModal').hidden = true; };
 if ($('#kpiModal')) {
