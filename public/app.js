@@ -836,6 +836,9 @@ function renderSales() {
   const net = sum(O, o => o.netSales), rec = sum(O, o => o.receiptTotal), disc = sum(O, o => o.discount), n = O.length;
   const top = salesAgg(O, o => o.brand).sort((a, b) => b.sales - a.sales)[0];
   const stats = getPeriodStats();
+  // Full AED precision (not K-abbreviated) so hand-checking rate x days
+  // against the displayed total doesn't hit compounded display rounding.
+  const avgDailyStr = stats ? stats.projection.avgDaily.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '';
 
   const m = S.ui.metric;
   const mnameMap = {
@@ -908,12 +911,12 @@ function renderSales() {
       render();
     }, top && S.f.brand === top.k, top ? `Click to filter dashboard for "${top.k}" (click again to reset)` : ''],
 
-    ['Projected Month-End', stats ? `${money(stats.projection.value)}<div style="font-size:9.5px;font-weight:600;color:#555;margin-top:2px;">Assuming ${stats.projection.avgDaily.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}/day · MTD thru ${stats.latestDate}: ${money(stats.projection.mtdNet)}</div>` : '0.00', false, () => {
+    ['Projected Month-End', stats ? `${money(stats.projection.value)}<div style="font-size:9.5px;font-weight:600;color:#555;margin-top:2px;">Assuming ${avgDailyStr}/day · MTD thru ${stats.latestDate}: ${money(stats.projection.mtdNet)}</div>` : '0.00', false, () => {
       if (!stats) return;
       setDates(stats.curMonthStart, stats.latestDate);
       dateChanged();
     }, !!stats && S.f.from === stats.curMonthStart && S.f.to === stats.latestDate,
-      stats ? `Straight-line projection: Month-to-date Net Sales (${money(stats.projection.mtdNet)}) ÷ ${stats.projection.daysElapsed} days elapsed × ${stats.projection.daysInMonth} days in month = ${money(stats.projection.value)}. Not a true forecast. Click to filter to month-to-date (${stats.curMonthStart} → ${stats.latestDate}).` : 'Straight-line month-end Net Sales projection']
+      stats ? `Straight-line projection: Month-to-date Net Sales (${money(stats.projection.mtdNet)}) ÷ ${stats.projection.daysElapsed} days elapsed = ${avgDailyStr}/day avg × ${stats.projection.daysInMonth} days in month = ${money(stats.projection.value)}. Not a true forecast. Click to filter to month-to-date (${stats.curMonthStart} → ${stats.latestDate}).` : 'Straight-line month-end Net Sales projection']
   ]);
 
   const grpName = S.ui.group === 'brand' ? 'Brands' : 'Cuisines';
