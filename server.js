@@ -372,10 +372,18 @@ setTimeout(() => {
   if (CFG.email && CFG.password) syncGrubcenter().catch(() => {});
 }, 500);
 
-// Background refresh every 10 minutes
+// Background refresh every 10 minutes. Scoped to a narrow recent window
+// (not the full 45-day default) so each tick is fast and reliably keeps
+// today's running totals current -- a full 45-day resync (as the boot sync
+// above does) takes several minutes, so if the routine refresh re-pulled
+// the whole window every 10 minutes it would often still be mid-sync when
+// the next tick fired, letting "today" drift stale against GrubCENTER's
+// own live totals between ticks. Settled older orders rarely change, so
+// the boot-time full sync plus this frequent recent-window refresh is
+// enough to stay accurate without the wasted work.
 const SYNC_INTERVAL_MS = 10 * 60 * 1000;
 setInterval(() => {
-  if (CFG.email && CFG.password) syncGrubcenter().catch(() => {});
+  if (CFG.email && CFG.password) syncGrubcenter(daysAgo(3), today()).catch(() => {});
 }, SYNC_INTERVAL_MS);
 
 // ---------- HTTP SERVER ----------

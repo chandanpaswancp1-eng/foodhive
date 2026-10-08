@@ -21,8 +21,13 @@ module.exports = async (req, res) => {
   // (syncOnce() refreshes orders + order-items together; /api/orders already
   // triggers the same background sync on its own staleness check, so this is
   // a harmless redundant trigger if both endpoints are hit around the same time.)
+  // See api/orders.js for why this defaults to a narrow recent window rather
+  // than syncOnce()'s own 45-day default when the client didn't ask for a
+  // specific range.
   if (configured() && Date.now() - meta.lastSync > SYNC_INTERVAL_MS) {
-    waitUntil(syncOnce(from, to).catch(() => {}));
+    const bgFrom = from || dubaiDateKey(Date.now() - 3 * 864e5);
+    const bgTo = to || dubaiDateKey(Date.now());
+    waitUntil(syncOnce(bgFrom, bgTo).catch(() => {}));
   }
 
   res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');

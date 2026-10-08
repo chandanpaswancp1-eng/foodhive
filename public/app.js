@@ -2730,4 +2730,22 @@ function loadDemo() {
   window.syncFilterUI = syncFilterUI;
   window.FoodHive = { S, show, render, setData, base, syncFilterUI, charts };
 })();
+
+// "Last synced Xm ago", independent of any particular data fetch so it
+// stays accurate even between page interactions. Makes the inherent lag
+// between a 10-minute sync cycle and GrubCENTER's own live totals visible
+// instead of silently looking like a data mismatch -- the gap is expected
+// and self-corrects every sync, but only if the user can see it's there.
+function updateLastSyncIndicator(lastSync) {
+  const el = $('#lastSyncAgo');
+  if (!el || !lastSync) return;
+  const mins = Math.max(0, Math.round((Date.now() - lastSync) / 60000));
+  el.textContent = mins < 1 ? 'Synced just now' : `Synced ${mins}m ago`;
+  el.classList.toggle('stale', mins >= 10);
+}
+async function tickLastSync() {
+  try { const st = await fetch('/api/status').then(r => r.json()); updateLastSyncIndicator(st.lastSync); } catch (_) {}
+}
+tickLastSync();
+setInterval(tickLastSync, 20000);
 })();

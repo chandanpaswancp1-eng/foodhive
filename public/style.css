@@ -122,6 +122,8 @@ nav a.on { background: #fff; border-color: var(--k); }
 }
 .src-badge.live { background: #d7f5df; color: #17692f; }
 .src-badge.err { background: #fde0dd; color: #9a1c10; }
+.last-sync-ago { font-size: 9.5px; color: #888; text-align: center; margin: -4px 0 8px; cursor: default; }
+.last-sync-ago.stale { color: #b38600; font-weight: 600; }
 .btn-dark, .btn-yellow {
   border: 0;
   border-radius: 3px;

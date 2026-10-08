@@ -17,9 +17,20 @@ module.exports = async (req, res) => {
     });
   }
 
-  // Cache is stale: kick off a sync in the background without delaying this response.
+  // Cache is stale: kick off a sync in the background without delaying this
+  // response. When the client didn't ask for a specific range (the common
+  // case -- the initial page load fetches with no from/to), default this
+  // background refresh to a narrow recent window rather than syncOnce()'s
+  // own 45-day default: a full resync takes minutes, so on-demand triggers
+  // firing that same slow full resync on every stale page load left
+  // "today"'s totals visibly lagging GrubCENTER's live numbers between
+  // syncs. Settled older orders rarely change -- the daily cron
+  // (api/sync-cron.js) and the explicit "Sync Now" button still cover full
+  // historical refreshes.
   if (configured() && Date.now() - meta.lastSync > SYNC_INTERVAL_MS) {
-    waitUntil(syncOnce(from, to).catch(() => {}));
+    const bgFrom = from || dubaiDateKey(Date.now() - 3 * 864e5);
+    const bgTo = to || dubaiDateKey(Date.now());
+    waitUntil(syncOnce(bgFrom, bgTo).catch(() => {}));
   }
 
   res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
