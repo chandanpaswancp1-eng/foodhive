@@ -460,6 +460,47 @@ function getPeriodStats() {
   }
   const projectedNet = monthToDateNet + remainingProjected;
 
+  // Cross-month context for the Projected Month-End tile's TOOLTIP ONLY --
+  // purely additive, does not feed projectedNet/avgDaily/wdIndex above.
+  // One pass over the existing `allOrders` buckets net sales per day, then
+  // rolls the per-day map up into per-month net + active-day totals --
+  // simpler than salesAgg(), which has no day-count field.
+  const dayNetAll = {};
+  allOrders.forEach(o => {
+    const k = dkey(o.receivedAt);
+    dayNetAll[k] = (dayNetAll[k] || 0) + o.netSales;
+  });
+  const monthBreakdownMap = {};
+  Object.entries(dayNetAll).forEach(([k, net]) => {
+    const mk = k.slice(0, 7);
+    if (!monthBreakdownMap[mk]) monthBreakdownMap[mk] = { net: 0, activeDays: 0 };
+    monthBreakdownMap[mk].net += net;
+    monthBreakdownMap[mk].activeDays++;
+  });
+  const monthBreakdown = Object.entries(monthBreakdownMap)
+    .map(([k, v]) => ({ k, net: v.net, activeDays: v.activeDays }))
+    .sort((a, b) => (a.k < b.k ? -1 : 1));
+
+  // Same-period month-over-month comparison, reusing `monthOrders` (the
+  // full PRIOR calendar month, already filtered above). "Same period" =
+  // the prior month's first N days, N = today's day-of-month, capped to
+  // the prior month's actual length via `prevMonthEndDate`.
+  const hasPriorMonth = monthOrders.length > 0; // existence, not monthNet === 0 --
+  // a real prior month can legitimately net $0.
+  const cmpDay = Math.min(ld.getDate(), prevMonthEndDate.getDate());
+  const prevSamePeriodEnd = monthStart.slice(0, 7) + '-' + pad(cmpDay);
+  const prevSamePeriodNet = hasPriorMonth
+    ? sum(monthOrders.filter(o => dkey(o.receivedAt) <= prevSamePeriodEnd), o => o.netSales)
+    : 0;
+  const momGrowthPct = (hasPriorMonth && prevSamePeriodNet > 0)
+    ? (monthToDateNet - prevSamePeriodNet) / prevSamePeriodNet
+    : null; // null (never Infinity/NaN) when no prior month or it nets $0
+
+  // All-time average daily run-rate over the full calendar span (minDate to
+  // latestDate inclusive) -- calendar days, not just active-order days.
+  const spanDays = Math.round((new Date(latestDate + 'T00:00:00') - new Date(minDate + 'T00:00:00')) / 86400000) + 1;
+  const allAvgPerDay = spanDays ? allNet / spanDays : 0;
+
   return {
     latestDate,
     weekStart,
@@ -473,7 +514,8 @@ function getPeriodStats() {
     week: { count: weekOrders.length, net: weekNet },
     month: { count: monthOrders.length, net: monthNet },
     all: { count: allOrders.length, net: allNet },
-    projection: { mtdNet: monthToDateNet, daysElapsed, daysInMonth, avgDaily, remainingDays, value: projectedNet }
+    projection: { mtdNet: monthToDateNet, daysElapsed, daysInMonth, avgDaily, remainingDays, value: projectedNet },
+    monthTrend: { breakdown: monthBreakdown, hasPriorMonth, cmpDay, prevSamePeriodNet, momGrowthPct, allAvgPerDay, spanDays }
   };
 }
 
@@ -877,6 +919,15 @@ function renderSales() {
   // weekday-seasonal projection (value ÷ days in month), for display only --
   // it is not itself an input to the projection math.
   const effAvgDailyStr = stats && stats.projection.daysInMonth ? (stats.projection.value / stats.projection.daysInMonth).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '';
+  // Extra tooltip-only context: cross-month breakdown + all-time average +
+  // same-period MoM growth (when available). Does not affect the headline
+  // number or the tile's visible subtitle.
+  const monthTrendStr = stats && stats.monthTrend.breakdown.length
+    ? ` Monthly totals: ${stats.monthTrend.breakdown.map(m => `${m.k} ${money(m.net)} (${m.activeDays}d)`).join(', ')} — all-time ${money(stats.all.net)} over ${stats.monthTrend.spanDays} days (~${money(stats.monthTrend.allAvgPerDay)}/day avg).` +
+      (stats.monthTrend.momGrowthPct != null
+        ? ` First ${stats.monthTrend.cmpDay} day${stats.monthTrend.cmpDay === 1 ? '' : 's'} this month: ${money(stats.projection.mtdNet)} vs. ${money(stats.monthTrend.prevSamePeriodNet)} same period last month (${stats.monthTrend.momGrowthPct >= 0 ? '+' : ''}${pc(stats.monthTrend.momGrowthPct, 0)}).`
+        : '')
+    : '';
 
   const m = S.ui.metric;
   const mnameMap = {
@@ -954,7 +1005,7 @@ function renderSales() {
       setDates(stats.curMonthStart, stats.latestDate);
       dateChanged();
     }, !!stats && S.f.from === stats.curMonthStart && S.f.to === stats.latestDate,
-      stats ? `Weekday-seasonal projection: Month-to-date Net Sales (${money(stats.projection.mtdNet)}) thru ${stats.latestDate} + ${stats.projection.remainingDays} remaining day${stats.projection.remainingDays === 1 ? '' : 's'} in ${stats.projection.daysInMonth}-day month, each projected from this month's own daily pace scaled by that weekday's historical share of the week (trailing 8 weeks), = ${money(stats.projection.value)} (~${effAvgDailyStr}/day avg). Not a true forecast. Click to filter to month-to-date (${stats.curMonthStart} → ${stats.latestDate}).` : 'Weekday-seasonal month-end Net Sales projection']
+      stats ? `Weekday-seasonal projection: Month-to-date Net Sales (${money(stats.projection.mtdNet)}) thru ${stats.latestDate} + ${stats.projection.remainingDays} remaining day${stats.projection.remainingDays === 1 ? '' : 's'} in ${stats.projection.daysInMonth}-day month, each projected from this month's own daily pace scaled by that weekday's historical share of the week (trailing 8 weeks), = ${money(stats.projection.value)} (~${effAvgDailyStr}/day avg). Not a true forecast.${monthTrendStr} Click to filter to month-to-date (${stats.curMonthStart} → ${stats.latestDate}).` : 'Weekday-seasonal month-end Net Sales projection']
   ]);
 
   const grpName = S.ui.group === 'brand' ? 'Brands' : 'Cuisines';
