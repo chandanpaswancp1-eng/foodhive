@@ -17,3 +17,6 @@ Thumbs.db
 shots/
 .vercel
 .env*
+
+# Claude Code local settings (personal, not shared with the team)
+.claude/settings.local.json
