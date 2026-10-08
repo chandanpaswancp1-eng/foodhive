@@ -420,7 +420,9 @@ function getPeriodStats() {
   const curMonthStart = latestDate.slice(0, 7) + '-01';
   const mtdOrders = S.orders.filter(o => !o.cancelled && dkey(o.receivedAt) >= curMonthStart && dkey(o.receivedAt) <= latestDate);
   const monthToDateNet = sum(mtdOrders, o => o.netSales);
-  const daysElapsed = ld.getDate();
+  // ld.getDate() is the day-of-month NUMBER (e.g. 8 on Oct 8), not the elapsed
+  // duration since day 1 -- Oct 1 to Oct 8 is a 7-day span, not 8. Subtract 1.
+  const daysElapsed = ld.getDate() - 1;
   const daysInMonth = new Date(ld.getFullYear(), ld.getMonth() + 1, 0).getDate();
   const avgDaily = daysElapsed ? monthToDateNet / daysElapsed : 0;
   const projectedNet = avgDaily * daysInMonth;

@@ -20,3 +20,7 @@ shots/
 
 # Claude Code local settings (personal, not shared with the team)
 .claude/settings.local.json
+
+# Auto-sync cache (rewritten every sync cycle, not meant to be versioned)
+data/all_orders.json
+data/order_items.json
