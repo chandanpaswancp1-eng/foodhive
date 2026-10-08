@@ -330,10 +330,10 @@ const metricFmt = metric => {
 // ---------------- filtering ----------------
 function dateOk(t) { const k = dkey(t); return (!S.f.from || k >= S.f.from) && (!S.f.to || k <= S.f.to); }
 const eq = (v, f) => f === 'All' || v === f;
-function base(page) {
+function base(page, skipDate) {
   const f = S.f;
   return S.orders.filter(o => {
-    if (!dateOk(o.receivedAt)) return false;
+    if (!skipDate && !dateOk(o.receivedAt)) return false;
     if (!eq(o.brand, f.brand) || !eq(o.location, f.location)) return false;
     if (page === 'sales' || page === 'commission' || page === 'ebitda') {
       if (!eq(o.channel, f.channel) || !eq(o.payment, f.payment) || !eq(o.partner, f.partner)) return false;
@@ -375,14 +375,30 @@ function syncFilterUI() {
   });
 }
 
-function getPeriodStats() {
-  const ts = S.orders.map(o => o.receivedAt);
+function getPeriodStats(page) {
+  // `page`, when given, scopes every figure below to the currently active
+  // non-date dropdown filters (brand/location/channel/payment/partner/day)
+  // via base(page, true) -- same filtering renderSales()/etc. already use
+  // for their own tiles, just with the date-range check skipped (this
+  // function computes its own date windows off the filtered set's own
+  // latest order, so it must not be pre-narrowed by the date picker).
+  // Callers that omit `page` keep the original global/unfiltered behavior
+  // (the cross-page date-pill rows in buildFilters(), which must stay
+  // anchored to the full dataset regardless of any one page's filters).
+  const srcOrders = page ? base(page, true) : S.orders;
+  const ts = srcOrders.map(o => o.receivedAt);
   if (!ts.length) return null;
   const latestDate = dkey(Math.max(...ts));
-  const [minDate, maxDate] = fullRange();
+  const [fullMinDate, fullMaxDate] = fullRange();
+  // Filtered callers anchor minDate/maxDate to their own filtered set (so a
+  // brand with no recent orders gets its own correct "today"/"yesterday",
+  // not the whole company's); unfiltered callers keep the original
+  // fullRange() anchor, unchanged, to stay in lockstep with #btnPrev.
+  const minDate = page ? dkey(Math.min(...ts)) : fullMinDate;
+  const maxDate = page ? latestDate : fullMaxDate;
 
   // Today
-  const todayOrders = S.orders.filter(o => !o.cancelled && dkey(o.receivedAt) === latestDate);
+  const todayOrders = srcOrders.filter(o => !o.cancelled && dkey(o.receivedAt) === latestDate);
   const todayNet = sum(todayOrders, o => o.netSales);
 
   // Yesterday -- same "one day before the latest full-dataset date" anchor
@@ -390,7 +406,7 @@ function getPeriodStats() {
   const yd = new Date(maxDate + 'T00:00:00');
   yd.setDate(yd.getDate() - 1);
   const yesterdayKey = dkey(yd);
-  const yesterdayOrders = S.orders.filter(o => !o.cancelled && dkey(o.receivedAt) === yesterdayKey);
+  const yesterdayOrders = srcOrders.filter(o => !o.cancelled && dkey(o.receivedAt) === yesterdayKey);
   const yesterdayNet = sum(yesterdayOrders, o => o.netSales);
 
   // This Week (from Monday of latestDate)
@@ -399,7 +415,7 @@ function getPeriodStats() {
   const ws = new Date(ld);
   ws.setDate(ld.getDate() - dow);
   const weekStart = dkey(ws);
-  const weekOrders = S.orders.filter(o => !o.cancelled && dkey(o.receivedAt) >= weekStart && dkey(o.receivedAt) <= latestDate);
+  const weekOrders = srcOrders.filter(o => !o.cancelled && dkey(o.receivedAt) >= weekStart && dkey(o.receivedAt) <= latestDate);
   const weekNet = sum(weekOrders, o => o.netSales);
 
   // Previous Month (the full prior calendar month, not month-to-date)
@@ -407,18 +423,18 @@ function getPeriodStats() {
   const prevMonthEndDate = new Date(ly, lm - 1, 0);
   const monthEnd = `${prevMonthEndDate.getFullYear()}-${pad(prevMonthEndDate.getMonth() + 1)}-${pad(prevMonthEndDate.getDate())}`;
   const monthStart = monthEnd.slice(0, 7) + '-01';
-  const monthOrders = S.orders.filter(o => !o.cancelled && dkey(o.receivedAt) >= monthStart && dkey(o.receivedAt) <= monthEnd);
+  const monthOrders = srcOrders.filter(o => !o.cancelled && dkey(o.receivedAt) >= monthStart && dkey(o.receivedAt) <= monthEnd);
   const monthNet = sum(monthOrders, o => o.netSales);
 
   // All Time
-  const allOrders = S.orders.filter(o => !o.cancelled);
+  const allOrders = srcOrders.filter(o => !o.cancelled);
   const allNet = sum(allOrders, o => o.netSales);
 
   // Current (in-progress) Month-to-Date, for the Projected Month-End KPI.
   // Unlike `month` above (the full PRIOR calendar month), this uses
   // latestDate's own in-progress calendar month, day 1 through latestDate.
   const curMonthStart = latestDate.slice(0, 7) + '-01';
-  const mtdOrders = S.orders.filter(o => !o.cancelled && dkey(o.receivedAt) >= curMonthStart && dkey(o.receivedAt) <= latestDate);
+  const mtdOrders = srcOrders.filter(o => !o.cancelled && dkey(o.receivedAt) >= curMonthStart && dkey(o.receivedAt) <= latestDate);
   const monthToDateNet = sum(mtdOrders, o => o.netSales);
   // ld.getDate() is the day-of-month NUMBER (e.g. 8 on Oct 8), not the elapsed
   // duration since day 1 -- Oct 1 to Oct 8 is a 7-day span, not 8. Subtract 1.
@@ -439,7 +455,7 @@ function getPeriodStats() {
   histStart.setDate(histStart.getDate() - 56);
   const histStartKey = dkey(histStart.getTime());
   const histDaily = {};
-  S.orders.forEach(o => {
+  srcOrders.forEach(o => {
     if (o.cancelled) return;
     const k = dkey(o.receivedAt);
     if (k < histStartKey || k >= curMonthStart) return;
@@ -912,7 +928,11 @@ function renderSales() {
   const all = base('sales'); const O = all.filter(o => !o.cancelled);
   const net = sum(O, o => o.netSales), rec = sum(O, o => o.receiptTotal), disc = sum(O, o => o.discount), n = O.length;
   const top = salesAgg(O, o => o.brand).sort((a, b) => b.sales - a.sales)[0];
-  const stats = getPeriodStats();
+  // 'sales' scopes the projection to the active brand/location/channel/
+  // payment/partner/day filters -- previously this always read raw
+  // S.orders, so Projected Month-End showed the same whole-company figure
+  // no matter what was filtered.
+  const stats = getPeriodStats('sales');
   // Full AED precision (not K-abbreviated) so hand-checking the tooltip's
   // numbers against the displayed total doesn't hit compounded display
   // rounding. This is the *effective* blended rate implied by the
