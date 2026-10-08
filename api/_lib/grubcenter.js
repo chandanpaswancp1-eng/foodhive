@@ -185,13 +185,31 @@ async function syncOnce(from, to) {
   const meta = await readMeta();
   const session = await ensureSession(meta.session);
   const f = from || daysAgo(45), t = to || today();
+  // order-items has far more rows per day than orders (several lines per
+  // order) and needs proportionally more pages/requests per day -- fetching
+  // the full 45-day window for it here blew past Vercel's function duration
+  // limit ("Task timed out after 300 seconds", confirmed in production
+  // runtime logs) and, worse, did so *silently*: fetchDayWithRetry swallows
+  // per-day failures and returns [], so the sync "succeeded" while quietly
+  // writing only a couple of days of order-items instead of the requested
+  // 45 -- orders/ops/cancel stayed complete because they're much lighter.
+  // A shorter, reliably-completable window keeps whatever IS synced
+  // trustworthy; the per-day merge-by-touched-days logic below only
+  // replaces these recent days, so older order-items history already in
+  // the blob (e.g. backfilled locally) is left alone, not truncated.
+  const orderItemsFrom = from || daysAgo(7);
 
-  const [rawSales, rawOps, rawCancels, rawOrderItems] = await Promise.all([
-    fetchPaged(CFG.ordersPath, f, t, 25, session),
-    fetchPaged(CFG.opsPath, f, t, 20, session).catch(() => []),
-    fetchPaged(CFG.cancelPath, f, t, 10, session).catch(() => []),
-    fetchPaged(CFG.orderItemsPath, f, t, 25, session).catch(() => [])
-  ]);
+  // Sequential, not parallel: each of these already fans out multiple
+  // concurrent day-chunked requests internally (see fetchPaged), and
+  // Promise.all-ing all four report types at once compounds that into
+  // enough concurrent load to trigger rate-limiting/transient failures on
+  // GrubCENTER's side -- the exact failure mode observed for order-items
+  // above. Mirrors server.js's syncGrubcenter(), which fetches sequentially
+  // for the same documented reason and has not hit this failure locally.
+  const rawSales = await fetchPaged(CFG.ordersPath, f, t, 25, session);
+  const rawOps = await fetchPaged(CFG.opsPath, f, t, 20, session).catch(() => []);
+  const rawCancels = await fetchPaged(CFG.cancelPath, f, t, 10, session).catch(() => []);
+  const rawOrderItems = await fetchPaged(CFG.orderItemsPath, orderItemsFrom, t, 25, session).catch(() => []);
 
   const opsMap = new Map();
   rawOps.forEach(o => {
@@ -263,12 +281,14 @@ async function syncOnce(from, to) {
   const ordersArray = [...ordersMap.values()];
   await writeOrders(ordersArray);
 
-  // Line items: [f, t] is re-fetched in full each sync, so it's the
-  // authoritative set for every day in that window -- replace whatever the
-  // store already held for those days rather than merge-by-guessed-key, and
-  // leave anything older than the window untouched.
+  // Line items: [orderItemsFrom, t] (not the wider [f, t]) is re-fetched in
+  // full each sync, so it's the authoritative set for every day in THAT
+  // window -- replace whatever the store already held for those days rather
+  // than merge-by-guessed-key, and leave anything older untouched (e.g. a
+  // deeper local backfill already sitting in the blob must not be wiped out
+  // just because this sync only covers the recent window).
   const normOrderItems = N.normalizeOrderItems(rawOrderItems);
-  const touchedDays = new Set(dayChunks(f, t));
+  const touchedDays = new Set(dayChunks(orderItemsFrom, t));
   const existingOrderItems = await readOrderItems();
   const orderItemsArray = existingOrderItems
     .filter(x => !touchedDays.has(dubaiDateKey(x.at)))
