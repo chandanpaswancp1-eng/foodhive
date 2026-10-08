@@ -908,7 +908,7 @@ function renderSales() {
       render();
     }, top && S.f.brand === top.k, top ? `Click to filter dashboard for "${top.k}" (click again to reset)` : ''],
 
-    ['Projected Month-End', stats ? `${money(stats.projection.value)}<div style="font-size:9.5px;font-weight:600;color:#555;margin-top:2px;">Assuming ${money(stats.projection.avgDaily)}/day · MTD thru ${stats.latestDate}: ${money(stats.projection.mtdNet)}</div>` : '0.00', false, () => {
+    ['Projected Month-End', stats ? `${money(stats.projection.value)}<div style="font-size:9.5px;font-weight:600;color:#555;margin-top:2px;">Assuming ${stats.projection.avgDaily.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}/day · MTD thru ${stats.latestDate}: ${money(stats.projection.mtdNet)}</div>` : '0.00', false, () => {
       if (!stats) return;
       setDates(stats.curMonthStart, stats.latestDate);
       dateChanged();
