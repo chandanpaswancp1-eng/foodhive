@@ -5,8 +5,8 @@
      Talabat   - Letter of Agreement (OQ-0010978599): TGO Basic Commission 24%
                  + 2% Credit Card Payment Fee.
      Deliveroo - Service Pack cover sheet (Core Services Fee on GMV), tiered
-                 by date: 0% until 13 Aug 2026, 10% 14 Aug-15 Sep 2026,
-                 28% from 16 Sep 2026 onward.
+                 by date: 0% until 22 Sep 2026, 10% 23 Sep-23 Oct 2026,
+                 28% from 24 Oct 2026 onward.
      Careem    - Restaurant Enrollment Agreement: Standard Commission 23%
                  + 2% Processing Fee.
      Noon      - Noon Food Merchant Agreement Annex: Noon Food Fee 19%
@@ -53,9 +53,9 @@
   const D = (y, m, d) => Date.UTC(y, m - 1, d);
 
   const DELIVEROO_TIERS = [
-    { from: -Infinity, to: D(2026, 8, 14), rate: 0.00 },
-    { from: D(2026, 8, 14), to: D(2026, 9, 16), rate: 0.10 },
-    { from: D(2026, 9, 16), to: Infinity, rate: 0.28 }
+    { from: -Infinity, to: D(2026, 9, 23), rate: 0.00 },
+    { from: D(2026, 9, 23), to: D(2026, 10, 24), rate: 0.10 },
+    { from: D(2026, 10, 24), to: Infinity, rate: 0.28 }
   ];
 
   const CHANNEL_RATES = {
@@ -99,7 +99,7 @@
   // not used in any calculation.
   const RATE_CARD = [
     { channel: 'Talabat', structure: '24% TGO Basic Commission + 2% Credit Card Fee', note: 'Also: 2% Cash Handling, 2% Bank Charges (not applied, payment-type not tracked); AED 262.50/mo subscription + AED 525 one-time registration (not applied, fixed overhead); tPro AED 4/order ≥30 AED (not applied, loyalty flag not tracked)' },
-    { channel: 'Deliveroo', structure: 'Core Services Fee on GMV: 0% → 10% (14 Aug 2026) → 28% (16 Sep 2026)', note: 'Platform Fee AED 50/site/mo from 1 Nov 2026 (not applied, outside current data window)' },
+    { channel: 'Deliveroo', structure: 'Core Services Fee on GMV: 0% → 10% (23 Sep 2026) → 28% (24 Oct 2026)', note: 'Platform Fee AED 50/site/mo from 1 Dec 2026 (not applied, outside current data window)' },
     { channel: 'Careem', structure: '23% Standard Commission + 2% Processing Fee', note: 'Careem Plus AED 3/order (not applied, loyalty flag not tracked); 4%/mo Marketing Commitment is merchant ad spend, excluded entirely' },
     { channel: 'Noon', structure: '19% Noon Food Fee + 2% Payment Processing Fee', note: 'noon one loyalty AED 3/order (not applied, loyalty flag not tracked); 2.8%/3.4% intl/Amex card variance not tracked' },
     { channel: 'Keeta 2.0', structure: '25% Commission Rate + 2% Bank Fee Rate, AED 6/order minimum', note: 'AED 500/device one-time POS fee not applied (fixed overhead)' },
