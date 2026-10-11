@@ -41,7 +41,16 @@
      categories (Cost of Goods Sold / Labor / Controllable / Occupancy /
      G&A) the user enters on the EBITDA page - not derived from order data.
      Portal Commission is NOT one of those categories; it's already computed
-     above and would double-count if also entered manually. */
+     above and would double-count if also entered manually.
+
+   Full-channel verification pass (2026-10-11): every CHANNEL_RATES entry
+   above was re-read line-by-line against each portal's actual signed
+   contract on file (Talabat/Careem/Noon/Keeta via pdftotext/visual OCR of
+   the scanned pages, Deliveroo via its 86-site Service Fee table). Talabat,
+   Careem, Noon and Keeta 2.0 were already correct; Deliveroo's tier dates
+   were wrong (fixed this pass, see git history). Per-channel source and
+   verification date are also shown in RATE_CARD below for the in-app audit
+   trail (Portal Rate Card panel). */
 (function (root, factory) {
   if (typeof module === 'object' && module.exports) module.exports = factory();
   else root.FHCommission = factory();
@@ -98,12 +107,12 @@
   // Static reference table for the Portal Rate Card panel - display only,
   // not used in any calculation.
   const RATE_CARD = [
-    { channel: 'Talabat', structure: '24% TGO Basic Commission + 2% Credit Card Fee', note: 'Also: 2% Cash Handling, 2% Bank Charges (not applied, payment-type not tracked); AED 262.50/mo subscription + AED 525 one-time registration (not applied, fixed overhead); tPro AED 4/order ≥30 AED (not applied, loyalty flag not tracked)' },
-    { channel: 'Deliveroo', structure: 'Core Services Fee on GMV: 0% → 10% (23 Sep 2026) → 28% (24 Oct 2026)', note: 'Platform Fee AED 50/site/mo from 1 Dec 2026 (not applied, outside current data window)' },
-    { channel: 'Careem', structure: '23% Standard Commission + 2% Processing Fee', note: 'Careem Plus AED 3/order (not applied, loyalty flag not tracked); 4%/mo Marketing Commitment is merchant ad spend, excluded entirely' },
-    { channel: 'Noon', structure: '19% Noon Food Fee + 2% Payment Processing Fee', note: 'noon one loyalty AED 3/order (not applied, loyalty flag not tracked); 2.8%/3.4% intl/Amex card variance not tracked' },
-    { channel: 'Keeta 2.0', structure: '25% Commission Rate + 2% Bank Fee Rate, AED 6/order minimum', note: 'AED 500/device one-time POS fee not applied (fixed overhead)' },
-    { channel: 'Take Away / Direct', structure: '0% — no aggregator', note: 'Pickup, Dine in, and any other non-aggregator channel default to 0%' }
+    { channel: 'Talabat', structure: '24% TGO Basic Commission + 2% Credit Card Fee', note: 'Also: 2% Cash Handling, 2% Bank Charges (not applied, payment-type not tracked); AED 262.50/mo subscription + AED 525 one-time registration (not applied, fixed overhead); tPro AED 4/order ≥30 AED (not applied, loyalty flag not tracked)', verified: '2026-10-11 — Letter of Agreement (OQ-0010978599)' },
+    { channel: 'Deliveroo', structure: 'Core Services Fee on GMV: 0% → 10% (23 Sep 2026) → 28% (24 Oct 2026)', note: 'Platform Fee AED 50/site/mo from 1 Dec 2026 (not applied, outside current data window)', verified: '2026-10-11 — Stamped/signed Service Pack contract (dates corrected this pass)' },
+    { channel: 'Careem', structure: '23% Standard Commission + 2% Processing Fee', note: 'Careem Plus AED 3/order (not applied, loyalty flag not tracked); 4%/mo Marketing Commitment is merchant ad spend, excluded entirely', verified: '2026-10-11 — Restaurant Enrollment Agreement' },
+    { channel: 'Noon', structure: '19% Noon Food Fee + 2% Payment Processing Fee', note: 'noon one loyalty AED 3/order (not applied, loyalty flag not tracked); 2.8%/3.4% intl/Amex card variance not tracked', verified: '2026-10-11 — Noon Food Merchant Agreement + Annex' },
+    { channel: 'Keeta 2.0', structure: '25% Commission Rate + 2% Bank Fee Rate, AED 6/order minimum', note: 'AED 500/device one-time POS fee not applied (fixed overhead)', verified: '2026-10-11 — Merchant Agreement No. AEWM-SE-E3-20028083' },
+    { channel: 'Take Away / Direct', structure: '0% — no aggregator', note: 'Pickup, Dine in, and any other non-aggregator channel default to 0%', verified: 'n/a — no contract (no aggregator involved)' }
   ];
 
   return { CHANNEL_RATES, rateForChannel, minFeeForChannel, commissionForOrder, ebitda, RATE_CARD };

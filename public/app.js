@@ -306,7 +306,6 @@ const salesAgg = (arr, kf) => groupBy(arr, kf).map(g => {
     receipt,
     aov: orders ? sales / orders : 0,
     discPctGross: receipt ? (disc / receipt) * 100 : 0,
-    discPctNet: sales ? (disc / sales) * 100 : 0,
     discPct: receipt ? (disc / receipt) * 100 : 0
   };
 });
@@ -317,13 +316,12 @@ const metricOf = (r, metric) => {
   if (metric === 'aov') return r.aov;
   if (metric === 'disc') return r.disc;
   if (metric === 'discPctGross') return r.discPctGross;
-  if (metric === 'discPctNet') return r.discPctNet;
   if (metric === 'discPct') return r.discPctGross;
   return r.sales;
 };
 const metricFmt = metric => {
   if (metric === 'orders') return cnt;
-  if (metric === 'discPct' || metric === 'discPctGross' || metric === 'discPctNet') return n => n.toFixed(1) + '%';
+  if (metric === 'discPct' || metric === 'discPctGross') return n => n.toFixed(1) + '%';
   return money;
 };
 
@@ -957,9 +955,8 @@ function renderSales() {
     receipt: 'Gross Sales',
     aov: 'Average Order Value (AOV)',
     disc: 'Total Discount',
-    discPct: 'Discount % (Gross)',
-    discPctGross: 'Discount % (Gross)',
-    discPctNet: 'Discount % (Net)'
+    discPct: 'Discount %',
+    discPctGross: 'Discount %'
   };
   const mname = mnameMap[m] || (m === 'gross' ? 'Gross Sales' : 'Net Sales');
   const mf = metricFmt(m);
@@ -997,17 +994,11 @@ function renderSales() {
       if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
     }, m === 'disc', 'Click to view Total Discounts across all charts'],
 
-    ['Disc % (Gross)', rec ? pc(disc / rec, 1) : '0%', false, () => {
+    ['Discount %', rec ? pc(disc / rec, 1) : '0%', false, () => {
       S.ui.metric = (m === 'discPctGross' ? 'sales' : 'discPctGross');
       buildToggles();
       renderSales();
     }, m === 'discPctGross', 'Click to view Discount as % of Gross Sales: Total Discount / Gross Sales'],
-
-    ['Disc % (Net)', net ? pc(disc / net, 1) : '0%', false, () => {
-      S.ui.metric = (m === 'discPctNet' ? 'sales' : 'discPctNet');
-      buildToggles();
-      renderSales();
-    }, m === 'discPctNet', 'Click to view Discount as % of Net Sales: Total Discount / Net Sales'],
 
     ['Top Performing Brand', top ? esc(top.k) : '–', true, () => {
       if (!top) return;
@@ -1905,8 +1896,8 @@ function renderCommission() {
 
   const rc = $('#rateCardTable');
   if (rc) {
-    rc.innerHTML = `<thead><tr><th>Portal</th><th>Contracted Structure</th><th>Notes (not applied)</th></tr></thead><tbody>${
-      FHCommission.RATE_CARD.map(r => `<tr><td><b>${esc(r.channel)}</b></td><td>${esc(r.structure)}</td><td class="rc-note">${esc(r.note)}</td></tr>`).join('')
+    rc.innerHTML = `<thead><tr><th>Portal</th><th>Contracted Structure</th><th>Notes (not applied)</th><th>Verified</th></tr></thead><tbody>${
+      FHCommission.RATE_CARD.map(r => `<tr><td><b>${esc(r.channel)}</b></td><td>${esc(r.structure)}</td><td class="rc-note">${esc(r.note)}</td><td class="rc-note">${esc(r.verified || '')}</td></tr>`).join('')
     }</tbody>`;
   }
 }
