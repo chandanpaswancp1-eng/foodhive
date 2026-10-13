@@ -24,3 +24,4 @@ shots/
 # Auto-sync cache (rewritten every sync cycle, not meant to be versioned)
 data/all_orders.json
 data/order_items.json
+data/zoho_cache.json

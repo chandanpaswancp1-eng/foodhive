@@ -10,6 +10,8 @@ const ORDERS_KEY = 'orders.json';
 const ITEMS_KEY = 'items.json';
 const ORDER_ITEMS_KEY = 'order_items.json';
 const META_KEY = 'meta.json';
+const ZOHO_KEY = 'zoho.json';
+const ZOHO_META_KEY = 'zoho_meta.json';
 
 async function streamToString(stream) {
   const chunks = [];
@@ -49,5 +51,9 @@ const readOrderItems = () => readBlobJson(ORDER_ITEMS_KEY, []);
 const writeOrderItems = arr => writeBlobJson(ORDER_ITEMS_KEY, arr);
 const readMeta = () => readBlobJson(META_KEY, { lastSync: 0, session: null, liveOpsCount: 0, liveCancelCount: 0 });
 const writeMeta = meta => writeBlobJson(META_KEY, meta);
+const readZoho = () => readBlobJson(ZOHO_KEY, null);
+const writeZoho = data => writeBlobJson(ZOHO_KEY, data);
+const readZohoMeta = () => readBlobJson(ZOHO_META_KEY, { session: null });
+const writeZohoMeta = meta => writeBlobJson(ZOHO_META_KEY, meta);
 
-module.exports = { readOrders, writeOrders, readItems, writeItems, readOrderItems, writeOrderItems, readMeta, writeMeta, readBlobJson, writeBlobJson };
+module.exports = { readOrders, writeOrders, readItems, writeItems, readOrderItems, writeOrderItems, readMeta, writeMeta, readZoho, writeZoho, readZohoMeta, writeZohoMeta, readBlobJson, writeBlobJson };

@@ -675,6 +675,22 @@ td:first-child { text-align: left; font-weight: 700; }
 .is-top { grid-area: tp; height: auto; }
 .is-trend { grid-area: tr; height: 200px; }
 
+/* Accounting (Zoho Books) */
+.g-accounting { grid-template-columns: repeat(12, 1fr); }
+.g-accounting .panel { height: 285px; }
+.a-acctrend { grid-column: span 12; }
+.a-araging { grid-column: span 6; }
+.a-apaging { grid-column: span 6; }
+.a-billstable, .a-invoicestable { grid-column: span 12; }
+.g-accounting .a-billstable, .g-accounting .a-invoicestable { height: 360px; }
+.a-billstable table, .a-invoicestable table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.a-billstable th, .a-billstable td, .a-invoicestable th, .a-invoicestable td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--line); }
+.a-billstable th, .a-invoicestable th { background: var(--y); color: var(--k); font-weight: 700; position: sticky; top: 0; }
+.a-billstable td.num, .a-invoicestable td.num { text-align: right; font-weight: 600; }
+.a-billstable tbody tr:hover, .a-invoicestable tbody tr:hover { background: #fff8e1; cursor: pointer; }
+.acct-sync-row { margin-top: 10px; display: flex; align-items: center; gap: 10px; }
+#acctSyncMsg { text-align: left; margin: 4px 0 0 0; }
+
 /* Delayed */
 .g-export { grid-template-columns: repeat(2, 1fr); }
 .g-export .panel { height: auto; }
@@ -729,8 +745,8 @@ td:first-child { text-align: left; font-weight: 700; }
 }
 
 @media (max-width: 1100px) {
-  .g-sales, .g-cancel, .g-items, .g-item-sales, .g-commission, .g-ebitda { display: block; }
-  .g-sales .panel, .g-cancel .panel, .g-items .panel, .g-item-sales .panel, .g-commission .panel, .g-ebitda .panel { margin-bottom: 10px; height: 300px !important; }
+  .g-sales, .g-cancel, .g-items, .g-item-sales, .g-commission, .g-ebitda, .g-accounting { display: block; }
+  .g-sales .panel, .g-cancel .panel, .g-items .panel, .g-item-sales .panel, .g-commission .panel, .g-ebitda .panel, .g-accounting .panel { margin-bottom: 10px; height: 300px !important; }
   .g-commission .a-ratecard, .g-ebitda .a-costs, .g-ebitda .a-plwaterfall { height: auto !important; }
   .g-prep { grid-template-columns: 1fr 1fr; }
   .g-ratings { grid-template-columns: 1fr; }

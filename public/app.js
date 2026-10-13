@@ -77,12 +77,12 @@ function orderRating(o) {
 
 // ---------------- state ----------------
 const S = {
-  orders: [], items: [], lineItems: [], source: 'none', page: 'sales', loadedRange: null,
+  orders: [], items: [], lineItems: [], source: 'none', page: 'sales', loadedRange: null, zoho: null,
   f: {
     from: '', to: '', channel: 'All', brand: 'All', location: 'All', payment: 'All',
     day: 'All', partner: 'All', reason: 'All', post: 'All', ratingFilter: 'all',
     onlyDelayed: false, slot: 'All', hour: 'All', star: 'All', item: 'All',
-    source: 'All', type: 'All'
+    source: 'All', type: 'All', cuisine: 'All'
   },
   ui: {
     metric: 'gross', group: 'cuisine', grain: 'Daily', cmetric: 'orders',
@@ -332,7 +332,7 @@ function base(page, skipDate) {
   const f = S.f;
   return S.orders.filter(o => {
     if (!skipDate && !dateOk(o.receivedAt)) return false;
-    if (!eq(o.brand, f.brand) || !eq(o.location, f.location)) return false;
+    if (!eq(o.brand, f.brand) || !eq(o.location, f.location) || !eq(o.cuisine, f.cuisine)) return false;
     if (page === 'sales' || page === 'commission' || page === 'ebitda') {
       if (!eq(o.channel, f.channel) || !eq(o.payment, f.payment) || !eq(o.partner, f.partner)) return false;
       if (f.day !== 'All' && dowOf(o.receivedAt) !== f.day) return false;
@@ -767,7 +767,23 @@ function kpis(id, list) {
 const SLOTS = [['Breakfast', 6, 10], ['Lunch', 11, 14], ['Afternoon Snack', 15, 17], ['Dinner', 18, 21], ['Late Night', 22, 23], ['Overnight', 0, 5]];
 const slotOf = h => (SLOTS.find(s => h >= s[1] && h <= s[2]) || SLOTS[5])[0];
 const todOf = h => (h >= 5 && h < 12 ? 'Morning' : h >= 12 && h < 17 ? 'Afternoon' : h >= 17 && h < 21 ? 'Evening' : 'Night');
-const grainKey = { Daily: t => dkey(t), Weekly: t => { const d = new Date(t); const x = new Date(d); x.setDate(d.getDate() - ((d.getDay() + 6) % 7)); return dkey(x); }, Monthly: t => dkey(t).slice(0, 7), Quarterly: t => { const d = new Date(t); return d.getFullYear() + ' Q' + (Math.floor(d.getMonth() / 3) + 1); }, Yearly: t => String(new Date(t).getFullYear()) };
+// All four grains must bucket by Dubai-local calendar date, not the viewer's
+// own timezone (the same class of bug server.js's dubaiDateKey() comment
+// warns about) -- derive everything from dubaiDate(t)'s UTC getters, which
+// already carry the +4h correction, and never re-run dkey()/dubaiDate() on
+// an already-shifted Date (that would double-apply the offset).
+const grainKey = {
+  Daily: t => dkey(t),
+  Weekly: t => {
+    const d = dubaiDate(t);
+    const x = new Date(d);
+    x.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 6) % 7));
+    return `${x.getUTCFullYear()}-${pad(x.getUTCMonth() + 1)}-${pad(x.getUTCDate())}`;
+  },
+  Monthly: t => dkey(t).slice(0, 7),
+  Quarterly: t => { const d = dubaiDate(t); return d.getUTCFullYear() + ' Q' + (Math.floor(d.getUTCMonth() / 3) + 1); },
+  Yearly: t => String(dubaiDate(t).getUTCFullYear())
+};
 
 function timeRangeForGrain(key, grain) {
   if (grain === 'Daily') return [key, key];
@@ -1167,8 +1183,10 @@ function renderSales() {
     hr[h].v += (m === 'orders' ? 1 : (m === 'gross' || m === 'receipt') ? o.receiptTotal : m === 'disc' ? o.discount : o.netSales);
     hr[h].o++;
   });
-  combo('c-hour', hr, { name: mname, pctName: '%GT Total Orders', filterKey: 'hour', fmt: mf });
-  patchPct('c-hour', hr.map(h => ({ orders: h.o })), n);
+  // hr is always 24 slots long (even with zero orders), so combo()'s own
+  // `!rows.length` empty check never fires here -- gate on n explicitly.
+  if (n) { combo('c-hour', hr, { name: mname, pctName: '%GT Total Orders', filterKey: 'hour', fmt: mf }); patchPct('c-hour', hr.map(h => ({ orders: h.o })), n); }
+  else mk('c-hour', { __empty: true });
 
   const dw = DOW.map(d => ({ k: d, v: 0, o: 0 }));
   O.forEach(o => {
@@ -1176,8 +1194,9 @@ function renderSales() {
     dw[i].v += (m === 'orders' ? 1 : (m === 'gross' || m === 'receipt') ? o.receiptTotal : m === 'disc' ? o.discount : o.netSales);
     dw[i].o++;
   });
-  combo('c-dow', dw, { name: mname, pctName: '%GT Total Orders', filterKey: 'day', fmt: mf });
-  patchPct('c-dow', dw.map(d => ({ orders: d.o })), n);
+  // dw is always 7 slots long (even with zero orders) -- same reasoning as c-hour above.
+  if (n) { combo('c-dow', dw, { name: mname, pctName: '%GT Total Orders', filterKey: 'day', fmt: mf }); patchPct('c-dow', dw.map(d => ({ orders: d.o })), n); }
+  else mk('c-dow', { __empty: true });
 
   const dc = salesAgg(O, o => o.channel).filter(r => r.disc > 0).sort((a, b) => b.disc - a.disc).map(r => ({ k: r.k, v: r.disc }));
   donut('c-disc', dc, { legend: 'left', filterKey: 'channel' });
@@ -1202,7 +1221,7 @@ function renderCancel() {
   kpis('kpi-cancel', [
     ['Cancelled Orders Amount', money(amt), false, () => { S.ui.cmetric = 'value'; buildToggles(); renderCancel(); }, val, 'Click to view Cancelled Orders Value in AED across all charts'],
     ['Total Cancelled Orders', cnt(n), false, () => { S.ui.cmetric = 'orders'; buildToggles(); renderCancel(); }, !val, 'Click to view Cancelled Orders Count volume across all charts'],
-    ['AOV', n ? (amt / n).toFixed(2) : '0', false, () => { S.f.post = (S.f.post === 'Yes' ? 'All' : 'Yes'); syncFilterUI(); renderCancel(); }, S.f.post === 'Yes', 'Click to filter Post-Cancelled orders (direct kitchen food waste)']
+    ['AOV', n ? (amt / n).toFixed(2) : '0', false, null, false, 'Average Order Value of cancelled orders (Cancelled Orders Amount / Total Cancelled Orders). Use the "Post Cancelled" filter above to isolate direct kitchen food waste.']
   ]);
 
   const mkRows = (kf, lim) => { const rr = salesAgg(C, kf).sort((a, b) => mv(b) - mv(a)); const tot = sum(rr, r => r.orders); return { rows: rr.slice(0, lim), tot }; };
@@ -1461,9 +1480,10 @@ function renderPrep() {
       }
       return (a.k < b.k ? -1 : 1);
     });
+    const rowFilterKey = g === 'brand' ? 'brand' : 'cuisine';
     t.innerHTML = `<thead><tr><th>${gname}</th>${STAGES.map(s => `<th style="${S.ui.activeStage === s[0] ? 'background:#FCD258;color:#000;font-weight:700' : ''}">${s[1].replace(' → ', ' →<br>')}</th>`).join('')}</tr></thead><tbody>${sortedGrp.map(gr => {
-      const isRowActive = S.f.brand === gr.k;
-      return `<tr style="cursor:pointer;background:${isRowActive ? '#FFFDF2' : ''};outline:${isRowActive ? '2px solid #b38600' : ''}" onclick="(() => { S.f.brand = (S.f.brand === '${esc(gr.k)}' ? 'All' : '${esc(gr.k)}'); syncFilterUI(); render(); })()"><td><b>${esc(gr.k)}</b></td>${STAGES.map(([k]) => { const v = avgOf(gr.rows, k); return `<td style="${S.ui.activeStage === k ? 'background:rgba(253,203,60,0.2);font-weight:700' : ''}">${v ? v.toFixed(2) : ''}</td>`; }).join('')}</tr>`;
+      const isRowActive = S.f[rowFilterKey] === gr.k;
+      return `<tr style="cursor:pointer;background:${isRowActive ? '#FFFDF2' : ''};outline:${isRowActive ? '2px solid #b38600' : ''}" onclick="(() => { S.f.${rowFilterKey} = (S.f.${rowFilterKey} === '${esc(gr.k)}' ? 'All' : '${esc(gr.k)}'); syncFilterUI(); render(); })()"><td><b>${esc(gr.k)}</b></td>${STAGES.map(([k]) => { const v = avgOf(gr.rows, k); return `<td style="${S.ui.activeStage === k ? 'background:rgba(253,203,60,0.2);font-weight:700' : ''}">${v ? v.toFixed(2) : ''}</td>`; }).join('')}</tr>`;
     }).join('')}</tbody>`;
   }
 
@@ -1557,7 +1577,7 @@ function renderItemsPage() {
 
 function renderItems86() {
   const f = S.f;
-  const I = S.items.filter(x => dateOk(x.at) && eq(x.brand, f.brand) && eq(x.location, f.location) && (f.item === 'All' || x.item === f.item) && (f.source === 'All' || x.source === f.source) && (f.type === 'All' || x.type === f.type));
+  const I = S.items.filter(x => dateOk(x.at) && eq(x.brand, f.brand) && eq(x.location, f.location) && eq(x.cuisine, f.cuisine) && (f.item === 'All' || x.item === f.item) && (f.source === 'All' || x.source === f.source) && (f.type === 'All' || x.type === f.type));
   const n = I.length;
   const topB = groupBy(I, x => x.brand).sort((a, b) => b.rows.length - a.rows.length)[0];
   const topL = groupBy(I, x => x.location).sort((a, b) => b.rows.length - a.rows.length)[0];
@@ -1726,7 +1746,10 @@ function renderItemSales() {
 
   const hr = Array.from({ length: 24 }, (_, h) => ({ k: String(h), v: 0 }));
   I.forEach(x => { hr[dubaiHour(x.at)].v += x.qty; });
-  combo('c-isoldhour', hr, { name: 'Items Sold', pctName: '%GT Items Sold', fmt: cnt, filterKey: 'hour' });
+  // hr is always 24 slots long (even with zero items), so combo()'s own
+  // `!rows.length` empty check never fires here -- gate on I.length explicitly.
+  if (I.length) combo('c-isoldhour', hr, { name: 'Items Sold', pctName: '%GT Items Sold', fmt: cnt, filterKey: 'hour' });
+  else mk('c-isoldhour', { __empty: true });
 
   const slRows = qtyAgg(I, x => slotOf(dubaiHour(x.at))).sort((a, b) => SLOTS.findIndex(s => s[0] === a.k) - SLOTS.findIndex(s => s[0] === b.k));
   combo('c-isoldslot', slRows, { name: 'Items Sold', pctName: '%GT Items Sold', fmt: cnt, filterKey: 'slot' });
@@ -2263,8 +2286,319 @@ function renderEbitda() {
   ], { fmt: money });
 }
 
+// ================= PAGE: ACCOUNTING (Zoho Books) =================
+function openAccountingTrendDrillModal() {
+  renderAccountingTrendDrillBody();
+  openKpiModal('Income, Expenses & Net Profit — Full History', 'Every month since this org\'s first Zoho Books bill/invoice.');
+}
+function renderAccountingTrendDrillBody() {
+  const body = $('#kpiModalBody');
+  const z = S.zoho;
+  if (!body || !z) return;
+  const rows = (z.trend || []).slice().reverse();
+  body.innerHTML = `
+    <div class="a-ratecard">
+      <table>
+        <thead><tr><th>Month</th><th style="text-align:right">Income</th><th style="text-align:right">Expenses</th><th style="text-align:right">Net Profit</th><th style="text-align:right">Net Margin</th></tr></thead>
+        <tbody>
+          ${rows.map(r => `<tr>
+            <td style="font-weight:600">${esc(r.label)}</td>
+            <td style="text-align:right">${money(r.income)}</td>
+            <td style="text-align:right">${money(r.expenses)}</td>
+            <td style="text-align:right;font-weight:600">${money(r.netProfit)}</td>
+            <td style="text-align:right">${r.income ? pc(r.netProfit / r.income, 1) : '–'}</td>
+          </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>`;
+}
+
+function openAccountingCashDrillModal(kind) {
+  renderAccountingCashDrillBody(kind);
+  const label = kind === 'bank' ? 'Bank' : kind === 'cash' ? 'Cash' : 'Cash & Bank';
+  openKpiModal(`${label} Balance — By Account`, `Active ${kind === 'bank' ? 'bank' : kind === 'cash' ? 'cash' : 'bank and cash'} accounts in Zoho Books.`);
+}
+function renderAccountingCashDrillBody(kind) {
+  const body = $('#kpiModalBody');
+  const z = S.zoho;
+  if (!body || !z) return;
+  const rows = (z.bankAccounts || []).filter(a => !kind || a.type === kind);
+  body.innerHTML = `
+    <div class="a-ratecard">
+      <table>
+        <thead><tr><th>Account</th><th>Type</th><th style="text-align:right">Balance</th></tr></thead>
+        <tbody>
+          ${rows.length ? rows.map(a => `<tr>
+            <td style="font-weight:600">${esc(a.name)}</td>
+            <td>${esc(a.type)}</td>
+            <td style="text-align:right">${money(a.balance)} ${esc(a.currency || '')}</td>
+          </tr>`).join('') : `<tr><td colspan="3" class="rc-note">No active ${kind || 'bank/cash'} accounts found.</td></tr>`}
+        </tbody>
+      </table>
+    </div>`;
+}
+
+function openAccountingAgingDrillModal(kind) {
+  renderAccountingAgingDrillBody(kind);
+  openKpiModal(kind === 'ar' ? 'Accounts Receivable — Aging & Outstanding Invoices' : 'Accounts Payable — Aging & Outstanding Bills', 'Bucketed by days outstanding, plus every record with a nonzero balance.');
+}
+function renderAccountingAgingDrillBody(kind) {
+  const body = $('#kpiModalBody');
+  const z = S.zoho;
+  if (!body || !z) return;
+  const buckets = (kind === 'ar' ? z.arAging : z.apAging) || [];
+  const records = (kind === 'ar' ? z.invoices : z.bills) || [];
+  const outstanding = records.filter(x => (+x.balance || 0) > 0).sort((a, b) => (+b.balance || 0) - (+a.balance || 0));
+  const who = kind === 'ar' ? 'Customer' : 'Vendor';
+  const numberLabel = kind === 'ar' ? 'Invoice #' : 'Bill #';
+  body.innerHTML = `
+    <div class="a-ratecard">
+      <table>
+        <thead><tr><th>Aging Bucket</th><th style="text-align:right">Amount</th></tr></thead>
+        <tbody>
+          ${buckets.length ? buckets.map(b => `<tr><td>${esc(b.label)}</td><td style="text-align:right">${money(b.amount)}</td></tr>`).join('') : '<tr><td colspan="2" class="rc-note">No aging data.</td></tr>'}
+        </tbody>
+      </table>
+    </div>
+    <div class="a-ratecard" style="margin-top:14px">
+      <table>
+        <thead><tr><th>${numberLabel}</th><th>${who}</th><th>Due Date</th><th style="text-align:right">Balance</th></tr></thead>
+        <tbody>
+          ${outstanding.length ? outstanding.map(x => `<tr>
+            <td>${esc(kind === 'ar' ? x.invoice_number : x.bill_number)}</td>
+            <td>${esc(kind === 'ar' ? x.customer_name : x.vendor_name)}</td>
+            <td>${esc(x.due_date || '')}</td>
+            <td style="text-align:right;font-weight:600">${money(x.balance)}</td>
+          </tr>`).join('') : `<tr><td colspan="4" class="rc-note">No outstanding ${kind === 'ar' ? 'invoices' : 'bills'}.</td></tr>`}
+        </tbody>
+      </table>
+    </div>`;
+}
+
+function openAccountingOverdueDrillModal(kind) {
+  renderAccountingOverdueDrillBody(kind);
+  openKpiModal(kind === 'invoices' ? 'Overdue Invoices' : 'Overdue Bills', 'Past their due date, per Zoho Books.');
+}
+function renderAccountingOverdueDrillBody(kind) {
+  const body = $('#kpiModalBody');
+  const z = S.zoho;
+  if (!body || !z) return;
+  const records = ((kind === 'invoices' ? z.invoices : z.bills) || [])
+    .filter(x => x.status === 'overdue')
+    .sort((a, b) => (a.due_date || '').localeCompare(b.due_date || ''));
+  const who = kind === 'invoices' ? 'Customer' : 'Vendor';
+  const numberLabel = kind === 'invoices' ? 'Invoice #' : 'Bill #';
+  body.innerHTML = `
+    <div class="a-ratecard">
+      <table>
+        <thead><tr><th>${numberLabel}</th><th>${who}</th><th>Due Date</th><th style="text-align:right">Balance</th></tr></thead>
+        <tbody>
+          ${records.length ? records.map(x => `<tr>
+            <td>${esc(kind === 'invoices' ? x.invoice_number : x.bill_number)}</td>
+            <td>${esc(kind === 'invoices' ? x.customer_name : x.vendor_name)}</td>
+            <td>${esc(x.due_date || '')}</td>
+            <td style="text-align:right;font-weight:600">${money(x.balance)}</td>
+          </tr>`).join('') : `<tr><td colspan="4" class="rc-note">No overdue ${kind}.</td></tr>`}
+        </tbody>
+      </table>
+    </div>`;
+}
+
+// Sums outstanding balance per vendor across all their bills and returns the
+// single largest, as "Vendor Name · AED amount" (or a friendly fallback if
+// nothing is owed).
+function topVendorOwedLabel(z) {
+  const byVendor = new Map();
+  (z.bills || []).forEach(b => {
+    const bal = +b.balance || 0;
+    if (bal <= 0 || !b.vendor_name) return;
+    byVendor.set(b.vendor_name, (byVendor.get(b.vendor_name) || 0) + bal);
+  });
+  if (!byVendor.size) return 'None owed';
+  const [vendor, amount] = [...byVendor.entries()].sort((a, b) => b[1] - a[1])[0];
+  return `${vendor} · ${money(amount)}`;
+}
+
+// Generic single-record detail popup, reused for both a Bill row and an
+// Invoice row -- shows every field relevant to that record, not just the
+// handful of columns visible in the table.
+function openRecordDetailModal(kind, record) {
+  renderRecordDetailBody(kind, record);
+  const title = kind === 'bill' ? `Bill ${record.bill_number || ''}` : `Invoice ${record.invoice_number || ''}`;
+  openKpiModal(title, kind === 'bill' ? (record.vendor_name || '') : (record.customer_name || ''));
+}
+function renderRecordDetailBody(kind, record) {
+  const body = $('#kpiModalBody');
+  if (!body) return;
+  const fields = kind === 'bill'
+    ? [['Bill Number', 'bill_number'], ['Vendor', 'vendor_name'], ['Bill Date', 'date'], ['Due Date', 'due_date'], ['Status', 'status'], ['Reference #', 'reference_number'], ['Total', 'total', 'money'], ['Balance Due', 'balance', 'money'], ['Currency', 'currency_code']]
+    : [['Invoice Number', 'invoice_number'], ['Customer', 'customer_name'], ['Invoice Date', 'date'], ['Due Date', 'due_date'], ['Status', 'status'], ['Reference #', 'reference_number'], ['Total', 'total', 'money'], ['Balance Due', 'balance', 'money'], ['Currency', 'currency_code']];
+  body.innerHTML = `
+    <div class="a-ratecard">
+      <table>
+        <tbody>
+          ${fields.map(([label, key, fmt]) => `<tr><td style="font-weight:700;width:160px">${esc(label)}</td><td>${fmt === 'money' ? money(record[key]) : esc(record[key] == null || record[key] === '' ? '–' : record[key])}</td></tr>`).join('')}
+        </tbody>
+      </table>
+    </div>`;
+}
+
+function renderAccountingBillsTable(z) {
+  const el = $('#acctBillsTable');
+  if (!el) return;
+  const rows = (z.bills || []).slice().sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+  if (!rows.length) { el.innerHTML = '<tbody><tr><td class="rc-note">No bills found.</td></tr></tbody>'; return; }
+  el.innerHTML = `
+    <thead><tr><th>Bill #</th><th>Vendor</th><th>Date</th><th>Due Date</th><th>Status</th><th class="num">Total</th><th class="num">Balance</th></tr></thead>
+    <tbody>
+      ${rows.map((b, i) => `<tr data-idx="${i}">
+        <td>${esc(b.bill_number)}</td>
+        <td>${esc(b.vendor_name)}</td>
+        <td>${esc(b.date || '')}</td>
+        <td>${esc(b.due_date || '')}</td>
+        <td>${esc(b.status || '')}</td>
+        <td class="num">${money(b.total)}</td>
+        <td class="num">${money(b.balance)}</td>
+      </tr>`).join('')}
+    </tbody>`;
+  el.querySelectorAll('tbody tr').forEach(tr => {
+    const r = rows[+tr.dataset.idx];
+    tr.onclick = () => openRecordDetailModal('bill', r);
+  });
+}
+
+function renderAccountingInvoicesTable(z) {
+  const el = $('#acctInvoicesTable');
+  if (!el) return;
+  const rows = (z.invoices || []).slice().sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+  if (!rows.length) { el.innerHTML = '<tbody><tr><td class="rc-note">No invoices found.</td></tr></tbody>'; return; }
+  el.innerHTML = `
+    <thead><tr><th>Invoice #</th><th>Customer</th><th>Date</th><th>Due Date</th><th>Status</th><th class="num">Total</th><th class="num">Balance</th></tr></thead>
+    <tbody>
+      ${rows.map((x, i) => `<tr data-idx="${i}">
+        <td>${esc(x.invoice_number)}</td>
+        <td>${esc(x.customer_name)}</td>
+        <td>${esc(x.date || '')}</td>
+        <td>${esc(x.due_date || '')}</td>
+        <td>${esc(x.status || '')}</td>
+        <td class="num">${money(x.total)}</td>
+        <td class="num">${money(x.balance)}</td>
+      </tr>`).join('')}
+    </tbody>`;
+  el.querySelectorAll('tbody tr').forEach(tr => {
+    const r = rows[+tr.dataset.idx];
+    tr.onclick = () => openRecordDetailModal('invoice', r);
+  });
+}
+
+// Current calendar month, Dubai-local, as ['YYYY-MM-DD','YYYY-MM-DD'] -- NOT
+// derived from base()/S.f, since the Accounting page has no date filter of
+// its own and shouldn't inherit whatever range was last set on another page.
+function currentMonthBoundsKeys() {
+  const now = dubaiDate(Date.now());
+  const y = now.getUTCFullYear(), m = now.getUTCMonth();
+  const start = `${y}-${pad(m + 1)}-01`;
+  const end = dkey(Date.now());
+  return [start, end];
+}
+
+// GrubCENTER's own Net Sales and portal commission for the current month --
+// the revenue side Zoho Books never records (this org books vendor bills but
+// no sales invoices), computed straight from order data like every other
+// page already does.
+function grubCenterMonthFigures() {
+  const [from, to] = currentMonthBoundsKeys();
+  const O = S.orders.filter(o => !o.cancelled && dkey(o.receivedAt) >= from && dkey(o.receivedAt) <= to);
+  return {
+    netSales: sum(O, o => o.netSales),
+    commission: sum(O, o => FHCommission.commissionForOrder(o))
+  };
+}
+
+function openTrueProfitDrillModal() {
+  renderTrueProfitDrillBody();
+  openKpiModal('True Net Profit — GrubCENTER Revenue + Zoho Expenses', 'Blends this month\'s real GrubCENTER sales with Zoho\'s actual booked operating expenses.');
+}
+function renderTrueProfitDrillBody() {
+  const body = $('#kpiModalBody');
+  const z = S.zoho;
+  if (!body || !z) return;
+  const grub = grubCenterMonthFigures();
+  const trueNetProfit = grub.netSales - grub.commission - z.expenses;
+  const rows = [
+    { label: 'GrubCENTER Net Sales', amount: grub.netSales, cls: '' },
+    { label: '(−) GrubCENTER Commission', amount: -grub.commission, cls: '' },
+    { label: '(−) Zoho Operating Expenses (vendor bills)', amount: -z.expenses, cls: '' },
+    { label: '= True Net Profit', amount: trueNetProfit, cls: 'pl-total' }
+  ];
+  body.innerHTML = `
+    <div class="a-plwaterfall">
+      <table>
+        <thead><tr><th>Line</th><th>AED</th></tr></thead>
+        <tbody>
+          ${rows.map(r => `<tr class="${r.cls}"><td>${esc(r.label)}</td><td class="cost-amt">${money(r.amount)}</td></tr>`).join('')}
+        </tbody>
+      </table>
+      <div class="pl-memo">Zoho's own "Total Income" shows AED 0 this month because this business doesn't book sales invoices in Zoho -- all real revenue is tracked in GrubCENTER instead.</div>
+    </div>`;
+}
+
+function renderAccounting() {
+  const z = S.zoho;
+  const has = z && z.lastSync;
+  const drill = fn => has ? fn : null;
+  const grub = grubCenterMonthFigures();
+  const trueNetProfit = has ? grub.netSales - grub.commission - z.expenses : 0;
+  const bankOnly = has ? (z.bankAccounts || []).filter(a => a.type === 'bank').reduce((s, a) => s + (+a.balance || 0), 0) : 0;
+  const cashOnly = has ? (z.bankAccounts || []).filter(a => a.type === 'cash').reduce((s, a) => s + (+a.balance || 0), 0) : 0;
+
+  kpis('kpi-accounting', [
+    ['Total Income', has ? money(z.income) : '–', false, drill(openAccountingTrendDrillModal), false, 'Total operating + non-operating income for the current month (Zoho Books Profit & Loss). Click for the full month-by-month history.', 'drill'],
+    ['Total Expenses', has ? money(z.expenses) : '–', false, drill(openAccountingTrendDrillModal), false, 'Cost of Goods Sold + Operating + Non-Operating Expenses for the current month. Click for the full month-by-month history.', 'drill'],
+    ['Net Profit', has ? money(z.netProfit) : '–', false, drill(openAccountingTrendDrillModal), false, 'Total Income − Total Expenses for the current month. Click for the full month-by-month history.', 'drill'],
+    ['Net Margin %', has ? pc(z.netMargin, 1) : '–', false, drill(openAccountingTrendDrillModal), false, 'Net Profit / Total Income. Click for the full month-by-month history.', 'drill'],
+    ['Bank Balance', has ? money(bankOnly) : '–', false, drill(() => openAccountingCashDrillModal('bank')), false, 'Sum of all active bank account balances in Zoho Books. Click for the per-account breakdown.', 'drill'],
+    ['Cash', has ? money(cashOnly) : '–', false, drill(() => openAccountingCashDrillModal('cash')), false, 'Sum of all active cash account balances in Zoho Books. Click for the per-account breakdown.', 'drill'],
+    ['A/R Outstanding', has ? money(z.ar) : '–', false, drill(() => openAccountingAgingDrillModal('ar')), false, 'Total unpaid invoice balance (Accounts Receivable aging summary). Click for the aging breakdown and outstanding invoices.', 'drill'],
+    ['A/P Outstanding', has ? money(z.ap) : '–', false, drill(() => openAccountingAgingDrillModal('ap')), false, 'Total unpaid bill balance (Accounts Payable aging summary). Click for the aging breakdown and outstanding bills.', 'drill'],
+    ['Overdue Invoices', has ? `${z.overdueInvoices.count} · ${money(z.overdueInvoices.amount)}` : '–', false, drill(() => openAccountingOverdueDrillModal('invoices')), false, 'Count and total balance of invoices past their due date. Click to list them.', 'drill'],
+    ['Overdue Bills', has ? money(z.overdueBills.amount) : '–', false, drill(() => openAccountingOverdueDrillModal('bills')), false, `Total balance of ${has ? z.overdueBills.count : 0} vendor bill(s) past their due date. Click to list them.`, 'drill'],
+    ['Total Invoices', has ? cnt(z.invoices.length) : '–', false, drill(() => show('export')), false, 'All Zoho Books invoices, any status. Click to open Data Export and download the full list.', 'nav'],
+    ['Total Bills', has ? cnt(z.bills.length) : '–', false, drill(() => show('export')), false, 'All Zoho Books bills, any status. Click to open Data Export and download the full list.', 'nav'],
+    ['Top Vendor Owed', has ? topVendorOwedLabel(z) : '–', true, drill(() => openAccountingAgingDrillModal('ap')), false, 'The vendor with the highest total outstanding balance across all their bills. Click for the full A/P breakdown.', 'drill'],
+    ['GrubCENTER Net Sales', money(grub.netSales), false, () => show('ebitda'), false, 'Net Sales for the current month, from GrubCENTER order data (the real revenue source -- Zoho Books never records sales invoices for this business). Click to see the full P&L on the EBITDA page.', 'nav'],
+    ['GrubCENTER Commission', money(grub.commission), false, () => show('commission'), false, 'Portal/aggregator commission for the current month, computed from order data. Click to see the full channel breakdown on the Commission page.', 'nav'],
+    ['True Net Profit', has ? money(trueNetProfit) : '–', true, drill(openTrueProfitDrillModal), false, 'GrubCENTER Net Sales − GrubCENTER Commission − Zoho Operating Expenses, for the current month. Click for the full breakdown.', 'drill']
+  ]);
+
+  if (!has) {
+    const el = $('#acctLastSync');
+    if (el) el.textContent = z && z.configured === false ? 'Zoho Books is not configured on this server.' : 'Waiting for first Zoho Books sync…';
+    return;
+  }
+
+  const labels = z.trend.map(t => t.label);
+  lineChart('c-acctrend', labels, [
+    { name: 'Income', color: Y, data: z.trend.map(t => t.income) },
+    { name: 'Expenses', color: '#e53935', data: z.trend.map(t => t.expenses) },
+    { name: 'Net Profit', color: BLUE, data: z.trend.map(t => t.netProfit) }
+  ], { fmt: money });
+
+  hbar('c-araging', (z.arAging || []).map(b => ({ k: b.label, v: b.amount })), { fmt: money, color: Y, name: 'A/R' });
+  hbar('c-apaging', (z.apAging || []).map(b => ({ k: b.label, v: b.amount })), { fmt: money, color: '#e53935', name: 'A/P' });
+
+  renderAccountingBillsTable(z);
+  renderAccountingInvoicesTable(z);
+
+  const el = $('#acctLastSync');
+  if (el) {
+    const mins = Math.max(0, Math.round((Date.now() - z.lastSync) / 60000));
+    el.textContent = `Zoho Books synced ${mins < 1 ? 'just now' : mins + 'm ago'} · ${z.currency || 'AED'}`;
+  }
+}
+
 // ---------------- render & navigation ----------------
-const RENDER = { sales: renderSales, cancel: renderCancel, prep: renderPrep, ratings: renderRatings, items: renderItemsPage, delayed: renderDelayed, commission: renderCommission, ebitda: renderEbitda, export: renderExport };
+const RENDER = { sales: renderSales, cancel: renderCancel, prep: renderPrep, ratings: renderRatings, items: renderItemsPage, delayed: renderDelayed, commission: renderCommission, ebitda: renderEbitda, accounting: renderAccounting, export: renderExport };
 function render() { RENDER[S.page](); }
 
 function show(page) {
@@ -2531,6 +2865,36 @@ function mapPlRow(r, net) {
   return { Line: r.label, 'Amount (AED)': round2(r.amount), '% of Net Sales': net ? pc(r.amount / net, 1) : '–' };
 }
 
+const INVOICE_COLUMNS = ['Invoice Number', 'Customer', 'Invoice Date', 'Due Date', 'Status', 'Total', 'Balance Due', 'Currency'];
+function mapInvoiceRow(x) {
+  return {
+    'Invoice Number': x.invoice_number, Customer: x.customer_name, 'Invoice Date': x.date, 'Due Date': x.due_date,
+    Status: x.status, Total: round2(x.total), 'Balance Due': round2(x.balance), Currency: x.currency_code
+  };
+}
+const INVOICE_MONEY_COLS = ['Total', 'Balance Due'];
+
+const BILL_COLUMNS = ['Bill Number', 'Vendor', 'Bill Date', 'Due Date', 'Status', 'Total', 'Balance Due', 'Currency'];
+function mapBillRow(x) {
+  return {
+    'Bill Number': x.bill_number, Vendor: x.vendor_name, 'Bill Date': x.date, 'Due Date': x.due_date,
+    Status: x.status, Total: round2(x.total), 'Balance Due': round2(x.balance), Currency: x.currency_code
+  };
+}
+const BILL_MONEY_COLS = ['Total', 'Balance Due'];
+
+// Unlike Orders/Items/Events, Zoho invoices/bills are NOT scoped to this
+// page's from/to filter -- that filter defaults to "Today" and is driven by
+// GrubCENTER order-received dates, a completely separate domain from Zoho's
+// own bill/invoice dates, so filtering by it made this always show "0" by
+// default even with real data present. Always export the full list instead.
+function exportInvoicesInRange() {
+  return (S.zoho && S.zoho.invoices) || [];
+}
+function exportBillsInRange() {
+  return (S.zoho && S.zoho.bills) || [];
+}
+
 function exportOrdersInRange() {
   return S.orders.filter(o => dateOk(o.receivedAt) && eq(o.brand, S.f.brand) && eq(o.location, S.f.location));
 }
@@ -2560,6 +2924,8 @@ function renderExport() {
   $('#expOrdersCount').textContent = `${cnt(orders.length)} orders in range`;
   $('#expItemsCount').textContent = `${cnt(lines.length)} item-sale lines in range`;
   $('#expEventsCount').textContent = `${cnt(events.length)} 86/out-of-stock events in range`;
+  if ($('#expInvoicesCount')) $('#expInvoicesCount').textContent = `${cnt(exportInvoicesInRange().length)} invoices total`;
+  if ($('#expBillsCount')) $('#expBillsCount').textContent = `${cnt(exportBillsInRange().length)} bills total`;
   const pl = computeExportPL();
   $('#expPLSummary').textContent = pl ? `Net Sales ${money(pl.net)} · EBITDA ${money(pl.eb)} in range` : 'No data for range';
 }
@@ -2575,6 +2941,13 @@ function wireExportButtons() {
   $('#expItemsXlsx').onclick = () => downloadXLSX(fname('ItemSales', 'xlsx'), 'Item Sales', LINE_ITEM_COLUMNS, exportLineItemsInRange().map(mapLineItemRow), LINE_ITEM_MONEY_COLS);
   $('#expEventsCsv').onclick = () => downloadCSV(fname('86Events', 'csv'), EVENT_COLUMNS, exportEventsInRange().map(mapEventRow));
   $('#expEventsXlsx').onclick = () => downloadXLSX(fname('86Events', 'xlsx'), '86 Events', EVENT_COLUMNS, exportEventsInRange().map(mapEventRow), []);
+  // Not date-scoped (see exportInvoicesInRange/exportBillsInRange), so the
+  // filename shouldn't imply a from/to range the way the other exports do.
+  const zfname = (name, ext) => `FoodHive_${name}_${dkey(Date.now())}.${ext}`;
+  if ($('#expInvoicesCsv')) $('#expInvoicesCsv').onclick = () => downloadCSV(zfname('ZohoInvoices', 'csv'), INVOICE_COLUMNS, exportInvoicesInRange().map(mapInvoiceRow));
+  if ($('#expInvoicesXlsx')) $('#expInvoicesXlsx').onclick = () => downloadXLSX(zfname('ZohoInvoices', 'xlsx'), 'Invoices', INVOICE_COLUMNS, exportInvoicesInRange().map(mapInvoiceRow), INVOICE_MONEY_COLS);
+  if ($('#expBillsCsv')) $('#expBillsCsv').onclick = () => downloadCSV(zfname('ZohoBills', 'csv'), BILL_COLUMNS, exportBillsInRange().map(mapBillRow));
+  if ($('#expBillsXlsx')) $('#expBillsXlsx').onclick = () => downloadXLSX(zfname('ZohoBills', 'xlsx'), 'Bills', BILL_COLUMNS, exportBillsInRange().map(mapBillRow), BILL_MONEY_COLS);
   $('#expPlCsv').onclick = () => {
     const pl = computeExportPL(); if (!pl) return;
     downloadCSV(fname('PL', 'csv'), PL_COLUMNS, pl.rows.map(r => mapPlRow(r, pl.net)));
@@ -2666,6 +3039,41 @@ async function syncNow() {
   }
 }
 if ($('#btnSync')) $('#btnSync').onclick = syncNow;
+
+let acctSyncPolling = false;
+async function syncAccountingNow() {
+  if (acctSyncPolling) return;
+  const btn = $('#btnAcctSync'), msg = $('#acctSyncMsg');
+  if (!btn) return;
+  btn.disabled = true; btn.textContent = '⏳ Syncing…';
+  if (msg) { msg.textContent = ''; msg.className = 'sync-msg'; }
+  const done = (text, cls) => {
+    if (msg) { msg.textContent = text; msg.className = 'sync-msg' + (cls ? ' ' + cls : ''); }
+    btn.disabled = false; btn.textContent = '🔄 Sync Now';
+    acctSyncPolling = false;
+  };
+  try {
+    const before = (S.zoho && S.zoho.lastSync) || 0;
+    const res = await fetch('/api/accounting/refresh', { method: 'POST' }).then(r => r.json());
+    if (res.configured === false) { done(res.message || 'Zoho Books not configured on this server', 'err'); return; }
+    acctSyncPolling = true;
+    const deadline = Date.now() + 90000;
+    (async function poll() {
+      if (Date.now() > deadline) { done('Still syncing in the background — check back shortly'); return; }
+      const z = await fetch('/api/accounting').then(r => r.json()).catch(() => null);
+      if (z && z.lastSync > before) {
+        S.zoho = z;
+        if (S.page === 'accounting') render();
+        done('✓ Synced', 'ok');
+        return;
+      }
+      setTimeout(poll, 2500);
+    })();
+  } catch (e) {
+    done('✗ ' + e.message, 'err');
+  }
+}
+if ($('#btnAcctSync')) $('#btnAcctSync').onclick = syncAccountingNow;
 $('#mClose').onclick = () => { $('#modal').hidden = true; };
 if ($('#kpiModalClose')) $('#kpiModalClose').onclick = () => { $('#kpiModal').hidden = true; };
 if ($('#kpiModalClose2')) $('#kpiModalClose2').onclick = () => { $('#kpiModal').hidden = true; };
@@ -2782,7 +3190,10 @@ function loadDemo() {
     show(initialPage);
   }
 
-  // 2. Check live status non-blockingly in the background
+  // 2. Accounting KPIs (Zoho Books) — independent of the orders fetch above, non-blocking
+  fetch('/api/accounting').then(r => r.json()).then(z => { S.zoho = z; if (S.page === 'accounting') render(); }).catch(() => {});
+
+  // 2b. Check live status non-blockingly in the background
   fetch('/api/status').then(r => r.json()).then(st => {
     if (st && st.connected) {
       const badge = $('#srcBadge');
@@ -2813,6 +3224,7 @@ function loadDemo() {
         }
       }
     } catch (_) {}
+    fetch('/api/accounting').then(r => r.json()).then(z => { S.zoho = z; if (S.page === 'accounting') render(); }).catch(() => {});
   }, 10 * 60 * 1000);
 
   window.S = S;

@@ -289,10 +289,14 @@ async function syncOnce(from, to, itemsFrom) {
   // just because this sync only covers the recent window).
   const normOrderItems = N.normalizeOrderItems(rawOrderItems);
   const touchedDays = new Set(dayChunks(orderItemsFrom, t));
+  // An invalid/missing `at` makes dubaiDateKey() return "NaN-NaN-NaN", which
+  // never matches touchedDays -- drop such rows instead of letting them
+  // silently survive every future resync forever.
+  const hasValidDate = x => !dubaiDateKey(x.at).includes('NaN');
   const existingOrderItems = await readOrderItems();
   const orderItemsArray = existingOrderItems
-    .filter(x => !touchedDays.has(dubaiDateKey(x.at)))
-    .concat(normOrderItems);
+    .filter(x => hasValidDate(x) && !touchedDays.has(dubaiDateKey(x.at)))
+    .concat(normOrderItems.filter(hasValidDate));
   await writeOrderItems(orderItemsArray);
 
   await writeMeta({

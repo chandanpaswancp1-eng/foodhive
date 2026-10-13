@@ -6,5 +6,13 @@
   ],
   "crons": [
     { "path": "/api/sync-cron", "schedule": "0 3 * * *" }
-  ]
+  ],
+  "functions": {
+    "api/sync-cron.js": { "maxDuration": 60 },
+    "api/orders.js": { "maxDuration": 60 },
+    "api/order-items.js": { "maxDuration": 60 },
+    "api/refresh.js": { "maxDuration": 60 },
+    "api/accounting.js": { "maxDuration": 60 },
+    "api/accounting/refresh.js": { "maxDuration": 60 }
+  }
 }

@@ -177,7 +177,11 @@
         postCancelled: cancelled && (map.postCancelled !== undefined ? truthy(g('postCancelled')) : (r.postCancelled || !!toDate(g('acceptedAt')))),
         reason: str(g('reason')) || (cancelled ? 'Unspecified' : ''),
         rating: num(g('rating')) || null,
-        estPrep: num(g('estPrep')) || null
+        // Presence-checked (not `|| null`): a genuine 0-minute estimate must
+        // survive as 0, not collapse to null -- renderDelayed() then falls
+        // back to a 15-min default for null, which would wrongly overwrite a
+        // real 0 and change whether the order gets flagged as delayed.
+        estPrep: g('estPrep') !== undefined ? num(g('estPrep')) : null
       };
     }).filter(o => o.receivedAt);
   }

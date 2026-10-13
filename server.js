@@ -13,6 +13,12 @@ const zlib = require('zlib');
 const { URL } = require('url');
 const N = require('./public/normalize.js');
 
+// This is a long-running process serving every user -- one unexpected
+// exception (e.g. from a response write on an already-aborted connection)
+// must never take the whole server down. Log and keep running instead.
+process.on('uncaughtException', err => console.error('[Uncaught Exception]', err));
+process.on('unhandledRejection', err => console.error('[Unhandled Rejection]', err));
+
 // ---------- .env ----------
 try {
   fs.readFileSync(path.join(__dirname, '.env'), 'utf8').split(/\r?\n/).forEach(l => {
@@ -39,7 +45,15 @@ const CFG = {
   cancelPath: '/sales-data/cancelled-orders/report/',
   itemsPath: E.GRUBCENTER_ITEMS_PATH || '/operations-data/item-availability/snapshot/',
   orderItemsPath: E.GRUBCENTER_ORDER_ITEMS_PATH || '/menu-data/menu-items/order-items-sales/',
-  pageSize: +E.GRUBCENTER_PAGE_SIZE || 200
+  pageSize: +E.GRUBCENTER_PAGE_SIZE || 200,
+
+  // Zoho Books (OAuth2 self-client, read-only scopes)
+  zohoClientId: E.ZOHO_CLIENT_ID,
+  zohoClientSecret: E.ZOHO_CLIENT_SECRET,
+  zohoRefreshToken: E.ZOHO_REFRESH_TOKEN,
+  zohoAccountsDomain: E.ZOHO_ACCOUNTS_DOMAIN || 'https://accounts.zoho.com',
+  zohoApiDomain: E.ZOHO_API_DOMAIN || 'https://www.zohoapis.com',
+  zohoOrgId: E.ZOHO_ORG_ID
 };
 
 // ---------- auth ----------
@@ -206,7 +220,8 @@ const STORE = {
   lastSync: 0,
   syncing: false,
   liveOpsCount: 0,
-  liveCancelCount: 0
+  liveCancelCount: 0,
+  zoho: null
 };
 
 // 1. Initial preload from disk
@@ -241,6 +256,11 @@ function preloadData() {
 
   if (fs.existsSync(orderItemsFile)) {
     try { STORE.orderItemsArray = JSON.parse(fs.readFileSync(orderItemsFile, 'utf8')); } catch (_) {}
+  }
+
+  const zohoFile = path.join(__dirname, 'data', 'zoho_cache.json');
+  if (fs.existsSync(zohoFile)) {
+    try { STORE.zoho = JSON.parse(fs.readFileSync(zohoFile, 'utf8')); } catch (_) {}
   }
 
   console.log(`[Cache Preload] Loaded ${STORE.ordersArray.length} master FoodHive orders, ${STORE.itemsArray.length} 86-items & ${STORE.orderItemsArray.length} order line items in ${Date.now() - t0}ms`);
@@ -358,9 +378,13 @@ async function syncGrubcenter(from, to, itemsFrom) {
     // must not be wiped out just because this sync only covers oiFrom..t.
     const normOrderItems = N.normalizeOrderItems(rawOrderItems);
     const touchedDays = new Set(dayChunks(oiFrom, t));
+    // An invalid/missing `at` makes dubaiDateKey() return "NaN-NaN-NaN", which
+    // never matches touchedDays -- drop such rows instead of letting them
+    // silently survive every future resync forever.
+    const hasValidDate = x => !dubaiDateKey(x.at).includes('NaN');
     STORE.orderItemsArray = STORE.orderItemsArray
-      .filter(x => !touchedDays.has(dubaiDateKey(x.at)))
-      .concat(normOrderItems);
+      .filter(x => hasValidDate(x) && !touchedDays.has(dubaiDateKey(x.at)))
+      .concat(normOrderItems.filter(hasValidDate));
     console.log(`[GrubCENTER Sync Complete] ${STORE.orderItemsArray.length} order line items in store (${normOrderItems.length} refreshed for this window)`);
 
     // Async persist to disk
@@ -398,6 +422,206 @@ const SYNC_INTERVAL_MS = 10 * 60 * 1000;
 setInterval(() => {
   if (CFG.email && CFG.password) syncGrubcenter(daysAgo(14), today(), daysAgo(7)).catch(() => {});
 }, SYNC_INTERVAL_MS);
+
+// ---------- Zoho Books (accounting) ----------
+let zohoSession = null;
+
+async function zohoLogin() {
+  if (!(CFG.zohoClientId && CFG.zohoClientSecret && CFG.zohoRefreshToken)) {
+    throw new Error('ZOHO_CLIENT_ID / ZOHO_CLIENT_SECRET / ZOHO_REFRESH_TOKEN not set');
+  }
+  const r = await fetch(`${CFG.zohoAccountsDomain}/oauth/v2/token`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      grant_type: 'refresh_token',
+      client_id: CFG.zohoClientId,
+      client_secret: CFG.zohoClientSecret,
+      refresh_token: CFG.zohoRefreshToken
+    })
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok || j.error) throw new Error('Zoho auth failed: ' + (j.error || r.status));
+  zohoSession = { accessToken: j.access_token, exp: Date.now() + (j.expires_in - 60) * 1000 };
+  return zohoSession;
+}
+const ensureZohoSession = async () => (zohoSession && zohoSession.exp > Date.now() ? zohoSession : zohoLogin());
+
+async function zget(p, query) {
+  const s = await ensureZohoSession();
+  const qp = new URLSearchParams({ organization_id: CFG.zohoOrgId, ...(query || {}) });
+  const url = `${CFG.zohoApiDomain}/books/v3${p}?${qp}`;
+  const r = await fetch(url, { headers: { Authorization: `Zoho-oauthtoken ${s.accessToken}` } });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok || (typeof j.code === 'number' && j.code !== 0)) {
+    throw new Error(`Zoho ${r.status} ${p}: ${j.message || r.statusText}`);
+  }
+  return j;
+}
+
+// Zoho list endpoints (invoices/bills) cap at per_page=200 and flag more pages via page_context.has_more_page.
+async function zGetAllPages(p, listKey, query) {
+  const all = [];
+  for (let page = 1; ; page++) {
+    const j = await zget(p, { ...query, per_page: 200, page });
+    all.push(...(j[listKey] || []));
+    if (!j.page_context || !j.page_context.has_more_page) break;
+  }
+  return all;
+}
+
+// Zoho's Profit & Loss report nests sections arbitrarily deep (e.g. "Gross
+// Profit" > account_transactions > "Operating Income" / "Cost of Goods
+// Sold"), so this recurses into a flat { "Operating Income": 12345, ... }
+// name->total lookup instead of assuming a fixed depth. First-occurrence-wins
+// (not last) -- if a name were ever repeated at a deeper level, the
+// authoritative top-level total (visited first in a top-down walk) must not
+// be silently overwritten by a coincidentally-same-named descendant.
+function flattenPL(rows, map) {
+  map = map || {};
+  for (const r of (rows || [])) {
+    if (!(r.name in map)) map[r.name] = +r.total || 0;
+    if (r.account_transactions && r.account_transactions.length) flattenPL(r.account_transactions, map);
+  }
+  return map;
+}
+
+function monthRange(offsetMonths) {
+  const now = new Date(Date.now() + DUBAI_OFFSET_MS);
+  const y = now.getUTCFullYear(), m = now.getUTCMonth() + offsetMonths;
+  const start = new Date(Date.UTC(y, m, 1));
+  const end = new Date(Date.UTC(y, m + 1, 0));
+  const iso = d => d.toISOString().slice(0, 10);
+  return {
+    from: iso(start), to: iso(end),
+    key: `${start.getUTCFullYear()}-${pad2(start.getUTCMonth() + 1)}`,
+    label: start.toLocaleString('en-US', { month: 'short', year: '2-digit', timeZone: 'UTC' })
+  };
+}
+
+async function fetchPLTotals(from, to) {
+  const j = await zget('/reports/profitandloss', { from_date: from, to_date: to });
+  const m = flattenPL(j.profit_and_loss);
+  const income = (m['Operating Income'] || 0) + (m['Non Operating Income'] || 0);
+  const expenses = (m['Cost of Goods Sold'] || 0) + (m['Operating Expense'] || 0) + (m['Non Operating Expense'] || 0);
+  const netProfit = m['Net Profit/Loss'] != null ? m['Net Profit/Loss'] : income - expenses;
+  return { income, expenses, netProfit };
+}
+
+// One-time (first sync only): find the real start of this org's books by
+// asking Zoho for its single earliest bill and earliest invoice, so the P&L
+// trend can be backfilled from actual day one instead of a guessed window.
+async function findEarliestBookDate() {
+  let earliest = null;
+  for (const [p, key] of [['/bills', 'bills'], ['/invoices', 'invoices']]) {
+    try {
+      const j = await zget(p, { sort_column: 'date', sort_order: 'A', per_page: 1 });
+      const d = j[key] && j[key][0] && j[key][0].date;
+      if (d && (!earliest || d < earliest)) earliest = d;
+    } catch (_) { /* endpoint unavailable or empty -- fall through */ }
+  }
+  return earliest; // 'YYYY-MM-DD' or null if the org has no bills/invoices yet
+}
+
+// How many whole months back `dateStr`'s month is from the current
+// (Dubai-local) month -- e.g. last month = 1, this month = 0.
+function monthsBack(dateStr) {
+  const now = new Date(Date.now() + DUBAI_OFFSET_MS);
+  const [y, m] = dateStr.split('-').map(Number);
+  return (now.getUTCFullYear() - y) * 12 + (now.getUTCMonth() - (m - 1));
+}
+
+// Pull live accounting KPIs: a permanently-cumulative P&L trend (backfilled
+// once from the org's actual earliest bill/invoice, then only rolled
+// forward -- never capped/truncated), cash position, A/R & A/P aging, and
+// the full invoice/bill lists (for both the overdue KPIs and raw export).
+async function syncZoho() {
+  if (!(CFG.zohoClientId && CFG.zohoClientSecret && CFG.zohoRefreshToken && CFG.zohoOrgId)) return;
+  // Without this, the 10-min interval, the manual "Sync Now" button, and a
+  // stale-triggered request can all kick off a full sequential backfill at
+  // once -- duplicating work and risking Zoho's per-minute rate limit, the
+  // exact failure mode the sequential-fetch fix above was written to avoid.
+  if (STORE.zohoSyncing) return;
+  STORE.zohoSyncing = true;
+  try {
+    console.log('[Zoho Sync] Pulling accounting KPIs...');
+
+    const prevByKey = new Map(((STORE.zoho && STORE.zoho.trend) || []).map(t => [t.key, t]));
+    let offsetsToFetch;
+    if (prevByKey.size === 0) {
+      // First-ever sync: backfill every month since the org's actual first
+      // bill/invoice, not a guessed window, so nothing is missed.
+      const earliest = await findEarliestBookDate();
+      const monthsOfHistory = earliest ? monthsBack(earliest) : 0;
+      offsetsToFetch = Array.from({ length: monthsOfHistory + 1 }, (_, i) => i - monthsOfHistory);
+      console.log(`[Zoho Sync] First run -- backfilling ${offsetsToFetch.length} month(s) of P&L history from ${earliest || 'this month'}`);
+    } else {
+      // Closed months don't change -- only refresh current + previous month.
+      offsetsToFetch = [-1, 0];
+    }
+
+    // Sequential, not parallel: Zoho's reports endpoints enforce a fairly
+    // tight per-minute request cap, and firing these calls concurrently
+    // reliably triggers a 429 "exceeded the maximum number of requests per
+    // minute" block that then takes several minutes to clear.
+    const fetched = [];
+    for (const offset of offsetsToFetch) {
+      const { key, label, from, to } = monthRange(offset);
+      const totals = await fetchPLTotals(from, to);
+      fetched.push({ key, label, ...totals });
+    }
+    fetched.forEach(f => prevByKey.set(f.key, f));
+
+    // Unbounded and permanently cumulative -- once a month is fetched it
+    // stays in the trend forever (sorted chronologically by key), instead of
+    // being capped/sliced to a fixed trailing window.
+    const trend = [...prevByKey.values()].sort((a, b) => a.key < b.key ? -1 : a.key > b.key ? 1 : 0);
+    const current = trend[trend.length - 1];
+
+    const bankResp = await zget('/bankaccounts', {});
+    const arAging = await zget('/reports/aragingsummary', { to_date: today() });
+    const apAging = await zget('/reports/apagingsummary', { to_date: today() });
+    // Full lists (all statuses), not just overdue -- these double as both
+    // the overdue KPI source below and the raw data for Data Export.
+    const allInvoices = await zGetAllPages('/invoices', 'invoices', {});
+    const allBills = await zGetAllPages('/bills', 'bills', {});
+    const overdueInvoices = allInvoices.filter(i => i.status === 'overdue');
+    const overdueBills = allBills.filter(b => b.status === 'overdue');
+
+    const activeBankAccounts = (bankResp.bankaccounts || []).filter(a => a.is_active && (a.account_type === 'bank' || a.account_type === 'cash'));
+
+    const toBuckets = intervals => (intervals || []).map(i => ({ label: i.interval_formatted, amount: +i.amount || 0 }));
+
+    STORE.zoho = {
+      income: current.income,
+      expenses: current.expenses,
+      netProfit: current.netProfit,
+      netMargin: current.income ? current.netProfit / current.income : 0,
+      bankAccounts: activeBankAccounts.map(a => ({ name: a.account_name, type: a.account_type, balance: +a.balance || 0, currency: a.currency_code })),
+      ar: arAging.invoice ? +arAging.invoice.total || 0 : 0,
+      ap: apAging.bills ? +apAging.bills.total || 0 : 0,
+      arAging: toBuckets(arAging.invoice && arAging.invoice.intervals),
+      apAging: toBuckets(apAging.bills && apAging.bills.intervals),
+      overdueInvoices: { count: overdueInvoices.length, amount: overdueInvoices.reduce((s, i) => s + (+i.balance || 0), 0) },
+      overdueBills: { count: overdueBills.length, amount: overdueBills.reduce((s, b) => s + (+b.balance || 0), 0) },
+      invoices: allInvoices,
+      bills: allBills,
+      trend,
+      currency: (bankResp.bankaccounts && bankResp.bankaccounts[0] && bankResp.bankaccounts[0].currency_code) || 'AED',
+      lastSync: Date.now()
+    };
+
+    fs.writeFile(path.join(__dirname, 'data', 'zoho_cache.json'), JSON.stringify(STORE.zoho), () => {});
+    console.log(`[Zoho Sync Complete] Income ${STORE.zoho.income}, Expenses ${STORE.zoho.expenses}, Net Profit ${STORE.zoho.netProfit}`);
+  } catch (err) {
+    console.error('[Zoho Sync Error]', err.message);
+  } finally {
+    STORE.zohoSyncing = false;
+  }
+}
+
+setTimeout(() => { syncZoho().catch(() => {}); }, 1500);
+setInterval(() => { syncZoho().catch(() => {}); }, SYNC_INTERVAL_MS);
 
 // ---------- HTTP SERVER ----------
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.png': 'image/png', '.svg': 'image/svg+xml', '.json': 'application/json' };
@@ -458,9 +682,17 @@ http.createServer(async (req, res) => {
         });
       }
 
-      // If cache is stale (>10 min) and not currently syncing, kick off background sync
+      // If cache is stale (>10 min) and not currently syncing, kick off background
+      // sync -- narrowed to a recent window when the client passed no explicit
+      // range (the common case), matching the scheduled 10-min refresh and the
+      // Vercel mirror's api/orders.js: a full syncGrubcenter() default (45 days)
+      // takes minutes, so firing that on every stale page load left "today"
+      // visibly lagging GrubCENTER's live totals between syncs.
       if (Date.now() - STORE.lastSync > SYNC_INTERVAL_MS && !STORE.syncing && CFG.email && CFG.password) {
-        syncGrubcenter(from, to).catch(() => {});
+        const bgFrom = from || daysAgo(14);
+        const bgItemsFrom = from || daysAgo(7);
+        const bgTo = to || today();
+        syncGrubcenter(bgFrom, bgTo, bgItemsFrom).catch(() => {});
       }
 
       return sendGzip(req, res, 200, {
@@ -505,14 +737,36 @@ http.createServer(async (req, res) => {
       return sendGzip(req, res, 200, { items: STORE.itemsArray });
     }
 
+    if (u.pathname === '/api/accounting') {
+      const configured = !!(CFG.zohoClientId && CFG.zohoClientSecret && CFG.zohoRefreshToken && CFG.zohoOrgId);
+      return sendGzip(req, res, 200, STORE.zoho || { configured, lastSync: 0 });
+    }
+
+    if (u.pathname === '/api/accounting/refresh') {
+      if (!(CFG.zohoClientId && CFG.zohoClientSecret && CFG.zohoRefreshToken && CFG.zohoOrgId)) {
+        return sendGzip(req, res, 200, { ok: false, configured: false, message: 'Zoho Books credentials not configured on this server' });
+      }
+      syncZoho().catch(() => {});
+      return sendGzip(req, res, 200, { ok: true, configured: true, message: 'Zoho sync started' });
+    }
+
     // Static files
     let f = path.join(__dirname, 'public', u.pathname === '/' ? 'index.html' : decodeURIComponent(u.pathname));
     if (!f.startsWith(path.join(__dirname, 'public'))) { res.writeHead(403); return res.end(); }
     fs.readFile(f, (err, buf) => {
-      if (err) { res.writeHead(404); return res.end('Not found'); }
-      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-      res.writeHead(200, { 'Content-Type': MIME[path.extname(f)] || 'application/octet-stream' });
-      res.end(buf);
+      // This callback runs after the enclosing try/catch has already
+      // returned, so an exception here (e.g. writing to an already-aborted
+      // connection) would otherwise be an uncaught exception on a fresh
+      // stack -- handled directly rather than relying on the process-level
+      // fallback alone.
+      try {
+        if (err) { res.writeHead(404); return res.end('Not found'); }
+        res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+        res.writeHead(200, { 'Content-Type': MIME[path.extname(f)] || 'application/octet-stream' });
+        res.end(buf);
+      } catch (e) {
+        console.error('Static file response error:', e.message);
+      }
     });
   } catch (e) {
     console.error('Server error:', e);

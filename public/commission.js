@@ -57,8 +57,16 @@
 })(typeof self !== 'undefined' ? self : this, function () {
 
   const DAY = 86400000;
-  // Dates below are UTC midnight boundaries for the Deliveroo rate tiers;
-  // orders are matched against these using their receivedAt epoch ms.
+  // Dates below are UTC midnight boundaries for the Deliveroo rate tiers,
+  // meant as Dubai-local (UTC+4) calendar-date cutovers -- rateForChannel()
+  // shifts an order's raw receivedAt epoch ms by this same offset before
+  // comparing, the same correction app.js/server.js apply everywhere else
+  // for day-boundary logic (self-contained here rather than depending on
+  // those files' helpers, since this module is also loaded standalone/in
+  // Node). Without it, an order in the ~4-hour window after Dubai midnight
+  // but before UTC midnight on a cutover date would be matched against the
+  // wrong tier.
+  const DUBAI_OFFSET_MS = 4 * 3600 * 1000;
   const D = (y, m, d) => Date.UTC(y, m - 1, d);
 
   const DELIVEROO_TIERS = [
@@ -79,7 +87,8 @@
     const cfg = CHANNEL_RATES[channel];
     if (!cfg) return 0;
     if (cfg.tiers) {
-      const t = cfg.tiers.find(t => atMs >= t.from && atMs < t.to);
+      const dubaiMs = atMs + DUBAI_OFFSET_MS;
+      const t = cfg.tiers.find(t => dubaiMs >= t.from && dubaiMs < t.to);
       return t ? t.rate : 0;
     }
     return cfg.rate || 0;

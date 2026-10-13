@@ -4,6 +4,7 @@
  * a normal page load, so this is just a daily baseline refresh even if the
  * dashboard sits unopened for a while. */
 const { syncOnce } = require('./_lib/grubcenter');
+const { syncOnce: syncZohoOnce } = require('./_lib/zoho');
 
 module.exports = async (req, res) => {
   if (process.env.CRON_SECRET) {
@@ -15,7 +16,8 @@ module.exports = async (req, res) => {
   }
   try {
     const result = await syncOnce();
-    res.status(200).json(result);
+    const zohoResult = await syncZohoOnce().catch(e => ({ error: e.message }));
+    res.status(200).json({ ...result, zoho: zohoResult });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
