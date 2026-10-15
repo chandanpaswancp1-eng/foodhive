@@ -1,8 +1,10 @@
-/* Vercel Cron target (see vercel.json's "crons"). On the Hobby plan, cron
- * schedules are limited to once a day; the real freshness guarantee comes
- * from api/orders.js kicking off syncOnce() whenever the cache is stale on
- * a normal page load, so this is just a daily baseline refresh even if the
- * dashboard sits unopened for a while. */
+/* Vercel Cron target (see vercel.json's "crons": "0 23 * * *" = 23:00 UTC =
+ * 03:00 Dubai-local, deep overnight/off-hours for this restaurant business).
+ * On the Hobby plan, cron schedules are limited to once a day; the real
+ * freshness guarantee comes from api/orders.js kicking off syncOnce()
+ * whenever the cache is stale on a normal page load, so this is just a daily
+ * baseline refresh (both GrubCENTER and Zoho) even if the dashboard sits
+ * unopened for a while. */
 const { syncOnce } = require('./_lib/grubcenter');
 const { syncOnce: syncZohoOnce } = require('./_lib/zoho');
 

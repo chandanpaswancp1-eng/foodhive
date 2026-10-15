@@ -39,7 +39,7 @@ const dubaiDate = t => new Date(new Date(t).getTime() + DUBAI_OFFSET_MS);
 const dkey = t => { const d = dubaiDate(t); return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`; };
 const dubaiHour = t => dubaiDate(t).getUTCHours();
 const dubaiDOW = t => dubaiDate(t).getUTCDay();
-const money = n => n >= 1e6 ? (n / 1e6).toFixed(2) + 'M' : n >= 1e3 ? (n / 1e3).toFixed(2) + 'K' : n.toFixed(2);
+const money = n => { const s = n < 0 ? '-' : '', a = Math.abs(n); return s + (a >= 1e6 ? (a / 1e6).toFixed(2) + 'M' : a >= 1e3 ? (a / 1e3).toFixed(2) + 'K' : a.toFixed(2)); };
 const cnt = n => n >= 1e6 ? (n / 1e6).toFixed(2) + 'M' : n >= 1e4 ? (n / 1e3).toFixed(1).replace(/\.0$/, '') + 'K' : String(Math.round(n));
 const pc = (n, d = 1) => (n * 100).toFixed(d) + '%';
 const trunc = (s, n = 15) => (s && s.length > n ? s.slice(0, n - 1) + '…' : s || '');
@@ -2200,11 +2200,52 @@ async function downloadPLPdf() {
   doc.save(`FoodHive_PL_${from}_to_${to}.pdf`);
 }
 
+// Read-only reference: the real Zoho Books account-level breakdown behind
+// this month's booked COGS/Operating Expense, shown next to (never feeding
+// into) the manual cost entries above -- Zoho has no Labor data and no
+// reliable automatic mapping onto these 5 generic buckets, so this is
+// informational context for manual reconciliation, not an auto-fill.
+function renderZohoCostRef() {
+  const el = $('#zohoCostRef');
+  if (!el) return;
+  const z = S.zoho;
+  const b = z && z.currentMonthExpenseBreakdown;
+  if (!z || !z.lastSync || !b) {
+    el.textContent = 'Zoho Books not connected -- no real expense data to reference.';
+    return;
+  }
+  el.innerHTML = `Per Zoho Books (this month): Cost of Goods Sold ${money(b.cogs.total)} · Operating Expenses ${money(b.operatingExpense.total)} · <span class="zoho-cost-link" id="zohoCostRefLink">view breakdown</span>`;
+  const link = $('#zohoCostRefLink');
+  if (link) link.onclick = openZohoCostBreakdownModal;
+}
+
+function openZohoCostBreakdownModal() {
+  renderZohoCostBreakdownBody();
+  openKpiModal('Zoho Books — Expense Accounts (This Month)', 'Real booked amounts per account, for reference against your manual cost entries above.');
+}
+function renderZohoCostBreakdownBody() {
+  const body = $('#kpiModalBody');
+  const b = S.zoho && S.zoho.currentMonthExpenseBreakdown;
+  if (!body || !b) return;
+  const section = (title, data) => `
+    <div class="a-ratecard" style="margin-bottom:14px">
+      <table>
+        <thead><tr><th>${esc(title)}</th><th style="text-align:right">Amount</th></tr></thead>
+        <tbody>
+          ${data.items.length ? data.items.map(i => `<tr><td>${esc(i.name)}</td><td style="text-align:right">${money(i.amount)}</td></tr>`).join('') : '<tr><td colspan="2" class="rc-note">No accounts booked this month.</td></tr>'}
+          <tr style="background:#1d1d1d;color:#FCD258;font-weight:700"><td>Total</td><td style="text-align:right">${money(data.total)}</td></tr>
+        </tbody>
+      </table>
+    </div>`;
+  body.innerHTML = section('Cost of Goods Sold', b.cogs) + section('Operating Expense', b.operatingExpense);
+}
+
 function renderEbitda() {
   const O = base('ebitda').filter(o => !o.cancelled);
   const gross = sum(O, o => o.receiptTotal), disc = sum(O, o => o.discount), net = sum(O, o => o.netSales);
   const commission = sum(O, o => FHCommission.commissionForOrder(o));
   const costs = renderCostsBuilder(commission);
+  renderZohoCostRef();
 
   const grossProfit = net - costs.cogs;
   const primeCost = costs.cogs + costs.labor;
@@ -2212,7 +2253,7 @@ function renderEbitda() {
   const afterCommission = afterLabor - commission;
   const controllableProfit = afterCommission - costs.controllable;
   const afterOccupancy = controllableProfit - costs.occupancy;
-  const eb = FHCommission.ebitda(net, commission, costs.total);
+  const eb = afterOccupancy - costs.ga;
 
   kpis('kpi-ebitda', [
     ['Net Sales', money(net), false, () => { openEbitdaDrillModal(); }, false, 'Net Sales for the current filter. Click to view the full P&L waterfall.', 'drill'],
@@ -2295,21 +2336,27 @@ function renderAccountingTrendDrillBody() {
   const body = $('#kpiModalBody');
   const z = S.zoho;
   if (!body || !z) return;
+  const { byMonth, coverageStart } = grubCenterNetSalesByMonth();
   const rows = (z.trend || []).slice().reverse();
   body.innerHTML = `
     <div class="a-ratecard">
       <table>
         <thead><tr><th>Month</th><th style="text-align:right">Income</th><th style="text-align:right">Expenses</th><th style="text-align:right">Net Profit</th><th style="text-align:right">Net Margin</th></tr></thead>
         <tbody>
-          ${rows.map(r => `<tr>
+          ${rows.map(r => {
+            const noData = !coverageStart || r.key < coverageStart;
+            const income = noData ? null : (byMonth[r.key] || 0);
+            const netProfit = noData ? null : income - r.expenses;
+            return `<tr${noData ? ' style="color:#999;font-style:italic"' : ''}>
             <td style="font-weight:600">${esc(r.label)}</td>
-            <td style="text-align:right">${money(r.income)}</td>
+            <td style="text-align:right">${income == null ? 'no GrubCENTER data' : money(income)}</td>
             <td style="text-align:right">${money(r.expenses)}</td>
-            <td style="text-align:right;font-weight:600">${money(r.netProfit)}</td>
-            <td style="text-align:right">${r.income ? pc(r.netProfit / r.income, 1) : '–'}</td>
-          </tr>`).join('')}
+            <td style="text-align:right;font-weight:600">${netProfit == null ? 'no GrubCENTER data' : money(netProfit)}</td>
+            <td style="text-align:right">${income ? pc(netProfit / income, 1) : '–'}</td>
+          </tr>`; }).join('')}
         </tbody>
       </table>
+      <div class="pl-memo">Income is GrubCENTER Net Sales for that month; Net Profit is Income − Expenses, before Portal Commission (Zoho Books never records sales invoices for this business, so neither uses Zoho's own income). Expenses are Zoho's own booked figures. Months marked "no GrubCENTER data" are outside this dashboard's cached order history (a rolling ~45-day window) -- not zero revenue.</div>
     </div>`;
 }
 
@@ -2502,6 +2549,39 @@ function currentMonthBoundsKeys() {
   return [start, end];
 }
 
+// 'YYYY-MM' for the live, browser-clock current month -- same format as the
+// server's monthRange().key -- so z.currentMonthKey (the month the synced
+// Zoho P&L actually covers) can be compared against it to detect a stale
+// sync straddling a month rollover.
+function liveCurrentMonthKey() {
+  const now = dubaiDate(Date.now());
+  return `${now.getUTCFullYear()}-${pad(now.getUTCMonth() + 1)}`;
+}
+
+// GrubCENTER Net Sales summed per calendar month ('YYYY-MM', Dubai-local,
+// same key format as z.trend's monthRange().key), across the order history
+// held in S.orders -- used to stand in for Zoho's own "Income", which is
+// always ~0 for this org (no sales invoices booked in Zoho).
+//
+// S.orders only holds a rolling window of GrubCENTER history (45 days by
+// default -- see server.js's daysAgo(45)), while Zoho's own expense trend
+// can reach back to the org's book-opening month. So this also returns
+// coverageStart: the earliest month S.orders actually has order data for.
+// A trend month before that isn't "zero revenue" -- it's simply outside
+// what this dashboard has cached, and callers should show that distinctly
+// (e.g. "–") rather than a misleading hard 0.
+function grubCenterNetSalesByMonth() {
+  const byMonth = {};
+  let minKey = null;
+  S.orders.forEach(o => {
+    const k = dkey(o.receivedAt).slice(0, 7);
+    if (minKey === null || k < minKey) minKey = k;
+    if (o.cancelled) return;
+    byMonth[k] = (byMonth[k] || 0) + (o.netSales || 0);
+  });
+  return { byMonth, coverageStart: minKey };
+}
+
 // GrubCENTER's own Net Sales and portal commission for the current month --
 // the revenue side Zoho Books never records (this org books vendor bills but
 // no sales invoices), computed straight from order data like every other
@@ -2531,7 +2611,9 @@ function renderTrueProfitDrillBody() {
     { label: '(−) Zoho Operating Expenses (vendor bills)', amount: -z.expenses, cls: '' },
     { label: '= True Net Profit', amount: trueNetProfit, cls: 'pl-total' }
   ];
+  const staleMonth = z.currentMonthKey && z.currentMonthKey !== liveCurrentMonthKey();
   body.innerHTML = `
+    ${staleMonth ? `<div class="costs-range-banner">⚠ Zoho's Operating Expenses are from <b>${esc(z.currentMonthKey)}</b>, but GrubCENTER Net Sales/Commission above are already for <b>${esc(liveCurrentMonthKey())}</b> -- the next Zoho sync hasn't caught up to this month yet. True Net Profit below blends two different months.</div>` : ''}
     <div class="a-plwaterfall">
       <table>
         <thead><tr><th>Line</th><th>AED</th></tr></thead>
@@ -2543,20 +2625,61 @@ function renderTrueProfitDrillBody() {
     </div>`;
 }
 
+// Recursively renders a Zoho report tree (Balance Sheet, same shape as P&L)
+// as an indented table -- unlike flattenPL()'s name->total lookup, the
+// Balance Sheet drill shows the FULL hierarchy, not just a couple of totals,
+// so depth/indentation needs to be visible to the reader.
+function renderReportTreeRows(rows, depth) {
+  depth = depth || 0;
+  return (rows || []).map(r => {
+    const label = r.total_label || r.name;
+    const isTotal = !!r.total_label;
+    const row = `<tr${isTotal ? ' style="font-weight:700;background:#f7f3e4"' : ''}>
+      <td style="padding-left:${10 + depth * 16}px">${esc(label)}</td>
+      <td style="text-align:right">${money(r.total)}</td>
+    </tr>`;
+    const children = (r.account_transactions && r.account_transactions.length) ? renderReportTreeRows(r.account_transactions, depth + 1) : '';
+    return row + children;
+  }).join('');
+}
+
+function openBalanceSheetDrillModal() {
+  renderBalanceSheetDrillBody();
+  openKpiModal('Balance Sheet (As of Today)', 'Assets, Liabilities & Equity, per Zoho Books.');
+}
+function renderBalanceSheetDrillBody() {
+  const body = $('#kpiModalBody');
+  const bs = S.zoho && S.zoho.balanceSheet;
+  if (!body || !bs) return;
+  body.innerHTML = `
+    ${bs.balanced === false ? `<div class="costs-range-banner">⚠ Zoho's reported Total Assets (${money(bs.totalAssets)}) don't equal Total Liabilities + Total Equity (${money(bs.totalLiabilities + bs.totalEquity)}). Check the source report in Zoho Books.</div>` : ''}
+    <div class="a-ratecard">
+      <table>
+        <thead><tr><th>Account</th><th style="text-align:right">Amount</th></tr></thead>
+        <tbody>${renderReportTreeRows(bs.tree)}</tbody>
+      </table>
+    </div>`;
+}
+
 function renderAccounting() {
   const z = S.zoho;
   const has = z && z.lastSync;
   const drill = fn => has ? fn : null;
   const grub = grubCenterMonthFigures();
+  // Total Income (GrubCENTER Net Sales) - Total Expenses (Zoho), before
+  // Portal Commission -- kept consistent with the two tiles it's shown
+  // beside, unlike True Net Profit below which additionally subtracts
+  // commission.
+  const netProfit = has ? grub.netSales - z.expenses : 0;
   const trueNetProfit = has ? grub.netSales - grub.commission - z.expenses : 0;
   const bankOnly = has ? (z.bankAccounts || []).filter(a => a.type === 'bank').reduce((s, a) => s + (+a.balance || 0), 0) : 0;
   const cashOnly = has ? (z.bankAccounts || []).filter(a => a.type === 'cash').reduce((s, a) => s + (+a.balance || 0), 0) : 0;
 
   kpis('kpi-accounting', [
-    ['Total Income', has ? money(z.income) : '–', false, drill(openAccountingTrendDrillModal), false, 'Total operating + non-operating income for the current month (Zoho Books Profit & Loss). Click for the full month-by-month history.', 'drill'],
+    ['Total Income', has ? money(grub.netSales) : '–', false, drill(openAccountingTrendDrillModal), false, 'GrubCENTER Net Sales for the current month -- the real revenue source, since Zoho Books never records sales invoices for this business. Click for the full month-by-month history.', 'drill'],
     ['Total Expenses', has ? money(z.expenses) : '–', false, drill(openAccountingTrendDrillModal), false, 'Cost of Goods Sold + Operating + Non-Operating Expenses for the current month. Click for the full month-by-month history.', 'drill'],
-    ['Net Profit', has ? money(z.netProfit) : '–', false, drill(openAccountingTrendDrillModal), false, 'Total Income − Total Expenses for the current month. Click for the full month-by-month history.', 'drill'],
-    ['Net Margin %', has ? pc(z.netMargin, 1) : '–', false, drill(openAccountingTrendDrillModal), false, 'Net Profit / Total Income. Click for the full month-by-month history.', 'drill'],
+    ['Net Profit', has ? money(netProfit) : '–', false, drill(openAccountingTrendDrillModal), false, 'Total Income (GrubCENTER Net Sales) − Total Expenses (Zoho Operating Expenses) for the current month -- before Portal Commission. See True Net Profit below for the commission-inclusive version.', 'drill'],
+    ['Net Margin %', has && grub.netSales ? pc(netProfit / grub.netSales, 1) : (has ? '0%' : '–'), false, drill(openAccountingTrendDrillModal), false, 'Net Profit / Total Income. Click for the full month-by-month history.', 'drill'],
     ['Bank Balance', has ? money(bankOnly) : '–', false, drill(() => openAccountingCashDrillModal('bank')), false, 'Sum of all active bank account balances in Zoho Books. Click for the per-account breakdown.', 'drill'],
     ['Cash', has ? money(cashOnly) : '–', false, drill(() => openAccountingCashDrillModal('cash')), false, 'Sum of all active cash account balances in Zoho Books. Click for the per-account breakdown.', 'drill'],
     ['A/R Outstanding', has ? money(z.ar) : '–', false, drill(() => openAccountingAgingDrillModal('ar')), false, 'Total unpaid invoice balance (Accounts Receivable aging summary). Click for the aging breakdown and outstanding invoices.', 'drill'],
@@ -2568,7 +2691,10 @@ function renderAccounting() {
     ['Top Vendor Owed', has ? topVendorOwedLabel(z) : '–', true, drill(() => openAccountingAgingDrillModal('ap')), false, 'The vendor with the highest total outstanding balance across all their bills. Click for the full A/P breakdown.', 'drill'],
     ['GrubCENTER Net Sales', money(grub.netSales), false, () => show('ebitda'), false, 'Net Sales for the current month, from GrubCENTER order data (the real revenue source -- Zoho Books never records sales invoices for this business). Click to see the full P&L on the EBITDA page.', 'nav'],
     ['GrubCENTER Commission', money(grub.commission), false, () => show('commission'), false, 'Portal/aggregator commission for the current month, computed from order data. Click to see the full channel breakdown on the Commission page.', 'nav'],
-    ['True Net Profit', has ? money(trueNetProfit) : '–', true, drill(openTrueProfitDrillModal), false, 'GrubCENTER Net Sales − GrubCENTER Commission − Zoho Operating Expenses, for the current month. Click for the full breakdown.', 'drill']
+    ['True Net Profit', has ? money(trueNetProfit) : '–', true, drill(openTrueProfitDrillModal), false, 'GrubCENTER Net Sales − GrubCENTER Commission − Zoho Operating Expenses, for the current month. Click for the full breakdown.', 'drill'],
+    ['Total Assets', has && z.balanceSheet ? money(z.balanceSheet.totalAssets) : '–', false, (has && z.balanceSheet) ? openBalanceSheetDrillModal : null, false, 'Total assets on the balance sheet, as of today (Zoho Books). Click for the full breakdown.', 'drill'],
+    ['Total Liabilities', has && z.balanceSheet ? money(z.balanceSheet.totalLiabilities) : '–', false, (has && z.balanceSheet) ? openBalanceSheetDrillModal : null, false, 'Total liabilities on the balance sheet, as of today (Zoho Books). Click for the full breakdown.', 'drill'],
+    ['Total Equity', has && z.balanceSheet ? money(z.balanceSheet.totalEquity) : '–', false, (has && z.balanceSheet) ? openBalanceSheetDrillModal : null, false, 'Total equity (Assets − Liabilities) on the balance sheet, as of today (Zoho Books). Click for the full breakdown.', 'drill']
   ]);
 
   if (!has) {
@@ -2577,11 +2703,19 @@ function renderAccounting() {
     return;
   }
 
+  const { byMonth, coverageStart } = grubCenterNetSalesByMonth();
   const labels = z.trend.map(t => t.label);
   lineChart('c-acctrend', labels, [
-    { name: 'Income', color: Y, data: z.trend.map(t => t.income) },
+    // null (not 0) for months before coverageStart -- S.orders only holds a
+    // rolling ~45-day GrubCENTER window, so those months genuinely have no
+    // data rather than zero revenue; null leaves a gap in the line instead
+    // of a misleading dip to 0.
+    { name: 'Income', color: Y, data: z.trend.map(t => (!coverageStart || t.key < coverageStart) ? null : (byMonth[t.key] || 0)) },
     { name: 'Expenses', color: '#e53935', data: z.trend.map(t => t.expenses) },
-    { name: 'Net Profit', color: BLUE, data: z.trend.map(t => t.netProfit) }
+    // Same GrubCENTER-Income-minus-Zoho-Expenses basis as the Net Profit
+    // tile above, not Zoho's own t.netProfit -- same null-for-no-coverage
+    // treatment as the Income line, for the same reason.
+    { name: 'Net Profit', color: BLUE, data: z.trend.map(t => (!coverageStart || t.key < coverageStart) ? null : (byMonth[t.key] || 0) - t.expenses) }
   ], { fmt: money });
 
   hbar('c-araging', (z.arAging || []).map(b => ({ k: b.label, v: b.amount })), { fmt: money, color: Y, name: 'A/R' });
@@ -3191,7 +3325,7 @@ function loadDemo() {
   }
 
   // 2. Accounting KPIs (Zoho Books) — independent of the orders fetch above, non-blocking
-  fetch('/api/accounting').then(r => r.json()).then(z => { S.zoho = z; if (S.page === 'accounting') render(); }).catch(() => {});
+  fetch('/api/accounting').then(r => r.json()).then(z => { S.zoho = z; if (S.page === 'accounting' || S.page === 'ebitda') render(); }).catch(() => {});
 
   // 2b. Check live status non-blockingly in the background
   fetch('/api/status').then(r => r.json()).then(st => {
@@ -3224,7 +3358,7 @@ function loadDemo() {
         }
       }
     } catch (_) {}
-    fetch('/api/accounting').then(r => r.json()).then(z => { S.zoho = z; if (S.page === 'accounting') render(); }).catch(() => {});
+    fetch('/api/accounting').then(r => r.json()).then(z => { S.zoho = z; if (S.page === 'accounting' || S.page === 'ebitda') render(); }).catch(() => {});
   }, 10 * 60 * 1000);
 
   window.S = S;

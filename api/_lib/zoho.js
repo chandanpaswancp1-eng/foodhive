@@ -97,7 +97,67 @@ async function fetchPLTotals(from, to, session) {
   const income = (m['Operating Income'] || 0) + (m['Non Operating Income'] || 0);
   const expenses = (m['Cost of Goods Sold'] || 0) + (m['Operating Expense'] || 0) + (m['Non Operating Expense'] || 0);
   const netProfit = m['Net Profit/Loss'] != null ? m['Net Profit/Loss'] : income - expenses;
-  return { income, expenses, netProfit };
+  return { income, expenses, netProfit, rawTree: j.profit_and_loss };
+}
+
+// Finds a named section (not a same-named leaf -- see flattenPL's comment on
+// why Zoho can repeat a section's own name as a leaf directly beneath it) by
+// returning the first match found in a top-down walk, then maps that
+// section's immediate children into { name, amount } leaf items. This has
+// to recurse: verified against live data that 'Cost of Goods Sold' and
+// 'Operating Expense' are NOT top-level rows here -- they're nested several
+// levels under grouping rows like "Gross Profit"/"Operating Profit", so a
+// top-level-only scan (tried and reverted) silently found nothing. Mirrors
+// server.js's extractCategoryBreakdown()/findSection().
+function findSection(rows, name) {
+  for (const r of (rows || [])) {
+    if (r.name === name) return r;
+    if (r.account_transactions && r.account_transactions.length) {
+      const found = findSection(r.account_transactions, name);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+function extractCategoryBreakdown(tree) {
+  const leafItems = section => ((section && section.account_transactions) || []).map(r => ({ name: r.name, amount: +r.total || 0 }));
+  const cogs = findSection(tree, 'Cost of Goods Sold');
+  const opex = findSection(tree, 'Operating Expense');
+  return {
+    cogs: { total: cogs ? +cogs.total || 0 : 0, items: leafItems(cogs) },
+    operatingExpense: { total: opex ? +opex.total || 0 : 0, items: leafItems(opex) }
+  };
+}
+
+async function fetchBalanceSheet(session) {
+  const j = await zget('/reports/balancesheet', { as_of_date: dubaiToday() }, session);
+  return j.balance_sheet || [];
+}
+
+// Zoho's Balance Sheet report is always exactly two top-level rows (Assets,
+// then Liabilities & Equities), so this reads off that stable position
+// rather than matching an exact label string that could vary by org/locale.
+// Mirrors server.js's extractBalanceSheet().
+function extractBalanceSheet(tree) {
+  const assetsRow = (tree || [])[0] || null;
+  const liabEquityRow = (tree || [])[1] || null;
+  const findChild = (row, label) => ((row && row.account_transactions) || []).find(r => r.total_label === label || r.name === label) || null;
+  const liabilitiesRow = findChild(liabEquityRow, 'Total Liabilities');
+  const equityRow = findChild(liabEquityRow, 'Total Equities');
+  const totalAssets = assetsRow ? +assetsRow.total || 0 : 0;
+  const totalLiabilities = liabilitiesRow ? +liabilitiesRow.total || 0 : 0;
+  const totalEquity = equityRow ? +equityRow.total || 0 : 0;
+  return {
+    totalAssets, totalLiabilities, totalEquity,
+    // Sanity check on the accounting equation (Assets = Liabilities +
+    // Equity), since totalEquity is read independently off Zoho's own
+    // "Total Equities" row rather than computed as Assets - Liabilities --
+    // a wrong two-row positional guess above or a Zoho-side reporting
+    // quirk would otherwise pass through silently. 1 AED tolerance for
+    // report rounding.
+    balanced: Math.abs(totalAssets - (totalLiabilities + totalEquity)) < 1,
+    tree: tree || []
+  };
 }
 
 // One-time (first sync only): find the real start of this org's books by
@@ -169,10 +229,12 @@ async function syncOnceInner() {
   // reliably triggers a 429 "exceeded the maximum number of requests per
   // minute" block that then takes several minutes to clear.
   const fetched = [];
+  let currentMonthTree = null;
   for (const offset of offsetsToFetch) {
     const { key, label, from, to } = monthRange(offset);
-    const totals = await fetchPLTotals(from, to, session);
-    fetched.push({ key, label, ...totals });
+    const { income, expenses, netProfit, rawTree } = await fetchPLTotals(from, to, session);
+    fetched.push({ key, label, income, expenses, netProfit });
+    if (offset === 0) currentMonthTree = rawTree;
   }
   fetched.forEach(f => prevByKey.set(f.key, f));
 
@@ -186,6 +248,7 @@ async function syncOnceInner() {
   const bankResp = await zget('/bankaccounts', {}, session);
   const arAging = await zget('/reports/aragingsummary', { to_date: toDate }, session);
   const apAging = await zget('/reports/apagingsummary', { to_date: toDate }, session);
+  const balanceSheetTree = await fetchBalanceSheet(session);
   // Full lists (all statuses), not just overdue -- these double as both the
   // overdue KPI source below and the raw data for Data Export.
   const allInvoices = await zGetAllPages('/invoices', 'invoices', {}, session);
@@ -202,6 +265,13 @@ async function syncOnceInner() {
     expenses: current.expenses,
     netProfit: current.netProfit,
     netMargin: current.income ? current.netProfit / current.income : 0,
+    // The calendar month current.income/expenses/netProfit actually cover,
+    // so the frontend can detect (and warn) when this is stale against its
+    // own live-clock "current month" -- e.g. right after a month rollover,
+    // before the next sync has re-fetched the new month's P&L.
+    currentMonthKey: current.key,
+    currentMonthExpenseBreakdown: extractCategoryBreakdown(currentMonthTree),
+    balanceSheet: extractBalanceSheet(balanceSheetTree),
     bankAccounts: activeBankAccounts.map(a => ({ name: a.account_name, type: a.account_type, balance: +a.balance || 0, currency: a.currency_code })),
     ar: arAging.invoice ? +arAging.invoice.total || 0 : 0,
     ap: apAging.bills ? +apAging.bills.total || 0 : 0,

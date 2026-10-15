@@ -22,7 +22,11 @@
    - Each contract's always-on payment/processing fee is folded into one
      blended rate per channel, since orders have no reliable card-type/COD
      split to apply it selectively.
-   - Keeta's AED 6/order minimum fee is applied as a floor.
+   - Keeta's AED 6/order minimum fee is applied as a floor, uncapped: a
+     per-order minimum is owed in full even on a small order where it
+     exceeds that order's own net sales (e.g. AED 6 owed on a AED 3 order)
+     - that's how contractual per-order minimums work, not a reason to
+     shrink the fee back down.
    - NOT applied (no data to support them, so omitted rather than guessed):
      loyalty-tier flat fees (Careem Plus AED3/order, Noon one AED3/order,
      Talabat tPro AED4/order >=AED30) - no loyalty-membership field on an
@@ -34,7 +38,9 @@
      the current data window.
    - EBITDA = Net Sales - Commission - Other Operating Costs. Discount is
      NOT subtracted again here: order.netSales is already net of discount
-     (see normalize.js, netSales = receiptTotal - discount), so including it
+     (see normalize.js: netSales comes straight from the API on live data,
+     or for the import-file fallback path is derived as
+     (receiptTotal - discount) / (1 + VAT_RATE)), so including discount
      a second time would double-count it. Discount is still shown as a
      memo line in the Gross-to-Net bridge on the EBITDA page for context.
    - "Other Operating Costs" is the sum of five manually-entered F&B cost
@@ -105,8 +111,7 @@
     const rate = rateForChannel(order.channel, order.receivedAt);
     if (rate <= 0) return 0;
     const raw = rate * net;
-    const floored = Math.max(raw, minFeeForChannel(order.channel));
-    return Math.min(floored, net);
+    return Math.max(raw, minFeeForChannel(order.channel));
   }
 
   function ebitda(netSales, commission, otherCosts) {

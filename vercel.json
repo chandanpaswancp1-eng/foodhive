@@ -5,7 +5,7 @@
     { "source": "/((?!api/).*)", "destination": "/public/$1" }
   ],
   "crons": [
-    { "path": "/api/sync-cron", "schedule": "0 3 * * *" }
+    { "path": "/api/sync-cron", "schedule": "0 23 * * *" }
   ],
   "functions": {
     "api/sync-cron.js": { "maxDuration": 60 },
