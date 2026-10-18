@@ -432,46 +432,66 @@ function getPeriodStats(page) {
   // Unlike `month` above (the full PRIOR calendar month), this uses
   // latestDate's own in-progress calendar month, day 1 through latestDate.
   const curMonthStart = latestDate.slice(0, 7) + '-01';
-  const mtdOrders = srcOrders.filter(o => !o.cancelled && dkey(o.receivedAt) >= curMonthStart && dkey(o.receivedAt) <= latestDate);
+
+  // "Month in view" for the Projected Month-End tile: anchored to the active
+  // date-range filter (S.f.to, falling back to S.f.from, falling back to
+  // latestDate when unset) so a completed past month selected via quick-pick
+  // or custom range shows its own real total instead of the live month's
+  // projection. Unfiltered callers (page omitted) never read S.f or
+  // .projection, so viewRefDate === latestDate for them -- unchanged.
+  const viewRefDate = page ? (S.f.to || S.f.from || latestDate) : latestDate;
+  const viewMonthStart = viewRefDate.slice(0, 7) + '-01';
+  const isLiveMonth = viewMonthStart === curMonthStart;
+  const [vy, vm] = viewMonthStart.split('-').map(Number);
+  const viewDaysInMonth = new Date(vy, vm, 0).getDate();
+  const viewMonthEnd = isLiveMonth ? latestDate : `${viewMonthStart.slice(0, 7)}-${pad(viewDaysInMonth)}`;
+
+  const mtdOrders = srcOrders.filter(o => !o.cancelled && dkey(o.receivedAt) >= viewMonthStart && dkey(o.receivedAt) <= viewMonthEnd);
   const monthToDateNet = sum(mtdOrders, o => o.netSales);
+  const daysInMonth = viewDaysInMonth;
   // ld.getDate() is the day-of-month NUMBER (e.g. 8 on Oct 8), not the elapsed
   // duration since day 1 -- Oct 1 to Oct 8 is a 7-day span, not 8. Subtract 1.
-  const daysElapsed = ld.getDate() - 1;
-  const daysInMonth = new Date(ld.getFullYear(), ld.getMonth() + 1, 0).getDate();
+  const daysElapsed = isLiveMonth ? (ld.getDate() - 1) : daysInMonth;
   const avgDaily = daysElapsed ? monthToDateNet / daysElapsed : 0;
 
-  // Weekday-seasonality projection: food-delivery volume swings hard between
-  // weekdays and weekends, so a single flat daily rate drifts away from
-  // reality fast -- but the business is also growing/shrinking month to
-  // month, so a flat *historical* weekday average goes stale just as fast.
-  // We split the two: a weekday INDEX (the shape -- how much busier Fridays
-  // run vs. the week's average, from the trailing 8 weeks) applied to this
-  // month's own BASE RATE (the level -- avgDaily, already measured from
-  // this month's complete days), so the projection tracks both the current
-  // pace and which days of the week are still left in the month.
-  const histStart = new Date(curMonthStart + 'T00:00:00');
-  histStart.setDate(histStart.getDate() - 56);
-  const histStartKey = dkey(histStart.getTime());
-  const histDaily = {};
-  srcOrders.forEach(o => {
-    if (o.cancelled) return;
-    const k = dkey(o.receivedAt);
-    if (k < histStartKey || k >= curMonthStart) return;
-    if (!histDaily[k]) histDaily[k] = { net: 0, wd: (dubaiDOW(o.receivedAt) + 6) % 7 };
-    histDaily[k].net += o.netSales;
-  });
-  const wdSums = Array(7).fill(0), wdCounts = Array(7).fill(0);
-  Object.values(histDaily).forEach(({ net, wd }) => { wdSums[wd] += net; wdCounts[wd]++; });
-  const histDayVals = Object.values(histDaily);
-  const histOverallAvg = histDayVals.length ? sum(histDayVals, d => d.net) / histDayVals.length : 0;
-  const wdIndex = wdSums.map((s, i) => (wdCounts[i] && histOverallAvg) ? (s / wdCounts[i]) / histOverallAvg : 1);
-
   let remainingProjected = 0, remainingDays = 0;
-  for (let d = ld.getDate() + 1; d <= daysInMonth; d++) {
-    const wd = (new Date(ld.getFullYear(), ld.getMonth(), d).getDay() + 6) % 7;
-    remainingProjected += avgDaily * wdIndex[wd];
-    remainingDays++;
+  if (isLiveMonth) {
+    // Weekday-seasonality projection: food-delivery volume swings hard between
+    // weekdays and weekends, so a single flat daily rate drifts away from
+    // reality fast -- but the business is also growing/shrinking month to
+    // month, so a flat *historical* weekday average goes stale just as fast.
+    // We split the two: a weekday INDEX (the shape -- how much busier Fridays
+    // run vs. the week's average, from the trailing 8 weeks) applied to this
+    // month's own BASE RATE (the level -- avgDaily, already measured from
+    // this month's complete days), so the projection tracks both the current
+    // pace and which days of the week are still left in the month.
+    const histStart = new Date(curMonthStart + 'T00:00:00');
+    histStart.setDate(histStart.getDate() - 56);
+    const histStartKey = dkey(histStart.getTime());
+    const histDaily = {};
+    srcOrders.forEach(o => {
+      if (o.cancelled) return;
+      const k = dkey(o.receivedAt);
+      if (k < histStartKey || k >= curMonthStart) return;
+      if (!histDaily[k]) histDaily[k] = { net: 0, wd: (dubaiDOW(o.receivedAt) + 6) % 7 };
+      histDaily[k].net += o.netSales;
+    });
+    const wdSums = Array(7).fill(0), wdCounts = Array(7).fill(0);
+    Object.values(histDaily).forEach(({ net, wd }) => { wdSums[wd] += net; wdCounts[wd]++; });
+    const histDayVals = Object.values(histDaily);
+    const histOverallAvg = histDayVals.length ? sum(histDayVals, d => d.net) / histDayVals.length : 0;
+    const wdIndex = wdSums.map((s, i) => (wdCounts[i] && histOverallAvg) ? (s / wdCounts[i]) / histOverallAvg : 1);
+
+    for (let d = ld.getDate() + 1; d <= daysInMonth; d++) {
+      const wd = (new Date(ld.getFullYear(), ld.getMonth(), d).getDay() + 6) % 7;
+      remainingProjected += avgDaily * wdIndex[wd];
+      remainingDays++;
+    }
   }
+  // Past, completed month in view: mtdOrders above already spans the whole
+  // month (day 1 .. viewMonthEnd), so monthToDateNet IS the real final
+  // total -- remainingProjected/remainingDays correctly stay 0, no
+  // extrapolation applied.
   const projectedNet = monthToDateNet + remainingProjected;
 
   // Cross-month context for the Projected Month-End tile's TOOLTIP ONLY --
@@ -528,7 +548,7 @@ function getPeriodStats(page) {
     week: { count: weekOrders.length, net: weekNet },
     month: { count: monthOrders.length, net: monthNet },
     all: { count: allOrders.length, net: allNet },
-    projection: { mtdNet: monthToDateNet, daysElapsed, daysInMonth, avgDaily, remainingDays, value: projectedNet },
+    projection: { mtdNet: monthToDateNet, daysElapsed, daysInMonth, avgDaily, remainingDays, value: projectedNet, isLiveMonth, viewMonthStart, viewMonthEnd },
     monthTrend: { breakdown: monthBreakdown, hasPriorMonth, cmpDay, prevSamePeriodNet, momGrowthPct, allAvgPerDay, spanDays }
   };
 }
@@ -958,10 +978,29 @@ function renderSales() {
   // number or the tile's visible subtitle.
   const monthTrendStr = stats && stats.monthTrend.breakdown.length
     ? ` Monthly totals: ${stats.monthTrend.breakdown.map(m => `${m.k} ${money(m.net)} (${m.activeDays}d)`).join(', ')} — all-time ${money(stats.all.net)} over ${stats.monthTrend.spanDays} days (~${money(stats.monthTrend.allAvgPerDay)}/day avg).` +
-      (stats.monthTrend.momGrowthPct != null
+      // "First N days vs. same period last month" only makes sense for the
+      // live in-progress month -- suppress it when showing a past month's
+      // already-final total (see stats.projection.isLiveMonth).
+      (stats.projection.isLiveMonth && stats.monthTrend.momGrowthPct != null
         ? ` First ${stats.monthTrend.cmpDay} day${stats.monthTrend.cmpDay === 1 ? '' : 's'} this month: ${money(stats.projection.mtdNet)} vs. ${money(stats.monthTrend.prevSamePeriodNet)} same period last month (${stats.monthTrend.momGrowthPct >= 0 ? '+' : ''}${pc(stats.monthTrend.momGrowthPct, 0)}).`
         : '')
     : '';
+  // Projected Month-End tile: label/subtitle/tooltip branch on whether the
+  // currently filtered-to month is the real live month (weekday-seasonal
+  // projection, unchanged) or a different, already-completed month (its
+  // real final total, no extrapolation -- see getPeriodStats' isLiveMonth).
+  const liveMonth = !stats || stats.projection.isLiveMonth;
+  const projLabel = liveMonth ? 'Projected Month-End' : 'Month-End Total';
+  const projSubtitle = stats
+    ? (liveMonth
+        ? `~${effAvgDailyStr}/day avg · MTD thru ${stats.latestDate}: ${money(stats.projection.mtdNet)}`
+        : `~${effAvgDailyStr}/day avg · Final total for ${stats.projection.viewMonthStart.slice(0, 7)}`)
+    : '';
+  const projTooltip = !stats
+    ? 'Weekday-seasonal month-end Net Sales projection'
+    : liveMonth
+      ? `Weekday-seasonal projection: Month-to-date Net Sales (${money(stats.projection.mtdNet)}) thru ${stats.latestDate} + ${stats.projection.remainingDays} remaining day${stats.projection.remainingDays === 1 ? '' : 's'} in ${stats.projection.daysInMonth}-day month, each projected from this month's own daily pace scaled by that weekday's historical share of the week (trailing 8 weeks), = ${money(stats.projection.value)} (~${effAvgDailyStr}/day avg). Not a true forecast.${monthTrendStr} Click to jump back to month-to-date (${stats.curMonthStart} → ${stats.latestDate}).`
+      : `${stats.projection.viewMonthStart.slice(0, 7)} is a completed month: actual Net Sales for the full month (${stats.projection.viewMonthStart} → ${stats.projection.viewMonthEnd}) = ${money(stats.projection.value)}. No projection applied (month already elapsed).${monthTrendStr} Click to jump back to the live month-to-date (${stats.curMonthStart} → ${stats.latestDate}).`;
 
   const m = S.ui.metric;
   const mnameMap = {
@@ -1027,12 +1066,11 @@ function renderSales() {
       render();
     }, top && S.f.brand === top.k, top ? `Click to filter dashboard for "${top.k}" (click again to reset)` : ''],
 
-    ['Projected Month-End', stats ? `${money(stats.projection.value)}<div style="font-size:9.5px;font-weight:600;color:#555;margin-top:2px;">~${effAvgDailyStr}/day avg · MTD thru ${stats.latestDate}: ${money(stats.projection.mtdNet)}</div>` : '0.00', false, () => {
+    [projLabel, stats ? `${money(stats.projection.value)}<div style="font-size:9.5px;font-weight:600;color:#555;margin-top:2px;">${projSubtitle}</div>` : '0.00', false, () => {
       if (!stats) return;
       setDates(stats.curMonthStart, stats.latestDate);
       dateChanged();
-    }, !!stats && S.f.from === stats.curMonthStart && S.f.to === stats.latestDate,
-      stats ? `Weekday-seasonal projection: Month-to-date Net Sales (${money(stats.projection.mtdNet)}) thru ${stats.latestDate} + ${stats.projection.remainingDays} remaining day${stats.projection.remainingDays === 1 ? '' : 's'} in ${stats.projection.daysInMonth}-day month, each projected from this month's own daily pace scaled by that weekday's historical share of the week (trailing 8 weeks), = ${money(stats.projection.value)} (~${effAvgDailyStr}/day avg). Not a true forecast.${monthTrendStr} Click to filter to month-to-date (${stats.curMonthStart} → ${stats.latestDate}).` : 'Weekday-seasonal month-end Net Sales projection']
+    }, !!stats && S.f.from === stats.curMonthStart && S.f.to === stats.latestDate, projTooltip]
   ]);
 
   const grpName = S.ui.group === 'brand' ? 'Brands' : 'Cuisines';
