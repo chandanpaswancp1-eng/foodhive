@@ -503,6 +503,26 @@ nav a.on { background: #fff; border-color: var(--k); }
 
 .a-ebitdatrend { grid-column: span 12; height: 285px; }
 
+/* Comparison */
+.g-comparison { grid-template-columns: repeat(12, 1fr); }
+.a-cmpchannel { grid-column: span 6; height: 340px; }
+.a-cmphourly { grid-column: span 6; height: 340px; }
+.a-cmpbrand { grid-column: span 12; height: 480px; }
+.a-cmpbrand .tbl-wrap { height: calc(100% - 38px); }
+.a-cmpchannel table, .a-cmpbrand table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.a-cmpchannel th, .a-cmpbrand th { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--line); background: var(--y); color: var(--k); font-weight: 700; position: sticky; top: 0; cursor: pointer; user-select: none; }
+.a-cmpchannel td, .a-cmpbrand td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--line); }
+.a-cmpchannel td:first-child, .a-cmpbrand td:first-child { font-weight: 700; }
+.a-cmpchannel td.num, .a-cmpbrand td.num { text-align: right; }
+.cmp-search {
+  display: block; width: 100%; max-width: 280px; margin: 0 0 8px; border: 1px solid var(--line);
+  border-radius: 4px; padding: 6px 10px; font: inherit; font-size: 12px;
+}
+.delta { font-weight: 700; white-space: nowrap; }
+.delta.up { color: #2e7d32; }
+.delta.down { color: #c62828; }
+.delta.flat { color: #777; }
+
 .a-costs { grid-column: span 12; }
 .cost-cat { margin-bottom: 14px; }
 .cost-cat:last-child { margin-bottom: 0; }
@@ -747,9 +767,10 @@ td:first-child { text-align: left; font-weight: 700; }
 }
 
 @media (max-width: 1100px) {
-  .g-sales, .g-cancel, .g-items, .g-item-sales, .g-commission, .g-ebitda, .g-accounting { display: block; }
-  .g-sales .panel, .g-cancel .panel, .g-items .panel, .g-item-sales .panel, .g-commission .panel, .g-ebitda .panel, .g-accounting .panel { margin-bottom: 10px; height: 300px !important; }
+  .g-sales, .g-cancel, .g-items, .g-item-sales, .g-commission, .g-ebitda, .g-accounting, .g-comparison { display: block; }
+  .g-sales .panel, .g-cancel .panel, .g-items .panel, .g-item-sales .panel, .g-commission .panel, .g-ebitda .panel, .g-accounting .panel, .g-comparison .panel { margin-bottom: 10px; height: 300px !important; }
   .g-commission .a-ratecard, .g-ebitda .a-costs, .g-ebitda .a-plwaterfall { height: auto !important; }
+  .g-comparison .a-cmpbrand { height: 420px !important; }
   .g-prep { grid-template-columns: 1fr 1fr; }
   .g-ratings { grid-template-columns: 1fr; }
   .g-ratings .panel.wide { grid-column: auto; }

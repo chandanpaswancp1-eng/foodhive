@@ -87,7 +87,8 @@ const S = {
   ui: {
     metric: 'gross', group: 'cuisine', grain: 'Daily', cmetric: 'orders',
     cgroup: 'brand', pgroup: 'brand', rgroup: 'cuisine', igroup: 'brand',
-    dgroup: 'brand', rmode: 'estimated', activeStage: null, itemsView: '86'
+    dgroup: 'brand', rmode: 'estimated', activeStage: null, itemsView: '86',
+    cmpChannelSort: { key: 'wowPct', dir: 'desc' }, cmpBrandSort: { key: 'pct', dir: 'desc' }, cmpBrandSearch: ''
   },
   rng: {}, selBrands: new Set(), selLocs: new Set()
 };
@@ -355,7 +356,8 @@ const FILTERS = {
   delayed: [['brand', 'Brand'], ['location', 'Branch'], ['dates', 'Received At']],
   commission: [['dates', 'Received At'], ['channel', 'Channel'], ['brand', 'Brand'], ['location', 'Location']],
   ebitda: [['dates', 'Received At'], ['channel', 'Channel'], ['brand', 'Brand'], ['location', 'Location']],
-  export: [['dates', 'Received At'], ['brand', 'Brand'], ['location', 'Location']]
+  export: [['dates', 'Received At'], ['brand', 'Brand'], ['location', 'Location']],
+  comparison: [['location', 'Location']]
 };
 
 function optionsFor(key) {
@@ -2365,6 +2367,200 @@ function renderEbitda() {
   ], { fmt: money });
 }
 
+// ================= PAGE: COMPARISON (Channel & Brand Day/Week-over-Period) =================
+// Every window below anchors to the latest date present in the (location-)
+// filtered order set, exactly like getPeriodStats()/#btnPrev -- never the
+// viewer's real-world `new Date()` -- so this page never disagrees with the
+// rest of the dashboard about what "today" means.
+function comparisonWindows(orders) {
+  const ts = orders.map(o => o.receivedAt);
+  if (!ts.length) return null;
+  const latestDate = dkey(Math.max(...ts));
+
+  const ld = new Date(latestDate + 'T00:00:00');
+  const yd = new Date(ld); yd.setDate(ld.getDate() - 1);
+  const yesterdayKey = dkey(yd);
+
+  const sdlw = new Date(ld); sdlw.setDate(ld.getDate() - 7);
+  const sameDayLastWeekKey = dkey(sdlw);
+
+  // Monday-anchored week-to-date, same derivation as getPeriodStats' weekStart.
+  const dow = (ld.getDay() + 6) % 7;
+  const ws = new Date(ld); ws.setDate(ld.getDate() - dow);
+  const thisWeekStart = dkey(ws);
+
+  // Last week's SAME partial span (Mon .. same weekday), not the full prior
+  // week -- mirrors getPeriodStats' cmpDay/prevSamePeriodEnd guard so a
+  // week that's only 3 days old isn't compared against a full 7-day prior
+  // week.
+  const lws = new Date(ws); lws.setDate(ws.getDate() - 7);
+  const lastWeekStart = dkey(lws);
+  const lwe = new Date(ld); lwe.setDate(ld.getDate() - 7);
+  const lastWeekEnd = dkey(lwe);
+
+  return { latestDate, yesterdayKey, sameDayLastWeekKey, thisWeekStart, lastWeekStart, lastWeekEnd };
+}
+
+// null (never Infinity/NaN) when there's no prior-period sales to compare
+// against -- same guard getPeriodStats' momGrowthPct uses.
+const deltaPct = (cur, prev) => (prev > 0 ? (cur - prev) / prev : null);
+
+function deltaHtml(pct) {
+  if (pct == null) return '<span class="delta flat">–</span>';
+  const cls = pct > 0 ? 'up' : pct < 0 ? 'down' : 'flat';
+  const arrow = pct > 0 ? '▲' : pct < 0 ? '▼' : '▬';
+  return `<span class="delta ${cls}">${arrow} ${pc(Math.abs(pct))}</span>`;
+}
+
+function channelDeltaRows() {
+  const O = base('comparison', true).filter(o => !o.cancelled);
+  const w = comparisonWindows(O);
+  if (!w) return [];
+  const inWin = (from, to) => O.filter(o => { const k = dkey(o.receivedAt); return k >= from && k <= to; });
+  const byKey = rows => new Map(rows.map(r => [r.k, r.sales]));
+  const todayM = byKey(salesAgg(inWin(w.latestDate, w.latestDate), o => o.channel));
+  const ydayM = byKey(salesAgg(inWin(w.yesterdayKey, w.yesterdayKey), o => o.channel));
+  const thisWkM = byKey(salesAgg(inWin(w.thisWeekStart, w.latestDate), o => o.channel));
+  const lastWkM = byKey(salesAgg(inWin(w.lastWeekStart, w.lastWeekEnd), o => o.channel));
+  const channels = uniq(O.map(o => o.channel)).filter(Boolean).sort();
+  return channels.map(ch => {
+    const todayNet = todayM.get(ch) || 0, ydayNet = ydayM.get(ch) || 0;
+    const twNet = thisWkM.get(ch) || 0, lwNet = lastWkM.get(ch) || 0;
+    return {
+      channel: ch, todayNet, ydayNet, dodPct: deltaPct(todayNet, ydayNet),
+      twNet, lwNet, wowPct: deltaPct(twNet, lwNet)
+    };
+  });
+}
+
+function brandDeltaRows() {
+  const O = base('comparison', true).filter(o => !o.cancelled);
+  const w = comparisonWindows(O);
+  if (!w) return [];
+  const prevDayM = new Map(salesAgg(O.filter(o => dkey(o.receivedAt) === w.yesterdayKey), o => o.brand).map(r => [r.k, r.sales]));
+  const sdlwM = new Map(salesAgg(O.filter(o => dkey(o.receivedAt) === w.sameDayLastWeekKey), o => o.brand).map(r => [r.k, r.sales]));
+  const brands = uniq(O.map(o => o.brand)).filter(Boolean);
+  return brands.map(b => {
+    const prevDayNet = prevDayM.get(b) || 0, sdlwNet = sdlwM.get(b) || 0;
+    return { brand: b, prevDayNet, sdlwNet, pct: deltaPct(prevDayNet, sdlwNet) };
+  });
+}
+
+function hourlyOverlayRows() {
+  const O = base('comparison', true).filter(o => !o.cancelled);
+  const w = comparisonWindows(O);
+  if (!w) return null;
+  const today = O.filter(o => dkey(o.receivedAt) === w.latestDate);
+  const sdlw = O.filter(o => dkey(o.receivedAt) === w.sameDayLastWeekKey);
+  const hoursPresent = uniq([...today, ...sdlw].map(o => dubaiHour(o.receivedAt)));
+  if (!hoursPresent.length) return null;
+  const lo = Math.min(...hoursPresent), hi = Math.max(...hoursPresent);
+  const hours = Array.from({ length: hi - lo + 1 }, (_, i) => lo + i);
+  const byHour = (arr, h) => sum(arr.filter(o => dubaiHour(o.receivedAt) === h), o => o.netSales);
+  return {
+    labels: hours.map(h => pad(h) + ':00'),
+    series: [
+      { name: `Today (${w.latestDate})`, color: Y, data: hours.map(h => byHour(today, h)) },
+      { name: `Same Day Last Week (${w.sameDayLastWeekKey})`, color: BLUE, data: hours.map(h => byHour(sdlw, h)) }
+    ]
+  };
+}
+
+function sortRows(rows, sortState, getters) {
+  const { key, dir } = sortState;
+  const get = getters[key];
+  return rows.slice().sort((a, b) => {
+    const av = get(a), bv = get(b);
+    const an = av == null ? -Infinity : av, bn = bv == null ? -Infinity : bv;
+    if (an === bn) return 0;
+    return dir === 'asc' ? (an > bn ? 1 : -1) : (an < bn ? 1 : -1);
+  });
+}
+
+function sortArrow(sortState, key) { return key !== sortState.key ? '' : (sortState.dir === 'asc' ? ' ▲' : ' ▼'); }
+
+function renderChannelDeltaTable() {
+  const el = $('#cmpChannelTable');
+  if (!el) return;
+  const rows = sortRows(channelDeltaRows(), S.ui.cmpChannelSort, {
+    channel: r => r.channel, todayNet: r => r.todayNet, ydayNet: r => r.ydayNet, dodPct: r => r.dodPct,
+    twNet: r => r.twNet, lwNet: r => r.lwNet, wowPct: r => r.wowPct
+  });
+  const sortState = S.ui.cmpChannelSort;
+  el.innerHTML = `<thead><tr>
+      <th data-k="channel">Channel${sortArrow(sortState, 'channel')}</th>
+      <th data-k="ydayNet">Yesterday${sortArrow(sortState, 'ydayNet')}</th>
+      <th data-k="todayNet">Today${sortArrow(sortState, 'todayNet')}</th>
+      <th data-k="dodPct">Day-over-Day${sortArrow(sortState, 'dodPct')}</th>
+      <th data-k="lwNet">Last Week${sortArrow(sortState, 'lwNet')}</th>
+      <th data-k="twNet">This Week${sortArrow(sortState, 'twNet')}</th>
+      <th data-k="wowPct">Week-over-Week${sortArrow(sortState, 'wowPct')}</th>
+    </tr></thead><tbody>${rows.map(r => `<tr>
+      <td>${esc(r.channel)}</td>
+      <td class="num">${money(r.ydayNet)}</td>
+      <td class="num">${money(r.todayNet)}</td>
+      <td class="num">${deltaHtml(r.dodPct)}</td>
+      <td class="num">${money(r.lwNet)}</td>
+      <td class="num">${money(r.twNet)}</td>
+      <td class="num">${deltaHtml(r.wowPct)}</td>
+    </tr>`).join('')}</tbody>`;
+  $$('th[data-k]', el).forEach(th => th.onclick = () => {
+    const k = th.dataset.k;
+    S.ui.cmpChannelSort = (S.ui.cmpChannelSort.key === k) ? { key: k, dir: S.ui.cmpChannelSort.dir === 'desc' ? 'asc' : 'desc' } : { key: k, dir: 'desc' };
+    renderChannelDeltaTable();
+  });
+}
+
+function renderBrandDeltaTable() {
+  const el = $('#cmpBrandTable');
+  if (!el) return;
+  const q = (S.ui.cmpBrandSearch || '').toLowerCase();
+  const filtered = brandDeltaRows().filter(r => r.brand.toLowerCase().includes(q));
+  const sortState = S.ui.cmpBrandSort;
+  const rows = sortRows(filtered, sortState, { brand: r => r.brand, prevDayNet: r => r.prevDayNet, sdlwNet: r => r.sdlwNet, pct: r => r.pct });
+  el.innerHTML = `<thead><tr>
+      <th data-k="brand">Brand${sortArrow(sortState, 'brand')}</th>
+      <th data-k="prevDayNet">Previous Day Net Sales${sortArrow(sortState, 'prevDayNet')}</th>
+      <th data-k="sdlwNet">Same Day Last Week Net Sales${sortArrow(sortState, 'sdlwNet')}</th>
+      <th data-k="pct">%Δ${sortArrow(sortState, 'pct')}</th>
+    </tr></thead><tbody>${rows.map(r => `<tr>
+      <td>${esc(r.brand)}</td>
+      <td class="num">${money(r.prevDayNet)}</td>
+      <td class="num">${money(r.sdlwNet)}</td>
+      <td class="num">${deltaHtml(r.pct)}</td>
+    </tr>`).join('')}</tbody>`;
+  $$('th[data-k]', el).forEach(th => th.onclick = () => {
+    const k = th.dataset.k;
+    S.ui.cmpBrandSort = (S.ui.cmpBrandSort.key === k) ? { key: k, dir: S.ui.cmpBrandSort.dir === 'desc' ? 'asc' : 'desc' } : { key: k, dir: 'desc' };
+    renderBrandDeltaTable();
+  });
+}
+
+function renderComparison() {
+  const chanRows = channelDeltaRows();
+  const todayTotal = sum(chanRows, r => r.todayNet), ydayTotal = sum(chanRows, r => r.ydayNet);
+  const twTotal = sum(chanRows, r => r.twNet), lwTotal = sum(chanRows, r => r.lwNet);
+  const brandRows = brandDeltaRows();
+  const ranked = brandRows.filter(r => r.pct != null).sort((a, b) => b.pct - a.pct);
+  const topGainer = ranked[0], topDecliner = ranked[ranked.length - 1];
+
+  kpis('kpi-comparison', [
+    ['Net Sales Today', money(todayTotal), false, null, false, 'Total net sales across all channels for the latest day in the data.'],
+    ['Net Sales Yesterday', money(ydayTotal), false, null, false, 'Total net sales the day before.'],
+    ['Day-over-Day', deltaHtml(deltaPct(todayTotal, ydayTotal)), false, null, false, 'Today vs Yesterday, blended across all channels.'],
+    ['Week-over-Week', deltaHtml(deltaPct(twTotal, lwTotal)), false, null, false, 'This week-to-date vs the same partial span last week, blended across all channels.'],
+    ['Top Gaining Brand', topGainer ? esc(topGainer.brand) : '–', true, null, false, topGainer ? `${topGainer.brand}: ${deltaHtml(topGainer.pct).replace(/<[^>]+>/g, '')} vs same day last week` : ''],
+    ['Top Declining Brand', topDecliner ? esc(topDecliner.brand) : '–', true, null, false, topDecliner ? `${topDecliner.brand}: ${deltaHtml(topDecliner.pct).replace(/<[^>]+>/g, '')} vs same day last week` : '']
+  ]);
+
+  renderChannelDeltaTable();
+  renderBrandDeltaTable();
+
+  const hourly = hourlyOverlayRows();
+  if (hourly) lineChart('c-cmphourly', hourly.labels, hourly.series, { dl: false });
+  else mk('c-cmphourly', { __empty: true });
+}
+
 // ================= PAGE: ACCOUNTING (Zoho Books) =================
 function openAccountingTrendDrillModal() {
   renderAccountingTrendDrillBody();
@@ -2770,7 +2966,7 @@ function renderAccounting() {
 }
 
 // ---------------- render & navigation ----------------
-const RENDER = { sales: renderSales, cancel: renderCancel, prep: renderPrep, ratings: renderRatings, items: renderItemsPage, delayed: renderDelayed, commission: renderCommission, ebitda: renderEbitda, accounting: renderAccounting, export: renderExport };
+const RENDER = { sales: renderSales, cancel: renderCancel, prep: renderPrep, ratings: renderRatings, items: renderItemsPage, delayed: renderDelayed, commission: renderCommission, ebitda: renderEbitda, comparison: renderComparison, accounting: renderAccounting, export: renderExport };
 function render() { RENDER[S.page](); }
 
 function show(page) {
@@ -2791,6 +2987,7 @@ window.addEventListener('hashchange', () => {
 });
 $('#srchBrand').oninput = () => fillList('#lstBrand', '#srchBrand', uniq(S.orders.map(o => o.brand)).sort(), S.selBrands);
 $('#srchLoc').oninput = () => fillList('#lstLoc', '#srchLoc', uniq(S.orders.map(o => o.location)).sort(), S.selLocs);
+$('#cmpBrandSearch').oninput = e => { S.ui.cmpBrandSearch = e.target.value; renderBrandDeltaTable(); };
 
 function setDates(from, to) {
   S.f.from = from; S.f.to = to;

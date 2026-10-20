@@ -41,6 +41,7 @@
       <a data-page="delayed"><img src="assets/delayed.png" alt=""><span>Delayed Orders</span></a>
       <a data-page="commission"><img src="assets/commission.svg" alt=""><span>Commission</span></a>
       <a data-page="ebitda"><img src="assets/ebitda.svg" alt=""><span>EBITDA</span></a>
+      <a data-page="comparison"><img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48' width='48' height='48'%3E%3Ccircle cx='24' cy='24' r='20' fill='%23FDCB3C' stroke='%231d1d1d' stroke-width='2.5'/%3E%3Crect x='13' y='24' width='6' height='12' fill='%231d1d1d'/%3E%3Crect x='21' y='18' width='6' height='18' fill='%231d1d1d'/%3E%3Cpolyline points='30,20 35,14 29,14 35,14 35,20' fill='none' stroke='%231d1d1d' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E" alt=""><span>Comparison</span></a>
       <a data-page="accounting"><img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48' width='48' height='48'%3E%3Ccircle cx='24' cy='24' r='20' fill='%23FDCB3C' stroke='%231d1d1d' stroke-width='2.5'/%3E%3Ctext x='24' y='32' font-family='Arial, sans-serif' font-size='23' font-weight='700' text-anchor='middle' fill='%231d1d1d'%3E%24%3C/text%3E%3C/svg%3E" alt=""><span>Accounting</span></a>
       <a data-page="export"><img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48' width='48' height='48'%3E%3Ccircle cx='24' cy='24' r='20' fill='%23FDCB3C' stroke='%231d1d1d' stroke-width='2.5'/%3E%3Cline x1='24' y1='12' x2='24' y2='28' stroke='%231d1d1d' stroke-width='2.6' stroke-linecap='round'/%3E%3Cpolyline points='17,21 24,28 31,21' fill='none' stroke='%231d1d1d' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cpolyline points='13,30 13,36 35,36 35,30' fill='none' stroke='%231d1d1d' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E" alt=""><span>Data Export</span></a>
     </nav>
@@ -313,6 +314,27 @@
           <div id="zohoCostRef" class="muted small zoho-cost-ref"></div>
           <div id="costsRangeBanner" class="costs-range-banner" hidden></div>
           <div id="costsBuilder"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- PAGE : COMPARISON (Channel & Brand Day/Week-over-Period) -->
+    <section class="page" id="page-comparison">
+      <header class="filters" id="filters-comparison"></header>
+      <div class="kpis" id="kpi-comparison"></div>
+      <div class="grid g-comparison">
+        <div class="panel a-cmpchannel">
+          <div class="ph">Channel Comparison <span class="muted small">(Day-over-Day &amp; Week-over-Week)</span></div>
+          <div class="tbl-wrap"><table id="cmpChannelTable"></table></div>
+        </div>
+        <div class="panel a-cmphourly">
+          <div class="ph">Hourly Net Sales <span class="muted small">(Today vs Same Day Last Week)</span></div>
+          <div class="pb"><canvas id="c-cmphourly"></canvas></div>
+        </div>
+        <div class="panel a-cmpbrand">
+          <div class="ph">Brand Comparison <span class="muted small">(Previous Day vs Same Day Last Week)</span></div>
+          <input type="text" id="cmpBrandSearch" placeholder="Search brand…" class="cmp-search">
+          <div class="tbl-wrap"><table id="cmpBrandTable"></table></div>
         </div>
       </div>
     </section>
