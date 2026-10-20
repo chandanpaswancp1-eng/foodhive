@@ -89,7 +89,7 @@ const S = {
     cgroup: 'brand', pgroup: 'brand', rgroup: 'cuisine', igroup: 'brand',
     dgroup: 'brand', rmode: 'estimated', activeStage: null, itemsView: '86',
     cmpChannelSort: { key: 'wowPct', dir: 'desc' }, cmpBrandSort: { key: 'pct', dir: 'desc' }, cmpBrandSearch: '', cmpMetric: 'sales',
-    cmpDateSort: { key: 'pct', dir: 'desc' }, cmpDateA: '', cmpDateB: ''
+    cmpDateSort: { key: 'pct', dir: 'desc' }, cmpDateA: '', cmpDateB: '', cmpDateDim: 'channel'
   },
   rng: {}, selBrands: new Set(), selLocs: new Set()
 };
@@ -839,6 +839,7 @@ function buildToggles() {
       break;
     case 'comparison':
       add(btm, 'Net Sales | Orders', 'cmpMetric', [['sales', 'Net Sales'], ['orders', 'Orders']]);
+      add(btm, 'Date-wise Comparison By', 'cmpDateDim', [['channel', 'Channel'], ['hour', 'Hourly'], ['brand', 'Brand']]);
       break;
   }
 }
@@ -2697,17 +2698,30 @@ function brandDeltaRows() {
 
 // Date-wise comparison: lets the user pick any two arbitrary calendar dates
 // (not just the automatic Yesterday/Today or Previous-Day/Same-Day-Last-Week
-// pairs above) and see the per-channel delta between them -- e.g. a specific
-// promo day vs. an ordinary day.
+// pairs above) and see the delta between them, broken down by whichever
+// dimension the "Date-wise Comparison By" toggle is set to (Channel/Hourly/
+// Brand) -- e.g. a specific promo day vs. an ordinary day, by channel, or
+// which hour of the day drove a spike, or which brand gained/lost the most.
+const DATE_DIM_LABELS = { channel: 'Channel', hour: 'Hour', brand: 'Brand' };
+function dateCompareKeyFn() {
+  const dim = S.ui.cmpDateDim || 'channel';
+  if (dim === 'hour') return o => pad(dubaiHour(o.receivedAt)) + ':00';
+  if (dim === 'brand') return o => o.brand;
+  return o => o.channel;
+}
 function dateCompareRows(dateA, dateB) {
   const O = base('comparison', true).filter(o => !o.cancelled);
   const mk = cmpMetricKey();
-  const aM = new Map(salesAgg(O.filter(o => dkey(o.receivedAt) === dateA), o => o.channel).map(r => [r.k, r[mk]]));
-  const bM = new Map(salesAgg(O.filter(o => dkey(o.receivedAt) === dateB), o => o.channel).map(r => [r.k, r[mk]]));
-  const channels = uniq(O.map(o => o.channel)).filter(Boolean).sort();
-  return channels.map(ch => {
-    const a = aM.get(ch) || 0, b = bM.get(ch) || 0;
-    return { channel: ch, a, b, pct: deltaPct(b, a) };
+  const dim = S.ui.cmpDateDim || 'channel';
+  const keyFn = dateCompareKeyFn();
+  const aM = new Map(salesAgg(O.filter(o => dkey(o.receivedAt) === dateA), keyFn).map(r => [r.k, r[mk]]));
+  const bM = new Map(salesAgg(O.filter(o => dkey(o.receivedAt) === dateB), keyFn).map(r => [r.k, r[mk]]));
+  const keys = dim === 'hour'
+    ? Array.from({ length: 24 }, (_, h) => pad(h) + ':00')
+    : uniq(O.map(keyFn)).filter(Boolean).sort();
+  return keys.map(k => {
+    const a = aM.get(k) || 0, b = bM.get(k) || 0;
+    return { k, a, b, pct: deltaPct(b, a) };
   });
 }
 
@@ -2717,11 +2731,19 @@ function renderDateCompareTable() {
   const dateA = S.ui.cmpDateA, dateB = S.ui.cmpDateB;
   if (!dateA || !dateB) { el.innerHTML = ''; return; }
   const fmt = cmpFmt();
+  const dim = S.ui.cmpDateDim || 'channel';
+  const dimLabel = DATE_DIM_LABELS[dim];
+  // Hour isn't a filter this page cross-filters by elsewhere, so those rows
+  // are informational only -- Channel/Brand rows stay clickable, same as
+  // every other cross-filtering table on this page.
+  const clickable = dim !== 'hour';
+  const sub = $('#t-cmpdatewise-sub');
+  if (sub) sub.textContent = `(pick any two dates, by ${dimLabel.toLowerCase()})`;
   const sortState = S.ui.cmpDateSort;
-  const rows = sortRows(dateCompareRows(dateA, dateB), sortState, { channel: r => r.channel, a: r => r.a, b: r => r.b, pct: r => r.pct });
+  const rows = sortRows(dateCompareRows(dateA, dateB), sortState, { k: r => r.k, a: r => r.a, b: r => r.b, pct: r => r.pct });
   const totA = sum(rows, r => r.a), totB = sum(rows, r => r.b);
   el.innerHTML = `<thead><tr>
-      <th data-k="channel">Channel${sortArrow(sortState, 'channel')}</th>
+      <th data-k="k">${dimLabel}${sortArrow(sortState, 'k')}</th>
       <th data-k="a">${esc(dateA)}${sortArrow(sortState, 'a')}</th>
       <th data-k="b">${esc(dateB)}${sortArrow(sortState, 'b')}</th>
       <th data-k="pct">%Δ${sortArrow(sortState, 'pct')}</th>
@@ -2729,8 +2751,8 @@ function renderDateCompareTable() {
       <tr style="background:#1d1d1d;color:#FCD258;font-weight:700">
         <td>TOTAL</td><td class="num">${fmt(totA)}</td><td class="num">${fmt(totB)}</td><td class="num">${deltaHtml(deltaPct(totB, totA))}</td>
       </tr>
-      ${rows.map(r => `<tr class="cmp-row${S.f.channel === r.channel ? ' active' : ''}" data-channel="${esc(r.channel)}">
-        <td>${esc(r.channel)}</td>
+      ${rows.map(r => `<tr class="${clickable ? 'cmp-row' : ''}${clickable && S.f[dim] === r.k ? ' active' : ''}"${clickable ? ` data-channel="${esc(r.k)}"` : ''}>
+        <td>${esc(r.k)}</td>
         <td class="num">${fmt(r.a)}</td>
         <td class="num">${fmt(r.b)}</td>
         <td class="num">${deltaHtml(r.pct)}</td>
@@ -2741,9 +2763,10 @@ function renderDateCompareTable() {
     S.ui.cmpDateSort = (S.ui.cmpDateSort.key === k) ? { key: k, dir: S.ui.cmpDateSort.dir === 'desc' ? 'asc' : 'desc' } : { key: k, dir: 'desc' };
     renderDateCompareTable();
   });
+  if (!clickable) return;
   $$('tr.cmp-row', el).forEach(tr => tr.onclick = () => {
-    const ch = tr.dataset.channel;
-    S.f.channel = (S.f.channel === ch ? 'All' : ch);
+    const v = tr.dataset.channel;
+    S.f[dim] = (S.f[dim] === v ? 'All' : v);
     syncFilterUI();
     render();
   });
