@@ -329,7 +329,9 @@ const metricFmt = metric => {
 
 // ---------------- filtering ----------------
 function dateOk(t) { const k = dkey(t); return (!S.f.from || k >= S.f.from) && (!S.f.to || k <= S.f.to); }
-const eq = (v, f) => f === 'All' || v === f;
+// f is 'All' (string), a single value (string, set by chart/table click-to-
+// drill), or an array (set by the Brand/Channel multi-select filter below).
+const eq = (v, f) => f === 'All' || (Array.isArray(f) ? f.includes(v) : v === f);
 function base(page, skipDate) {
   const f = S.f;
   return S.orders.filter(o => {
@@ -380,6 +382,16 @@ function optionsFor(key) {
 function syncFilterUI() {
   $$('select[data-k]').forEach(s => {
     if (s.dataset.k in S.f) s.value = S.f[s.dataset.k];
+  });
+  // Keep the Brand/Channel multi-select button labels in sync too -- a
+  // chart/table click-to-drill sets S.f.brand/channel directly (bypassing
+  // the dropdown's own click handlers), so the button text needs an
+  // explicit refresh or it'd keep showing whatever it last said.
+  $$('.msel[data-k]').forEach(d => {
+    if (d.dataset.k in S.f) {
+      const btn = $('.msel-btn', d);
+      if (btn) btn.textContent = multiSelectSummaryText(d.dataset.k);
+    }
   });
 }
 
@@ -569,6 +581,79 @@ function getDefaultPeriod() {
   return [st.latestDate, st.latestDate];
 }
 
+// ---------------- Brand/Channel multi-select filter ----------------
+const MULTI_FILTER_KEYS = new Set(['brand', 'channel']);
+
+function selectedValuesFor(key) {
+  const f = S.f[key];
+  return Array.isArray(f) ? f : (f === 'All' ? [] : [f]);
+}
+function multiSelectSummaryText(key) {
+  const f = S.f[key];
+  if (f === 'All') return 'All';
+  const arr = Array.isArray(f) ? f : [f];
+  return arr.length === 1 ? arr[0] : `${arr.length} selected`;
+}
+function closeAllMultiSelects(exceptEl) {
+  $$('.msel.open').forEach(el => { if (el !== exceptEl) el.classList.remove('open'); });
+}
+// Clicking a specific item while "All" is active starts a fresh selection
+// with just that item (implicitly un-checking "All"), matching how the
+// equivalent native <select> would behave on first pick. Unchecking the
+// last remaining item falls back to 'All' rather than leaving an empty
+// (and therefore everything-hiding) selection.
+function toggleMultiFilterValue(key, value) {
+  if (value === null) { S.f[key] = 'All'; return; }
+  const cur = S.f[key] === 'All' ? [] : selectedValuesFor(key).slice();
+  const idx = cur.indexOf(value);
+  if (idx >= 0) cur.splice(idx, 1); else cur.push(value);
+  S.f[key] = cur.length ? cur : 'All';
+}
+function buildMultiSelectBox(key, label) {
+  const d = document.createElement('div');
+  d.className = 'fbox msel';
+  d.dataset.k = key;
+  d.innerHTML = `
+    <label>${label} <span class="chevron">⌄</span></label>
+    <button type="button" class="msel-btn"></button>
+    <div class="msel-panel">
+      <input type="text" class="msel-search" placeholder="Search">
+      <ul class="msel-list"></ul>
+    </div>
+  `;
+  const btn = $('.msel-btn', d);
+  const search = $('.msel-search', d);
+  const list = $('.msel-list', d);
+  const refreshList = () => {
+    const q = search.value.toLowerCase();
+    const isAll = S.f[key] === 'All';
+    const selected = selectedValuesFor(key);
+    const rows = [`<li class="${isAll ? 'on' : ''}" data-all="1"><input type="checkbox" ${isAll ? 'checked' : ''} tabindex="-1"><b>All</b></li>`]
+      .concat(optionsFor(key).filter(o => o.toLowerCase().includes(q)).map(o =>
+        `<li class="${!isAll && selected.includes(o) ? 'on' : ''}" title="${esc(o)}"><input type="checkbox" ${!isAll && selected.includes(o) ? 'checked' : ''} tabindex="-1">${esc(o)}</li>`
+      ));
+    list.innerHTML = rows.join('');
+    $$('li', list).forEach(li => li.onclick = e => {
+      e.stopPropagation();
+      toggleMultiFilterValue(key, li.dataset.all ? null : li.getAttribute('title'));
+      btn.textContent = multiSelectSummaryText(key);
+      refreshList();
+      render();
+    });
+  };
+  btn.textContent = multiSelectSummaryText(key);
+  btn.onclick = e => {
+    e.stopPropagation();
+    const willOpen = !d.classList.contains('open');
+    closeAllMultiSelects();
+    if (willOpen) { d.classList.add('open'); search.value = ''; refreshList(); search.focus(); }
+  };
+  search.onclick = e => e.stopPropagation();
+  search.oninput = refreshList;
+  return d;
+}
+document.addEventListener('click', () => closeAllMultiSelects());
+
 function buildFilters() {
   const targetId = S.page === 'prep' ? 'filters-prep' : `filters-${S.page}`;
   const el = $('#' + targetId); if (!el) return;
@@ -620,6 +705,9 @@ function buildFilters() {
           dateChanged();
         };
       });
+    } else if (MULTI_FILTER_KEYS.has(key)) {
+      el.appendChild(buildMultiSelectBox(key, label));
+      return;
     } else {
       d.className = 'fbox';
       d.innerHTML = `<label>${label} <span class="chevron">⌄</span></label><select data-k="${key}"><option>All</option>${optionsFor(key).map(o => `<option${S.f[key] === o ? ' selected' : ''}>${esc(o)}</option>`).join('')}</select>`;
