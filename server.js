@@ -342,6 +342,15 @@ async function syncGrubcenter(from, to, itemsFrom) {
     }
     const filteredLive = official ? normLive.filter(o => o.brand && official.has(String(o.brand).toLowerCase().trim())) : normLive;
 
+    // GrubCENTER's recurring sandbox fixture (brand "TEST BRAND" / channel
+    // "Grubtech Test") is already excluded from new syncs by the official-
+    // brands allowlist above, but rows ingested before that fix landed may
+    // still be sitting in the master map -- purge them here too, on every
+    // sync, so they self-clean instead of lingering forever.
+    for (const [id, o] of STORE.ordersMap) {
+      if (o.brand === 'TEST BRAND' || o.channel === 'Grubtech Test') STORE.ordersMap.delete(id);
+    }
+
     // Merge into in-memory master map
     let newCount = 0;
     filteredLive.forEach(o => {
