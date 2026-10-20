@@ -2727,6 +2727,23 @@ function dateCompareRows(dateA, dateB) {
 function renderDateCompareTable() {
   const el = $('#cmpDateTable');
   if (!el) return;
+  // Quick preset: fills Date A/B with today's weekday 7 days ago vs today
+  // (same pairing as the Hourly Net Sales panel above), so any dimension
+  // (Channel/Hourly/Brand) can be compared same-day-last-week with one
+  // click instead of typing both dates by hand.
+  const sdlwBtn = $('#cmpDateSdlwBtn');
+  if (sdlwBtn) {
+    sdlwBtn.onclick = () => {
+      const w = comparisonWindows(base('comparison', true).filter(o => !o.cancelled));
+      if (!w) return;
+      S.ui.cmpDateA = w.sameDayLastWeekKey;
+      S.ui.cmpDateB = w.latestDate;
+      const dA = $('#cmpDateA'), dB = $('#cmpDateB');
+      if (dA) dA.value = S.ui.cmpDateA;
+      if (dB) dB.value = S.ui.cmpDateB;
+      renderDateCompareTable();
+    };
+  }
   const dateA = S.ui.cmpDateA, dateB = S.ui.cmpDateB;
   if (!dateA || !dateB) { el.innerHTML = ''; return; }
   const fmt = cmpFmt();

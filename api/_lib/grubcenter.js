@@ -256,6 +256,15 @@ async function syncOnce(from, to, itemsFrom) {
   const filteredLive = official ? normLive.filter(o => o.brand && official.has(String(o.brand).toLowerCase().trim())) : normLive;
 
   const ordersMap = new Map((await readOrders()).map(o => [o.id, o]));
+  // GrubCENTER's recurring sandbox fixture (brand "TEST BRAND" / channel
+  // "Grubtech Test") is already excluded from new syncs by the official-
+  // brands allowlist above, but rows ingested before that fix landed are
+  // still sitting in the stored data -- purge them here too, on every
+  // sync, so they self-clean instead of lingering forever. No-op once
+  // they're gone.
+  for (const [id, o] of ordersMap) {
+    if (o.brand === 'TEST BRAND' || o.channel === 'Grubtech Test') ordersMap.delete(id);
+  }
   let newCount = 0;
   filteredLive.forEach(o => {
     if (!ordersMap.has(o.id)) newCount++;
