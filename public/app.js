@@ -1252,16 +1252,141 @@ function patchPct(id, rows, totalOrders) {
 }
 
 // ================= PAGE 2: CANCELLATIONS =================
+// Refund-eligible = cancelled AND paid by PREPAID or CARD (money captured at
+// order time). CASH (pay-on-delivery) and FOC (free-of-charge) orders are
+// excluded -- no money ever changed hands for those, so cancelling one isn't
+// a real refund, unlike the "Cancelled Orders Amount" KPI above which sums
+// every cancelled order's receiptTotal regardless of payment method.
+function refundChannelAgg() {
+  const C = base('cancel').filter(o => o.cancelled && (o.payment === 'PREPAID' || o.payment === 'CARD'));
+  const amt = sum(C, o => o.receiptTotal), n = C.length;
+  const chanAgg = groupBy(C, o => o.channel).map(g => ({ k: g.k, amount: sum(g.rows, o => o.receiptTotal), orders: g.rows.length }));
+  return { amt, n, chanAgg };
+}
+function openRefundDrillModal() {
+  renderRefundDrillBody();
+  openKpiModal('Refund Amount by Channel', 'Cancelled orders paid by PREPAID or CARD only (money already captured at order time) — excludes CASH-on-delivery and FOC (free) orders. Click a channel to cross-filter.');
+}
+function renderRefundDrillBody() {
+  const body = $('#kpiModalBody');
+  if (!body) return;
+  const { amt, chanAgg } = refundChannelAgg();
+  const rows = chanAgg.slice().sort((a, b) => b.amount - a.amount);
+  const totOrders = sum(rows, r => r.orders);
+  body.innerHTML = `
+    <div class="a-ratecard">
+      <table>
+        <thead><tr><th>Channel</th><th style="text-align:right">Orders</th><th style="text-align:right">Refund Amount</th><th style="text-align:center">Cross-Filter</th></tr></thead>
+        <tbody>
+          <tr style="background:#1d1d1d;color:#FCD258;font-weight:700">
+            <td>TOTAL</td><td style="text-align:right">${cnt(totOrders)}</td><td style="text-align:right">${money(amt)}</td><td style="text-align:center">–</td>
+          </tr>
+          ${rows.map(r => {
+            const isActive = S.f.channel === r.k;
+            return `<tr class="kpi-drill-row" data-channel="${esc(r.k)}" style="cursor:pointer;background:${isActive ? '#FFFDF2' : '#fff'};transition:background-color .15s ease">
+              <td style="font-weight:600;${isActive ? 'color:#b38600' : ''}">${isActive ? '● ' : ''}${esc(r.k)}</td>
+              <td style="text-align:right">${cnt(r.orders)}</td>
+              <td style="text-align:right;font-weight:600">${money(r.amount)}</td>
+              <td style="text-align:center"><button class="btn-yellow" style="padding:2px 8px;font-size:10px">${isActive ? 'Clear' : 'Filter'}</button></td>
+            </tr>`;
+          }).join('')}
+        </tbody>
+      </table>
+    </div>`;
+  body.querySelectorAll('.kpi-drill-row').forEach(tr => {
+    const ch = tr.dataset.channel;
+    tr.onclick = () => {
+      S.f.channel = (S.f.channel === ch ? 'All' : ch);
+      syncFilterUI();
+      renderCancel();
+      renderRefundDrillBody();
+    };
+  });
+}
+
+// Reasons where GrubCENTER attributes the cancellation to the aggregator /
+// delivery-partner side (platform-cancelled order, rider/captain couldn't be
+// found, or a captain-caused delay) rather than FoodHive or the customer --
+// these are the cancellations the aggregator is expected to make FoodHive
+// whole for. "Duplicated order" -- the large majority of cancellations by
+// both count and value -- is deliberately excluded: it's a system/POS
+// duplicate-push glitch, not an aggregator-fault reason, and FoodHive
+// confirmed it is not reimbursed for these in aggregator settlements.
+// Exact-match allowlist (not a substring/regex guess) since these read as
+// GrubCENTER's own fixed reason codes/labels, same convention as the
+// contract-sourced CHANNEL_RATES table in commission.js.
+const AGGREGATOR_FAULT_REASONS = new Set([
+  'DELIVEROO_ORDER_CANCEL',
+  'Cancelled by Noon',
+  'REQUESTED_BY_FOOD_AGGREGATOR',
+  'UNABLE_TO_FIND',
+  'Order delayed because of captain'
+]);
+// Valued at Net Sales (FoodHive's own lost revenue), not Receipt Total --
+// unlike the customer-facing Refund Amount above, this is aggregator-to-
+// restaurant compensation, so it's based on what FoodHive itself lost, not
+// the VAT-inclusive amount the customer was charged.
+function aggregatorRevertChannelAgg() {
+  const C = base('cancel').filter(o => o.cancelled && AGGREGATOR_FAULT_REASONS.has(o.reason));
+  const amt = sum(C, o => o.netSales), n = C.length;
+  const chanAgg = groupBy(C, o => o.channel).map(g => ({ k: g.k, amount: sum(g.rows, o => o.netSales), orders: g.rows.length }));
+  return { amt, n, chanAgg };
+}
+function openAggregatorRevertDrillModal() {
+  renderAggregatorRevertDrillBody();
+  openKpiModal('Reverted by Aggregator — by Channel', 'Net Sales of cancelled orders GrubCENTER attributes to the aggregator/delivery partner (platform-cancelled, rider not found, captain delay) — excludes "Duplicated order" and other non-aggregator reasons. Click a channel to cross-filter.');
+}
+function renderAggregatorRevertDrillBody() {
+  const body = $('#kpiModalBody');
+  if (!body) return;
+  const { amt, chanAgg } = aggregatorRevertChannelAgg();
+  const rows = chanAgg.slice().sort((a, b) => b.amount - a.amount);
+  const totOrders = sum(rows, r => r.orders);
+  body.innerHTML = `
+    <div class="a-ratecard">
+      <table>
+        <thead><tr><th>Channel</th><th style="text-align:right">Orders</th><th style="text-align:right">Reverted Amount</th><th style="text-align:center">Cross-Filter</th></tr></thead>
+        <tbody>
+          <tr style="background:#1d1d1d;color:#FCD258;font-weight:700">
+            <td>TOTAL</td><td style="text-align:right">${cnt(totOrders)}</td><td style="text-align:right">${money(amt)}</td><td style="text-align:center">–</td>
+          </tr>
+          ${rows.map(r => {
+            const isActive = S.f.channel === r.k;
+            return `<tr class="kpi-drill-row" data-channel="${esc(r.k)}" style="cursor:pointer;background:${isActive ? '#FFFDF2' : '#fff'};transition:background-color .15s ease">
+              <td style="font-weight:600;${isActive ? 'color:#b38600' : ''}">${isActive ? '● ' : ''}${esc(r.k)}</td>
+              <td style="text-align:right">${cnt(r.orders)}</td>
+              <td style="text-align:right;font-weight:600">${money(r.amount)}</td>
+              <td style="text-align:center"><button class="btn-yellow" style="padding:2px 8px;font-size:10px">${isActive ? 'Clear' : 'Filter'}</button></td>
+            </tr>`;
+          }).join('')}
+        </tbody>
+      </table>
+    </div>`;
+  body.querySelectorAll('.kpi-drill-row').forEach(tr => {
+    const ch = tr.dataset.channel;
+    tr.onclick = () => {
+      S.f.channel = (S.f.channel === ch ? 'All' : ch);
+      syncFilterUI();
+      renderCancel();
+      renderAggregatorRevertDrillBody();
+    };
+  });
+}
+
 function renderCancel() {
   const C = base('cancel').filter(o => o.cancelled);
   const amt = sum(C, o => o.receiptTotal), n = C.length;
   const val = S.ui.cmetric === 'value';
   const mv = r => (val ? r.receipt : r.orders);
   const lbf = val ? money : cnt;
+  const refund = refundChannelAgg();
+  const reverted = aggregatorRevertChannelAgg();
   kpis('kpi-cancel', [
     ['Cancelled Orders Amount', money(amt), false, () => { S.ui.cmetric = 'value'; buildToggles(); renderCancel(); }, val, 'Click to view Cancelled Orders Value in AED across all charts'],
     ['Total Cancelled Orders', cnt(n), false, () => { S.ui.cmetric = 'orders'; buildToggles(); renderCancel(); }, !val, 'Click to view Cancelled Orders Count volume across all charts'],
-    ['AOV', n ? (amt / n).toFixed(2) : '0', false, null, false, 'Average Order Value of cancelled orders (Cancelled Orders Amount / Total Cancelled Orders). Use the "Post Cancelled" filter above to isolate direct kitchen food waste.']
+    ['AOV', n ? (amt / n).toFixed(2) : '0', false, null, false, 'Average Order Value of cancelled orders (Cancelled Orders Amount / Total Cancelled Orders). Use the "Post Cancelled" filter above to isolate direct kitchen food waste.'],
+    ['Refund Amount', money(refund.amt), false, openRefundDrillModal, false, 'Cancelled orders paid by PREPAID or CARD only (money already captured at order time) — excludes CASH-on-delivery and FOC (free) orders, since no money changed hands for those. Click for the channel breakdown.', 'drill'],
+    ['Reverted by Aggregator', money(reverted.amt), false, openAggregatorRevertDrillModal, false, 'Net Sales of cancelled orders attributed to the aggregator/delivery partner (platform-cancelled, rider not found, captain delay) — excludes "Duplicated order" and other non-aggregator reasons. Click for the channel breakdown.', 'drill']
   ]);
 
   const mkRows = (kf, lim) => { const rr = salesAgg(C, kf).sort((a, b) => mv(b) - mv(a)); const tot = sum(rr, r => r.orders); return { rows: rr.slice(0, lim), tot }; };
