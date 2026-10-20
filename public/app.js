@@ -1023,13 +1023,13 @@ function renderSales() {
       S.ui.metric = (m === 'gross' || m === 'receipt' ? 'sales' : 'gross');
       buildToggles();
       renderSales();
-    }, m === 'gross' || m === 'receipt', 'Click to switch all dashboard charts and metrics to Gross Sales (GMV before discount)'],
+    }, m === 'gross' || m === 'receipt', 'Click to switch all dashboard charts and metrics to Gross Sales (GMV before discount, includes 5% VAT)'],
 
     ['Net Sales', money(net), false, () => {
       S.ui.metric = 'sales';
       buildToggles();
       renderSales();
-    }, m === 'sales', 'Click to switch all dashboard charts and metrics to Net Sales (after discount)'],
+    }, m === 'sales', 'Click to switch all dashboard charts and metrics to Net Sales (after discount, excludes VAT)'],
 
     ['Total Orders', cnt(n), false, () => {
       S.ui.metric = 'orders';
@@ -1055,7 +1055,7 @@ function renderSales() {
       S.ui.metric = (m === 'discPctGross' ? 'sales' : 'discPctGross');
       buildToggles();
       renderSales();
-    }, m === 'discPctGross', 'Click to view Discount as % of Gross Sales: Total Discount / Gross Sales'],
+    }, m === 'discPctGross', 'Click to view Discount as % of Gross Sales: Total Discount / Gross Sales (both VAT-inclusive)'],
 
     ['Top Performing Brand', top ? esc(top.k) : '–', true, () => {
       if (!top) return;
@@ -2163,7 +2163,7 @@ function loadLogoDataUrl() {
 async function downloadPLPdf() {
   if (!lastPL) return;
   if (!window.jspdf || !window.jspdf.jsPDF) { alert('PDF library failed to load (offline?) -- use the CSV download instead.'); return; }
-  const { gross, disc, net, cogs, grossProfit, labor, commission, controllable, occupancy, ga, eb, primeCost, from, to, channel, brand, location } = lastPL;
+  const { gross, disc, vat, net, cogs, grossProfit, labor, commission, controllable, occupancy, ga, eb, primeCost, from, to, channel, brand, location } = lastPL;
   const pctOf = v => net ? (Math.abs(v) / net * 100).toFixed(1) + '%' : '0.0%';
   const fmtAmt = v => (v < 0 ? '(' + Math.abs(v).toFixed(2) + ')' : v.toFixed(2));
   const ded = v => fmtAmt(-Math.abs(v));
@@ -2194,8 +2194,9 @@ async function downloadPLPdf() {
 
   const body = [
     ['REVENUE', '', '', ''],
-    ['Revenue', 'Gross Sales', gross.toFixed(2), pctOf(gross)],
+    ['Revenue', 'Gross Sales (incl. VAT)', gross.toFixed(2), pctOf(gross)],
     ['Revenue', '(-) Discounts', ded(disc), pctOf(disc)],
+    ['Revenue', '(-) VAT (5%)', ded(vat), pctOf(vat)],
     ['Revenue', 'Net Sales (Total)', net.toFixed(2), '100.0%'],
     ['COST OF GOODS SOLD (COGS)', '', '', ''],
     ['COGS', 'Food & Beverage Cost', ded(cogs), pctOf(cogs)],
@@ -2209,7 +2210,7 @@ async function downloadPLPdf() {
     ['Expenses', 'Total', ded(opexTotal), pctOf(opexTotal)],
     ['EBITDA', '', fmtAmt(eb), pctOf(eb)]
   ];
-  const sectionRows = [0, 4, 7], highlightRows = [6, 14], subtotalRows = [13];
+  const sectionRows = [0, 5, 8], highlightRows = [7, 15], subtotalRows = [14];
 
   doc.autoTable({
     startY: y,
@@ -2283,6 +2284,11 @@ function renderZohoCostBreakdownBody() {
 function renderEbitda() {
   const O = base('ebitda').filter(o => !o.cancelled);
   const gross = sum(O, o => o.receiptTotal), disc = sum(O, o => o.discount), net = sum(O, o => o.netSales);
+  // receiptTotal/discount are VAT-inclusive, netSales is VAT-exclusive (see
+  // normalize.js's VAT_RATE comment), so Gross - Discounts != Net Sales --
+  // the gap is the VAT amount, surfaced here as its own line so the
+  // waterfall foots exactly instead of silently not adding up.
+  const vat = gross - disc - net;
   const commission = sum(O, o => FHCommission.commissionForOrder(o));
   const costs = renderCostsBuilder(commission);
   renderZohoCostRef();
@@ -2318,8 +2324,9 @@ function renderEbitda() {
   ]);
 
   const plRows = [
-    { label: 'Gross Sales', amount: gross, cls: '' },
+    { label: 'Gross Sales (incl. VAT)', amount: gross, cls: '' },
     { label: '(−) Discounts', amount: disc, cls: '' },
+    { label: '(−) VAT (5%)', amount: vat, cls: '' },
     { label: '= Net Sales', amount: net, cls: 'pl-sub' },
     { label: '(−) Cost of Goods Sold', amount: costs.cogs, cls: '' },
     { label: '= Gross Profit', amount: grossProfit, cls: 'pl-sub' },
@@ -2332,7 +2339,7 @@ function renderEbitda() {
     { label: '= EBITDA', amount: eb, cls: 'pl-total' }
   ];
   lastPL = {
-    gross, disc, net, cogs: costs.cogs, grossProfit,
+    gross, disc, vat, net, cogs: costs.cogs, grossProfit,
     labor: costs.labor, commission, controllable: costs.controllable, occupancy: costs.occupancy, ga: costs.ga,
     eb, primeCost,
     from: S.f.from, to: S.f.to, channel: S.f.channel, brand: S.f.brand, location: S.f.location,
@@ -2664,8 +2671,14 @@ function renderAccountingOverdueDrillBody(kind) {
   const body = $('#kpiModalBody');
   const z = S.zoho;
   if (!body || !z) return;
+  // Balance + due-date based, not status-based: Zoho relabels an invoice/bill
+  // 'partially_paid' once any payment lands, even if it's still outstanding
+  // and past due, so a status==='overdue' filter alone silently drops those
+  // records. This mirrors the aging drill-down's own balance-based
+  // "outstanding" filter just above.
+  const todayKey = dkey(Date.now());
   const records = ((kind === 'invoices' ? z.invoices : z.bills) || [])
-    .filter(x => x.status === 'overdue')
+    .filter(x => (+x.balance || 0) > 0 && x.due_date && x.due_date < todayKey)
     .sort((a, b) => (a.due_date || '').localeCompare(b.due_date || ''));
   const who = kind === 'invoices' ? 'Customer' : 'Vendor';
   const numberLabel = kind === 'invoices' ? 'Invoice #' : 'Bill #';
@@ -2928,7 +2941,7 @@ function renderAccounting() {
     ['True Net Profit', has ? money(trueNetProfit) : '–', true, drill(openTrueProfitDrillModal), false, 'GrubCENTER Net Sales − GrubCENTER Commission − Zoho Operating Expenses, for the current month. Click for the full breakdown.', 'drill'],
     ['Total Assets', has && z.balanceSheet ? money(z.balanceSheet.totalAssets) : '–', false, (has && z.balanceSheet) ? openBalanceSheetDrillModal : null, false, 'Total assets on the balance sheet, as of today (Zoho Books). Click for the full breakdown.', 'drill'],
     ['Total Liabilities', has && z.balanceSheet ? money(z.balanceSheet.totalLiabilities) : '–', false, (has && z.balanceSheet) ? openBalanceSheetDrillModal : null, false, 'Total liabilities on the balance sheet, as of today (Zoho Books). Click for the full breakdown.', 'drill'],
-    ['Total Equity', has && z.balanceSheet ? money(z.balanceSheet.totalEquity) : '–', false, (has && z.balanceSheet) ? openBalanceSheetDrillModal : null, false, 'Total equity (Assets − Liabilities) on the balance sheet, as of today (Zoho Books). Click for the full breakdown.', 'drill']
+    ['Total Equity', has && z.balanceSheet ? money(z.balanceSheet.totalEquity) : '–', false, (has && z.balanceSheet) ? openBalanceSheetDrillModal : null, false, "Total equity on the balance sheet, as of today (Zoho Books' own Total Equities figure, cross-checked against Assets − Liabilities). Click for the full breakdown.", 'drill']
   ]);
 
   if (!has) {
@@ -3178,23 +3191,28 @@ function downloadPlXlsx(filename, pl) {
   const money = v => ({ t: 'n', v: round2(v), z: XLS_MONEY_FMT });
   const pct = r => ({ t: 'n', f: `B${r + 1}/$B$${NET_R + 1}`, z: XLS_PCT_FMT });
   const label = (r, text, style) => set(r, 0, { t: 's', v: text, s: style });
-  const NET_R = 4, GP_R = 6, CP_R = 10, EB_R = 13;
+  const NET_R = 5, GP_R = 7, CP_R = 11, EB_R = 14;
 
-  label(2, 'Gross Sales'); set(2, 1, money(pl.gross)); set(2, 2, pct(2));
+  label(2, 'Gross Sales (incl. VAT)'); set(2, 1, money(pl.gross)); set(2, 2, pct(2));
   label(3, '(−) Discounts'); set(3, 1, money(pl.disc)); set(3, 2, pct(3));
-  label(NET_R, '= Net Sales', XLS_SUBTOTAL_STYLE); set(NET_R, 1, { t: 'n', f: `B3-B4`, z: XLS_MONEY_FMT, s: XLS_SUBTOTAL_STYLE }); set(NET_R, 2, { ...pct(NET_R), s: XLS_SUBTOTAL_STYLE });
-  label(5, '(−) Cost of Goods Sold'); set(5, 1, money(pl.cogs)); set(5, 2, pct(5));
-  label(GP_R, '= Gross Profit', XLS_SUBTOTAL_STYLE); set(GP_R, 1, { t: 'n', f: `B${NET_R + 1}-B6`, z: XLS_MONEY_FMT, s: XLS_SUBTOTAL_STYLE }); set(GP_R, 2, { ...pct(GP_R), s: XLS_SUBTOTAL_STYLE });
-  label(7, '(−) Labor Cost'); set(7, 1, money(pl.labor)); set(7, 2, pct(7));
-  label(8, '(−) Portal / Aggregator Commission'); set(8, 1, money(pl.commission)); set(8, 2, pct(8));
-  label(9, '(−) Other Controllable Expenses'); set(9, 1, money(pl.controllable)); set(9, 2, pct(9));
-  label(CP_R, '= Controllable Profit', XLS_SUBTOTAL_STYLE); set(CP_R, 1, { t: 'n', f: `B${GP_R + 1}-B8-B9-B10`, z: XLS_MONEY_FMT, s: XLS_SUBTOTAL_STYLE }); set(CP_R, 2, { ...pct(CP_R), s: XLS_SUBTOTAL_STYLE });
-  label(11, '(−) Occupancy Costs'); set(11, 1, money(pl.occupancy)); set(11, 2, pct(11));
-  label(12, '(−) General & Administrative'); set(12, 1, money(pl.ga)); set(12, 2, pct(12));
-  label(EB_R, '= EBITDA', XLS_TOTAL_STYLE); set(EB_R, 1, { t: 'n', f: `B${CP_R + 1}-B12-B13`, z: XLS_MONEY_FMT, s: XLS_TOTAL_STYLE }); set(EB_R, 2, { ...pct(EB_R), s: XLS_TOTAL_STYLE });
-  label(15, 'Prime Cost (COGS + Labor)'); set(15, 1, { t: 'n', f: 'B6+B8', z: XLS_MONEY_FMT }); set(15, 2, pct(15));
+  // receiptTotal/discount are VAT-inclusive, netSales is VAT-exclusive (see
+  // normalize.js's VAT_RATE comment), so without this line Net Sales below
+  // would compute as Gross - Discounts in Excel and be ~5% too high --
+  // this makes the formula foot exactly against the real netSales total.
+  label(4, '(−) VAT (5%)'); set(4, 1, money(pl.vat)); set(4, 2, pct(4));
+  label(NET_R, '= Net Sales', XLS_SUBTOTAL_STYLE); set(NET_R, 1, { t: 'n', f: `B3-B4-B5`, z: XLS_MONEY_FMT, s: XLS_SUBTOTAL_STYLE }); set(NET_R, 2, { ...pct(NET_R), s: XLS_SUBTOTAL_STYLE });
+  label(6, '(−) Cost of Goods Sold'); set(6, 1, money(pl.cogs)); set(6, 2, pct(6));
+  label(GP_R, '= Gross Profit', XLS_SUBTOTAL_STYLE); set(GP_R, 1, { t: 'n', f: `B${NET_R + 1}-B7`, z: XLS_MONEY_FMT, s: XLS_SUBTOTAL_STYLE }); set(GP_R, 2, { ...pct(GP_R), s: XLS_SUBTOTAL_STYLE });
+  label(8, '(−) Labor Cost'); set(8, 1, money(pl.labor)); set(8, 2, pct(8));
+  label(9, '(−) Portal / Aggregator Commission'); set(9, 1, money(pl.commission)); set(9, 2, pct(9));
+  label(10, '(−) Other Controllable Expenses'); set(10, 1, money(pl.controllable)); set(10, 2, pct(10));
+  label(CP_R, '= Controllable Profit', XLS_SUBTOTAL_STYLE); set(CP_R, 1, { t: 'n', f: `B${GP_R + 1}-B9-B10-B11`, z: XLS_MONEY_FMT, s: XLS_SUBTOTAL_STYLE }); set(CP_R, 2, { ...pct(CP_R), s: XLS_SUBTOTAL_STYLE });
+  label(12, '(−) Occupancy Costs'); set(12, 1, money(pl.occupancy)); set(12, 2, pct(12));
+  label(13, '(−) General & Administrative'); set(13, 1, money(pl.ga)); set(13, 2, pct(13));
+  label(EB_R, '= EBITDA', XLS_TOTAL_STYLE); set(EB_R, 1, { t: 'n', f: `B${CP_R + 1}-B13-B14`, z: XLS_MONEY_FMT, s: XLS_TOTAL_STYLE }); set(EB_R, 2, { ...pct(EB_R), s: XLS_TOTAL_STYLE });
+  label(16, 'Prime Cost (COGS + Labor)'); set(16, 1, { t: 'n', f: 'B7+B9', z: XLS_MONEY_FMT }); set(16, 2, pct(16));
 
-  ws['!ref'] = XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: 15, c: 2 } });
+  ws['!ref'] = XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: 16, c: 2 } });
   ws['!cols'] = [{ wch: 34 }, { wch: 16 }, { wch: 14 }];
   ws['!merges'] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: 2 } }];
   XLSX.utils.book_append_sheet(wb, ws, 'P&L');

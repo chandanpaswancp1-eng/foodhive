@@ -80,8 +80,19 @@ function monthRange(offsetMonths) {
   const start = new Date(Date.UTC(y, m, 1));
   const end = new Date(Date.UTC(y, m + 1, 0));
   const iso = d => d.toISOString().slice(0, 10);
+  // Current month only: cap `to` at today, not the calendar month-end. The
+  // frontend's GrubCENTER current-month revenue figure
+  // (grubCenterMonthFigures()) is always month-to-date (no future orders
+  // can exist), so the Zoho expense window fetched here must share that
+  // same anchor -- otherwise Net Profit/True Net Profit blend a
+  // month-to-date revenue figure against a full-month expense figure (e.g.
+  // a pre-dated recurring bill later in the month would count as an
+  // expense before its matching revenue days have actually happened).
+  // Closed/past months keep the full calendar month-end, since "today"
+  // doesn't apply to them.
+  const to = offsetMonths === 0 ? iso(now) : iso(end);
   return {
-    from: iso(start), to: iso(end),
+    from: iso(start), to,
     key: `${start.getUTCFullYear()}-${pad2(start.getUTCMonth() + 1)}`,
     label: start.toLocaleString('en-US', { month: 'short', year: '2-digit', timeZone: 'UTC' })
   };
@@ -253,8 +264,13 @@ async function syncOnceInner() {
   // overdue KPI source below and the raw data for Data Export.
   const allInvoices = await zGetAllPages('/invoices', 'invoices', {}, session);
   const allBills = await zGetAllPages('/bills', 'bills', {}, session);
-  const overdueInvoices = allInvoices.filter(i => i.status === 'overdue');
-  const overdueBills = allBills.filter(b => b.status === 'overdue');
+  // Balance + due-date based, not status-based: Zoho relabels an invoice/bill
+  // 'partially_paid' once any payment lands, even if it's still outstanding
+  // and past due, so a status==='overdue' filter alone silently drops those
+  // records.
+  const isOverdue = x => (+x.balance || 0) > 0 && x.due_date && x.due_date < toDate;
+  const overdueInvoices = allInvoices.filter(isOverdue);
+  const overdueBills = allBills.filter(isOverdue);
 
   const activeBankAccounts = (bankResp.bankaccounts || []).filter(a => a.is_active && (a.account_type === 'bank' || a.account_type === 'cash'));
 

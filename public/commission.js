@@ -33,7 +33,7 @@
      order; Careem's 4%/mo Marketing Commitment - merchant ad spend, not a
      platform commission; fixed monthly/one-time fees (Talabat AED262.50/mo
      subscription + AED525 one-time registration, Deliveroo AED50/site/mo
-     platform fee effective 1 Nov 2026, Keeta AED500/device POS fee) - these
+     platform fee effective 1 Dec 2026, Keeta AED500/device POS fee) - these
      are overhead, not order-linked, and Deliveroo's hasn't started within
      the current data window.
    - EBITDA = Net Sales - Commission - Other Operating Costs. Discount is
