@@ -2517,7 +2517,15 @@ function comparisonWindows(orders) {
   const yesterdayKey = dkey(yd);
 
   const sdlw = new Date(ld); sdlw.setDate(ld.getDate() - 7);
-  const sameDayLastWeekKey = dkey(sdlw);
+  const sameDayLastWeekKey = dkey(sdlw); // today's weekday, 7 days ago -- used by the "Today vs Same Day Last Week" hourly overlay
+
+  // Yesterday's weekday, 7 days ago -- NOT the same as sameDayLastWeekKey
+  // above (that's anchored to TODAY, only 6 days before yesterday and on a
+  // different weekday). The Brand table compares Previous Day against this,
+  // so both sides must be the identical weekday, 7 days apart -- otherwise
+  // it silently compares e.g. a Monday to the prior week's Tuesday.
+  const ydlw = new Date(yd); ydlw.setDate(yd.getDate() - 7);
+  const yesterdaySameDayLastWeekKey = dkey(ydlw);
 
   // Monday-anchored week-to-date, same derivation as getPeriodStats' weekStart.
   const dow = (ld.getDay() + 6) % 7;
@@ -2533,7 +2541,7 @@ function comparisonWindows(orders) {
   const lwe = new Date(ld); lwe.setDate(ld.getDate() - 7);
   const lastWeekEnd = dkey(lwe);
 
-  return { latestDate, yesterdayKey, sameDayLastWeekKey, thisWeekStart, lastWeekStart, lastWeekEnd };
+  return { latestDate, yesterdayKey, sameDayLastWeekKey, yesterdaySameDayLastWeekKey, thisWeekStart, lastWeekStart, lastWeekEnd };
 }
 
 // null (never Infinity/NaN) when there's no prior-period sales to compare
@@ -2583,7 +2591,7 @@ function brandDeltaRows() {
   if (!w) return [];
   const mk = cmpMetricKey();
   const prevDayM = new Map(salesAgg(O.filter(o => dkey(o.receivedAt) === w.yesterdayKey), o => o.brand).map(r => [r.k, r[mk]]));
-  const sdlwM = new Map(salesAgg(O.filter(o => dkey(o.receivedAt) === w.sameDayLastWeekKey), o => o.brand).map(r => [r.k, r[mk]]));
+  const sdlwM = new Map(salesAgg(O.filter(o => dkey(o.receivedAt) === w.yesterdaySameDayLastWeekKey), o => o.brand).map(r => [r.k, r[mk]]));
   const brands = uniq(O.map(o => o.brand)).filter(Boolean);
   return brands.map(b => {
     const prevDayNet = prevDayM.get(b) || 0, sdlwNet = sdlwM.get(b) || 0;
