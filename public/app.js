@@ -839,7 +839,6 @@ function buildToggles() {
       break;
     case 'comparison':
       add(btm, 'Net Sales | Orders', 'cmpMetric', [['sales', 'Net Sales'], ['orders', 'Orders']]);
-      add(btm, 'Date-wise Comparison By', 'cmpDateDim', [['channel', 'Channel'], ['hour', 'Hourly'], ['brand', 'Brand']]);
       break;
   }
 }
@@ -2739,6 +2738,20 @@ function renderDateCompareTable() {
   const clickable = dim !== 'hour';
   const sub = $('#t-cmpdatewise-sub');
   if (sub) sub.textContent = `(pick any two dates, by ${dimLabel.toLowerCase()})`;
+
+  // Dimension switcher: inline in the panel (not a sidebar toggle), same
+  // segmented-control pattern as the Daily/Weekly/.../Yearly grain switcher.
+  const seg = $('#cmpDateDimSeg');
+  if (seg) {
+    seg.innerHTML = '';
+    [['channel', 'Channel'], ['hour', 'Hourly'], ['brand', 'Brand']].forEach(([v, t]) => {
+      const b = document.createElement('button');
+      b.textContent = t;
+      if (dim === v) b.className = 'on';
+      b.onclick = () => { S.ui.cmpDateDim = v; renderDateCompareTable(); };
+      seg.appendChild(b);
+    });
+  }
   const sortState = S.ui.cmpDateSort;
   const rows = sortRows(dateCompareRows(dateA, dateB), sortState, { k: r => r.k, a: r => r.a, b: r => r.b, pct: r => r.pct });
   const totA = sum(rows, r => r.a), totB = sum(rows, r => r.b);
