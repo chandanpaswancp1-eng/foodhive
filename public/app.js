@@ -343,6 +343,13 @@ function base(page, skipDate) {
       return true;
     }
     if (page === 'cancel') return eq(o.channel, f.channel) && eq(o.reason, f.reason) && (f.post === 'All' || (f.post === 'Yes') === o.postCancelled);
+    // Comparison page has no channel/brand dropdown of its own (they're the
+    // tables' own row axes) -- f.channel is instead set by clicking a row in
+    // the Channel/Date-wise tables (see renderChannelDeltaTable/
+    // renderDateCompareTable), cross-filtering every widget on the page down
+    // to that one channel. f.brand is already applied unconditionally above
+    // for every page, so Brand-table row clicks need no extra branch here.
+    if (page === 'comparison') return eq(o.channel, f.channel);
     return true;
   });
 }
@@ -2634,7 +2641,7 @@ function renderDateCompareTable() {
       <tr style="background:#1d1d1d;color:#FCD258;font-weight:700">
         <td>TOTAL</td><td class="num">${fmt(totA)}</td><td class="num">${fmt(totB)}</td><td class="num">${deltaHtml(deltaPct(totB, totA))}</td>
       </tr>
-      ${rows.map(r => `<tr>
+      ${rows.map(r => `<tr class="cmp-row${S.f.channel === r.channel ? ' active' : ''}" data-channel="${esc(r.channel)}">
         <td>${esc(r.channel)}</td>
         <td class="num">${fmt(r.a)}</td>
         <td class="num">${fmt(r.b)}</td>
@@ -2645,6 +2652,12 @@ function renderDateCompareTable() {
     const k = th.dataset.k;
     S.ui.cmpDateSort = (S.ui.cmpDateSort.key === k) ? { key: k, dir: S.ui.cmpDateSort.dir === 'desc' ? 'asc' : 'desc' } : { key: k, dir: 'desc' };
     renderDateCompareTable();
+  });
+  $$('tr.cmp-row', el).forEach(tr => tr.onclick = () => {
+    const ch = tr.dataset.channel;
+    S.f.channel = (S.f.channel === ch ? 'All' : ch);
+    syncFilterUI();
+    render();
   });
 }
 
@@ -2699,7 +2712,7 @@ function renderChannelDeltaTable() {
       <th data-k="lwNet">Last Week${sortArrow(sortState, 'lwNet')}</th>
       <th data-k="twNet">This Week${sortArrow(sortState, 'twNet')}</th>
       <th data-k="wowPct">Week-over-Week${sortArrow(sortState, 'wowPct')}</th>
-    </tr></thead><tbody>${rows.map(r => `<tr>
+    </tr></thead><tbody>${rows.map(r => `<tr class="cmp-row${S.f.channel === r.channel ? ' active' : ''}" data-channel="${esc(r.channel)}">
       <td>${esc(r.channel)}</td>
       <td class="num">${fmt(r.ydayNet)}</td>
       <td class="num">${fmt(r.todayNet)}</td>
@@ -2712,6 +2725,12 @@ function renderChannelDeltaTable() {
     const k = th.dataset.k;
     S.ui.cmpChannelSort = (S.ui.cmpChannelSort.key === k) ? { key: k, dir: S.ui.cmpChannelSort.dir === 'desc' ? 'asc' : 'desc' } : { key: k, dir: 'desc' };
     renderChannelDeltaTable();
+  });
+  $$('tr.cmp-row', el).forEach(tr => tr.onclick = () => {
+    const ch = tr.dataset.channel;
+    S.f.channel = (S.f.channel === ch ? 'All' : ch);
+    syncFilterUI();
+    render();
   });
 }
 
@@ -2729,7 +2748,7 @@ function renderBrandDeltaTable() {
       <th data-k="prevDayNet">Previous Day ${metricLabel}${sortArrow(sortState, 'prevDayNet')}</th>
       <th data-k="sdlwNet">Same Day Last Week ${metricLabel}${sortArrow(sortState, 'sdlwNet')}</th>
       <th data-k="pct">%Δ${sortArrow(sortState, 'pct')}</th>
-    </tr></thead><tbody>${rows.map(r => `<tr>
+    </tr></thead><tbody>${rows.map(r => `<tr class="cmp-row${S.f.brand === r.brand ? ' active' : ''}" data-brand="${esc(r.brand)}">
       <td>${esc(r.brand)}</td>
       <td class="num">${fmt(r.prevDayNet)}</td>
       <td class="num">${fmt(r.sdlwNet)}</td>
@@ -2739,6 +2758,12 @@ function renderBrandDeltaTable() {
     const k = th.dataset.k;
     S.ui.cmpBrandSort = (S.ui.cmpBrandSort.key === k) ? { key: k, dir: S.ui.cmpBrandSort.dir === 'desc' ? 'asc' : 'desc' } : { key: k, dir: 'desc' };
     renderBrandDeltaTable();
+  });
+  $$('tr.cmp-row', el).forEach(tr => tr.onclick = () => {
+    const b = tr.dataset.brand;
+    S.f.brand = (S.f.brand === b ? 'All' : b);
+    syncFilterUI();
+    render();
   });
 }
 
@@ -2758,8 +2783,8 @@ function renderComparison() {
     [`${metricLabel} Yesterday`, fmt(ydayTotal), false, null, false, `Total ${metricDesc} the day before.`],
     ['Day-over-Day', deltaHtml(deltaPct(todayTotal, ydayTotal)), false, null, false, `Today vs Yesterday, blended ${metricDesc} across all channels.`],
     ['Week-over-Week', deltaHtml(deltaPct(twTotal, lwTotal)), false, null, false, `This week-to-date vs the same partial span last week, blended ${metricDesc} across all channels.`],
-    ['Top Gaining Brand', topGainer ? esc(topGainer.brand) : '–', true, null, false, topGainer ? `${topGainer.brand}: ${deltaHtml(topGainer.pct).replace(/<[^>]+>/g, '')} vs same day last week (${metricDesc})` : ''],
-    ['Top Declining Brand', topDecliner ? esc(topDecliner.brand) : '–', true, null, false, topDecliner ? `${topDecliner.brand}: ${deltaHtml(topDecliner.pct).replace(/<[^>]+>/g, '')} vs same day last week (${metricDesc})` : '']
+    ['Top Gaining Brand', topGainer ? esc(topGainer.brand) : '–', true, topGainer ? () => { S.f.brand = (S.f.brand === topGainer.brand ? 'All' : topGainer.brand); syncFilterUI(); render(); } : null, !!topGainer && S.f.brand === topGainer.brand, topGainer ? `${topGainer.brand}: ${deltaHtml(topGainer.pct).replace(/<[^>]+>/g, '')} vs same day last week (${metricDesc}). Click to filter the page to this brand (click again to clear).` : ''],
+    ['Top Declining Brand', topDecliner ? esc(topDecliner.brand) : '–', true, topDecliner ? () => { S.f.brand = (S.f.brand === topDecliner.brand ? 'All' : topDecliner.brand); syncFilterUI(); render(); } : null, !!topDecliner && S.f.brand === topDecliner.brand, topDecliner ? `${topDecliner.brand}: ${deltaHtml(topDecliner.pct).replace(/<[^>]+>/g, '')} vs same day last week (${metricDesc}). Click to filter the page to this brand (click again to clear).` : '']
   ]);
 
   renderChannelDeltaTable();

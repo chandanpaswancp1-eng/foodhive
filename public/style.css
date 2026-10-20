@@ -529,6 +529,11 @@ nav a.on { background: #fff; border-color: var(--k); }
 .cmp-datewise-pick input[type="date"] {
   font: inherit; font-size: 12px; padding: 5px 8px; border: 1px solid var(--line); border-radius: 4px; background: #fff; color: var(--k);
 }
+.cmp-row { cursor: pointer; transition: background-color .15s ease; }
+.cmp-row:hover { background: #fdf6e0; }
+.cmp-row.active { background: #FFFDF2; }
+.cmp-row.active td:first-child { color: #b38600; }
+.cmp-row.active td:first-child::before { content: "● "; }
 .delta { font-weight: 700; white-space: nowrap; }
 .delta.up { color: #2e7d32; }
 .delta.down { color: #c62828; }
