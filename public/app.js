@@ -3247,7 +3247,13 @@ $('#cmpDateB').onchange = e => { S.ui.cmpDateB = e.target.value; renderDateCompa
 
 function setDates(from, to) {
   S.f.from = from; S.f.to = to;
-  S.loadedRange = [from, to];
+  // Does NOT touch S.loadedRange -- that tracks what's actually been
+  // fetched into S.orders (set by setData()/loadLive() below), which is a
+  // separate concept from "what the user is currently filtering the view
+  // to". Conflating the two here used to mean picking any narrower range
+  // (e.g. "Month") silently shrank what the app believed was cached, so a
+  // later "All" click would only reflect that narrow window instead of the
+  // full history already sitting in memory.
   const targetId = S.page === 'prep' ? 'filters-prep' : 'filters-' + S.page;
   const root = $('#' + targetId) || document;
   const a = $('#fFrom', root) || $('#fFrom'), b = $('#fTo', root) || $('#fTo');
@@ -3309,6 +3315,24 @@ function setData(orders, items, lineItems, source, label) {
 }
 function log(msg) { $('#mLog').textContent += msg + '\n'; }
 
+// Orders have a stable .id -- merge by it so a re-fetched/updated order
+// (e.g. a late cancellation) replaces its old copy instead of duplicating.
+function mergeOrdersById(existing, incoming) {
+  const m = new Map(existing.map(o => [o.id, o]));
+  incoming.forEach(o => m.set(o.id, o));
+  return [...m.values()];
+}
+// Items/line-items are plain append-only event logs with no id field --
+// dedup by full content instead, which is safe since these never get
+// updated in place, only ever newly observed.
+function mergeEvents(existing, incoming) {
+  if (!incoming.length) return existing;
+  const seen = new Set(existing.map(e => JSON.stringify(e)));
+  const merged = existing.slice();
+  incoming.forEach(e => { const k = JSON.stringify(e); if (!seen.has(k)) { seen.add(k); merged.push(e); } });
+  return merged;
+}
+
 async function loadLive(from, to) {
   log('Contacting GrubCENTER…');
   try {
@@ -3324,11 +3348,28 @@ async function loadLive(from, to) {
     try { items = (await availRes.json()).items || []; } catch (_) {}
     let lineItems = [];
     try { lineItems = (await oiRes.json()).items || []; } catch (_) {}
-    S.loadedRange = [from || dkey(Date.now() - 45 * 864e5), to || dkey(Date.now())];
     if (!j.orders.length) { log('GrubCENTER returned 0 orders for that range.'); }
     else log(`Loaded ${j.orders.length} orders.`);
     const keepFrom = from, keepTo = to;
-    setData(j.orders, items.length ? items : S.items, lineItems.length ? lineItems : S.lineItems, 'live', `● Live · GrubCENTER (${j.orders.length})`);
+    if (from && to) {
+      // A range-scoped fetch (e.g. the user picked a narrower date filter)
+      // -- merge into whatever's already in memory (e.g. the full history
+      // loaded on boot) instead of replacing it outright, so switching
+      // back to "All" afterward still shows the complete history rather
+      // than just this one window. Full, unscoped fetches (from/to both
+      // empty -- boot and the 10-minute auto-refresh) already return the
+      // complete dataset, so a plain replace is correct there.
+      const mergedOrders = mergeOrdersById(S.orders, j.orders);
+      const mergedItems = mergeEvents(S.items, items);
+      const mergedLineItems = mergeEvents(S.lineItems, lineItems);
+      setData(mergedOrders, mergedItems, mergedLineItems, 'live', `● Live · GrubCENTER (${mergedOrders.length})`);
+      S.loadedRange = [
+        S.loadedRange && S.loadedRange[0] && S.loadedRange[0] < from ? S.loadedRange[0] : from,
+        S.loadedRange && S.loadedRange[1] && S.loadedRange[1] > to ? S.loadedRange[1] : to
+      ];
+    } else {
+      setData(j.orders, items.length ? items : S.items, lineItems.length ? lineItems : S.lineItems, 'live', `● Live · GrubCENTER (${j.orders.length})`);
+    }
     if (keepFrom) setDates(keepFrom, keepTo); else setDates(...fullRange());
     render();
     return true;
