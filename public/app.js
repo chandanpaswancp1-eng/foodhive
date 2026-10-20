@@ -88,7 +88,7 @@ const S = {
     metric: 'gross', group: 'cuisine', grain: 'Daily', cmetric: 'orders',
     cgroup: 'brand', pgroup: 'brand', rgroup: 'cuisine', igroup: 'brand',
     dgroup: 'brand', rmode: 'estimated', activeStage: null, itemsView: '86',
-    cmpChannelSort: { key: 'wowPct', dir: 'desc' }, cmpBrandSort: { key: 'pct', dir: 'desc' }, cmpBrandSearch: ''
+    cmpChannelSort: { key: 'wowPct', dir: 'desc' }, cmpBrandSort: { key: 'pct', dir: 'desc' }, cmpBrandSearch: '', cmpMetric: 'sales'
   },
   rng: {}, selBrands: new Set(), selLocs: new Set()
 };
@@ -740,6 +740,9 @@ function buildToggles() {
       break;
     case 'delayed':
       add(btm, 'Delayed By Brands | Cuisine', 'dgroup', [['brand', 'Brand'], ['cuisine', 'Cuisine Cluster']]);
+      break;
+    case 'comparison':
+      add(btm, 'Net Sales | Orders', 'cmpMetric', [['sales', 'Net Sales'], ['orders', 'Orders']]);
       break;
   }
 }
@@ -2544,12 +2547,21 @@ function deltaHtml(pct) {
   return `<span class="delta ${cls}">${arrow} ${pc(Math.abs(pct))}</span>`;
 }
 
+// 'sales' (Net Sales, AED) or 'orders' (order count) -- toggled via the
+// "Net Sales | Orders" side toggle, same convention as the Cancellations
+// page's "Cancelled Amt | Orders" toggle. Net Sales alone can't tell you
+// whether a change in revenue came from more/fewer orders or a shift in
+// basket size, so every table/chart on this page can be read either way.
+const cmpMetricKey = () => (S.ui.cmpMetric === 'orders' ? 'orders' : 'sales');
+const cmpFmt = () => (S.ui.cmpMetric === 'orders' ? cnt : money);
+
 function channelDeltaRows() {
   const O = base('comparison', true).filter(o => !o.cancelled);
   const w = comparisonWindows(O);
   if (!w) return [];
+  const mk = cmpMetricKey();
   const inWin = (from, to) => O.filter(o => { const k = dkey(o.receivedAt); return k >= from && k <= to; });
-  const byKey = rows => new Map(rows.map(r => [r.k, r.sales]));
+  const byKey = rows => new Map(rows.map(r => [r.k, r[mk]]));
   const todayM = byKey(salesAgg(inWin(w.latestDate, w.latestDate), o => o.channel));
   const ydayM = byKey(salesAgg(inWin(w.yesterdayKey, w.yesterdayKey), o => o.channel));
   const thisWkM = byKey(salesAgg(inWin(w.thisWeekStart, w.latestDate), o => o.channel));
@@ -2569,8 +2581,9 @@ function brandDeltaRows() {
   const O = base('comparison', true).filter(o => !o.cancelled);
   const w = comparisonWindows(O);
   if (!w) return [];
-  const prevDayM = new Map(salesAgg(O.filter(o => dkey(o.receivedAt) === w.yesterdayKey), o => o.brand).map(r => [r.k, r.sales]));
-  const sdlwM = new Map(salesAgg(O.filter(o => dkey(o.receivedAt) === w.sameDayLastWeekKey), o => o.brand).map(r => [r.k, r.sales]));
+  const mk = cmpMetricKey();
+  const prevDayM = new Map(salesAgg(O.filter(o => dkey(o.receivedAt) === w.yesterdayKey), o => o.brand).map(r => [r.k, r[mk]]));
+  const sdlwM = new Map(salesAgg(O.filter(o => dkey(o.receivedAt) === w.sameDayLastWeekKey), o => o.brand).map(r => [r.k, r[mk]]));
   const brands = uniq(O.map(o => o.brand)).filter(Boolean);
   return brands.map(b => {
     const prevDayNet = prevDayM.get(b) || 0, sdlwNet = sdlwM.get(b) || 0;
@@ -2588,7 +2601,8 @@ function hourlyOverlayRows() {
   if (!hoursPresent.length) return null;
   const lo = Math.min(...hoursPresent), hi = Math.max(...hoursPresent);
   const hours = Array.from({ length: hi - lo + 1 }, (_, i) => lo + i);
-  const byHour = (arr, h) => sum(arr.filter(o => dubaiHour(o.receivedAt) === h), o => o.netSales);
+  const isOrders = S.ui.cmpMetric === 'orders';
+  const byHour = (arr, h) => { const inHour = arr.filter(o => dubaiHour(o.receivedAt) === h); return isOrders ? inHour.length : sum(inHour, o => o.netSales); };
   return {
     labels: hours.map(h => pad(h) + ':00'),
     series: [
@@ -2614,6 +2628,7 @@ function sortArrow(sortState, key) { return key !== sortState.key ? '' : (sortSt
 function renderChannelDeltaTable() {
   const el = $('#cmpChannelTable');
   if (!el) return;
+  const fmt = cmpFmt();
   const rows = sortRows(channelDeltaRows(), S.ui.cmpChannelSort, {
     channel: r => r.channel, todayNet: r => r.todayNet, ydayNet: r => r.ydayNet, dodPct: r => r.dodPct,
     twNet: r => r.twNet, lwNet: r => r.lwNet, wowPct: r => r.wowPct
@@ -2629,11 +2644,11 @@ function renderChannelDeltaTable() {
       <th data-k="wowPct">Week-over-Week${sortArrow(sortState, 'wowPct')}</th>
     </tr></thead><tbody>${rows.map(r => `<tr>
       <td>${esc(r.channel)}</td>
-      <td class="num">${money(r.ydayNet)}</td>
-      <td class="num">${money(r.todayNet)}</td>
+      <td class="num">${fmt(r.ydayNet)}</td>
+      <td class="num">${fmt(r.todayNet)}</td>
       <td class="num">${deltaHtml(r.dodPct)}</td>
-      <td class="num">${money(r.lwNet)}</td>
-      <td class="num">${money(r.twNet)}</td>
+      <td class="num">${fmt(r.lwNet)}</td>
+      <td class="num">${fmt(r.twNet)}</td>
       <td class="num">${deltaHtml(r.wowPct)}</td>
     </tr>`).join('')}</tbody>`;
   $$('th[data-k]', el).forEach(th => th.onclick = () => {
@@ -2646,19 +2661,21 @@ function renderChannelDeltaTable() {
 function renderBrandDeltaTable() {
   const el = $('#cmpBrandTable');
   if (!el) return;
+  const fmt = cmpFmt();
+  const metricLabel = S.ui.cmpMetric === 'orders' ? 'Orders' : 'Net Sales';
   const q = (S.ui.cmpBrandSearch || '').toLowerCase();
   const filtered = brandDeltaRows().filter(r => r.brand.toLowerCase().includes(q));
   const sortState = S.ui.cmpBrandSort;
   const rows = sortRows(filtered, sortState, { brand: r => r.brand, prevDayNet: r => r.prevDayNet, sdlwNet: r => r.sdlwNet, pct: r => r.pct });
   el.innerHTML = `<thead><tr>
       <th data-k="brand">Brand${sortArrow(sortState, 'brand')}</th>
-      <th data-k="prevDayNet">Previous Day Net Sales${sortArrow(sortState, 'prevDayNet')}</th>
-      <th data-k="sdlwNet">Same Day Last Week Net Sales${sortArrow(sortState, 'sdlwNet')}</th>
+      <th data-k="prevDayNet">Previous Day ${metricLabel}${sortArrow(sortState, 'prevDayNet')}</th>
+      <th data-k="sdlwNet">Same Day Last Week ${metricLabel}${sortArrow(sortState, 'sdlwNet')}</th>
       <th data-k="pct">%Δ${sortArrow(sortState, 'pct')}</th>
     </tr></thead><tbody>${rows.map(r => `<tr>
       <td>${esc(r.brand)}</td>
-      <td class="num">${money(r.prevDayNet)}</td>
-      <td class="num">${money(r.sdlwNet)}</td>
+      <td class="num">${fmt(r.prevDayNet)}</td>
+      <td class="num">${fmt(r.sdlwNet)}</td>
       <td class="num">${deltaHtml(r.pct)}</td>
     </tr>`).join('')}</tbody>`;
   $$('th[data-k]', el).forEach(th => th.onclick = () => {
@@ -2676,20 +2693,25 @@ function renderComparison() {
   const ranked = brandRows.filter(r => r.pct != null).sort((a, b) => b.pct - a.pct);
   const topGainer = ranked[0], topDecliner = ranked[ranked.length - 1];
 
+  const fmt = cmpFmt();
+  const metricLabel = S.ui.cmpMetric === 'orders' ? 'Orders' : 'Net Sales';
+  const metricDesc = S.ui.cmpMetric === 'orders' ? 'order count' : 'net sales';
   kpis('kpi-comparison', [
-    ['Net Sales Today', money(todayTotal), false, null, false, 'Total net sales across all channels for the latest day in the data.'],
-    ['Net Sales Yesterday', money(ydayTotal), false, null, false, 'Total net sales the day before.'],
-    ['Day-over-Day', deltaHtml(deltaPct(todayTotal, ydayTotal)), false, null, false, 'Today vs Yesterday, blended across all channels.'],
-    ['Week-over-Week', deltaHtml(deltaPct(twTotal, lwTotal)), false, null, false, 'This week-to-date vs the same partial span last week, blended across all channels.'],
-    ['Top Gaining Brand', topGainer ? esc(topGainer.brand) : '–', true, null, false, topGainer ? `${topGainer.brand}: ${deltaHtml(topGainer.pct).replace(/<[^>]+>/g, '')} vs same day last week` : ''],
-    ['Top Declining Brand', topDecliner ? esc(topDecliner.brand) : '–', true, null, false, topDecliner ? `${topDecliner.brand}: ${deltaHtml(topDecliner.pct).replace(/<[^>]+>/g, '')} vs same day last week` : '']
+    [`${metricLabel} Today`, fmt(todayTotal), false, null, false, `Total ${metricDesc} across all channels for the latest day in the data.`],
+    [`${metricLabel} Yesterday`, fmt(ydayTotal), false, null, false, `Total ${metricDesc} the day before.`],
+    ['Day-over-Day', deltaHtml(deltaPct(todayTotal, ydayTotal)), false, null, false, `Today vs Yesterday, blended ${metricDesc} across all channels.`],
+    ['Week-over-Week', deltaHtml(deltaPct(twTotal, lwTotal)), false, null, false, `This week-to-date vs the same partial span last week, blended ${metricDesc} across all channels.`],
+    ['Top Gaining Brand', topGainer ? esc(topGainer.brand) : '–', true, null, false, topGainer ? `${topGainer.brand}: ${deltaHtml(topGainer.pct).replace(/<[^>]+>/g, '')} vs same day last week (${metricDesc})` : ''],
+    ['Top Declining Brand', topDecliner ? esc(topDecliner.brand) : '–', true, null, false, topDecliner ? `${topDecliner.brand}: ${deltaHtml(topDecliner.pct).replace(/<[^>]+>/g, '')} vs same day last week (${metricDesc})` : '']
   ]);
 
   renderChannelDeltaTable();
   renderBrandDeltaTable();
 
+  const t = $('#t-cmphourly');
+  if (t) t.textContent = S.ui.cmpMetric === 'orders' ? 'Hourly Orders' : 'Hourly Net Sales';
   const hourly = hourlyOverlayRows();
-  if (hourly) lineChart('c-cmphourly', hourly.labels, hourly.series, { dl: false });
+  if (hourly) lineChart('c-cmphourly', hourly.labels, hourly.series, { fmt: cmpFmt(), dl: false });
   else mk('c-cmphourly', { __empty: true });
 }
 
