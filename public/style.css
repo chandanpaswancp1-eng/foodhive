@@ -509,14 +509,25 @@ nav a.on { background: #fff; border-color: var(--k); }
 .a-cmphourly { grid-column: span 6; height: 340px; }
 .a-cmpbrand { grid-column: span 12; height: 480px; }
 .a-cmpbrand .tbl-wrap { height: calc(100% - 38px); }
-.a-cmpchannel table, .a-cmpbrand table { width: 100%; border-collapse: collapse; font-size: 12px; }
-.a-cmpchannel th, .a-cmpbrand th { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--line); background: var(--y); color: var(--k); font-weight: 700; position: sticky; top: 0; cursor: pointer; user-select: none; }
-.a-cmpchannel td, .a-cmpbrand td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--line); }
-.a-cmpchannel td:first-child, .a-cmpbrand td:first-child { font-weight: 700; }
-.a-cmpchannel td.num, .a-cmpbrand td.num { text-align: right; }
+.a-cmpdatewise { grid-column: span 12; height: 420px; }
+.a-cmpdatewise .tbl-wrap { height: calc(100% - 78px); }
+.a-cmpchannel table, .a-cmpbrand table, .a-cmpdatewise table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.a-cmpchannel th, .a-cmpbrand th, .a-cmpdatewise th { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--line); background: var(--y); color: var(--k); font-weight: 700; position: sticky; top: 0; cursor: pointer; user-select: none; }
+.a-cmpchannel td, .a-cmpbrand td, .a-cmpdatewise td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--line); }
+.a-cmpchannel td:first-child, .a-cmpbrand td:first-child, .a-cmpdatewise td:first-child { font-weight: 700; }
+.a-cmpchannel td.num, .a-cmpbrand td.num, .a-cmpdatewise td.num { text-align: right; }
 .cmp-search {
   display: block; width: 100%; max-width: 280px; margin: 0 0 8px; border: 1px solid var(--line);
   border-radius: 4px; padding: 6px 10px; font: inherit; font-size: 12px;
+}
+.cmp-datewise-pick {
+  display: flex; gap: 16px; align-items: center; margin: 0 0 10px; flex-wrap: wrap;
+}
+.cmp-datewise-pick label {
+  display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 700; color: var(--k);
+}
+.cmp-datewise-pick input[type="date"] {
+  font: inherit; font-size: 12px; padding: 5px 8px; border: 1px solid var(--line); border-radius: 4px; background: #fff; color: var(--k);
 }
 .delta { font-weight: 700; white-space: nowrap; }
 .delta.up { color: #2e7d32; }
@@ -770,7 +781,7 @@ td:first-child { text-align: left; font-weight: 700; }
   .g-sales, .g-cancel, .g-items, .g-item-sales, .g-commission, .g-ebitda, .g-accounting, .g-comparison { display: block; }
   .g-sales .panel, .g-cancel .panel, .g-items .panel, .g-item-sales .panel, .g-commission .panel, .g-ebitda .panel, .g-accounting .panel, .g-comparison .panel { margin-bottom: 10px; height: 300px !important; }
   .g-commission .a-ratecard, .g-ebitda .a-costs, .g-ebitda .a-plwaterfall { height: auto !important; }
-  .g-comparison .a-cmpbrand { height: 420px !important; }
+  .g-comparison .a-cmpbrand, .g-comparison .a-cmpdatewise { height: 420px !important; }
   .g-prep { grid-template-columns: 1fr 1fr; }
   .g-ratings { grid-template-columns: 1fr; }
   .g-ratings .panel.wide { grid-column: auto; }

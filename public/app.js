@@ -88,7 +88,8 @@ const S = {
     metric: 'gross', group: 'cuisine', grain: 'Daily', cmetric: 'orders',
     cgroup: 'brand', pgroup: 'brand', rgroup: 'cuisine', igroup: 'brand',
     dgroup: 'brand', rmode: 'estimated', activeStage: null, itemsView: '86',
-    cmpChannelSort: { key: 'wowPct', dir: 'desc' }, cmpBrandSort: { key: 'pct', dir: 'desc' }, cmpBrandSearch: '', cmpMetric: 'sales'
+    cmpChannelSort: { key: 'wowPct', dir: 'desc' }, cmpBrandSort: { key: 'pct', dir: 'desc' }, cmpBrandSearch: '', cmpMetric: 'sales',
+    cmpDateSort: { key: 'pct', dir: 'desc' }, cmpDateA: '', cmpDateB: ''
   },
   rng: {}, selBrands: new Set(), selLocs: new Set()
 };
@@ -2599,6 +2600,54 @@ function brandDeltaRows() {
   });
 }
 
+// Date-wise comparison: lets the user pick any two arbitrary calendar dates
+// (not just the automatic Yesterday/Today or Previous-Day/Same-Day-Last-Week
+// pairs above) and see the per-channel delta between them -- e.g. a specific
+// promo day vs. an ordinary day.
+function dateCompareRows(dateA, dateB) {
+  const O = base('comparison', true).filter(o => !o.cancelled);
+  const mk = cmpMetricKey();
+  const aM = new Map(salesAgg(O.filter(o => dkey(o.receivedAt) === dateA), o => o.channel).map(r => [r.k, r[mk]]));
+  const bM = new Map(salesAgg(O.filter(o => dkey(o.receivedAt) === dateB), o => o.channel).map(r => [r.k, r[mk]]));
+  const channels = uniq(O.map(o => o.channel)).filter(Boolean).sort();
+  return channels.map(ch => {
+    const a = aM.get(ch) || 0, b = bM.get(ch) || 0;
+    return { channel: ch, a, b, pct: deltaPct(b, a) };
+  });
+}
+
+function renderDateCompareTable() {
+  const el = $('#cmpDateTable');
+  if (!el) return;
+  const dateA = S.ui.cmpDateA, dateB = S.ui.cmpDateB;
+  if (!dateA || !dateB) { el.innerHTML = ''; return; }
+  const fmt = cmpFmt();
+  const sortState = S.ui.cmpDateSort;
+  const rows = sortRows(dateCompareRows(dateA, dateB), sortState, { channel: r => r.channel, a: r => r.a, b: r => r.b, pct: r => r.pct });
+  const totA = sum(rows, r => r.a), totB = sum(rows, r => r.b);
+  el.innerHTML = `<thead><tr>
+      <th data-k="channel">Channel${sortArrow(sortState, 'channel')}</th>
+      <th data-k="a">${esc(dateA)}${sortArrow(sortState, 'a')}</th>
+      <th data-k="b">${esc(dateB)}${sortArrow(sortState, 'b')}</th>
+      <th data-k="pct">%Δ${sortArrow(sortState, 'pct')}</th>
+    </tr></thead><tbody>
+      <tr style="background:#1d1d1d;color:#FCD258;font-weight:700">
+        <td>TOTAL</td><td class="num">${fmt(totA)}</td><td class="num">${fmt(totB)}</td><td class="num">${deltaHtml(deltaPct(totB, totA))}</td>
+      </tr>
+      ${rows.map(r => `<tr>
+        <td>${esc(r.channel)}</td>
+        <td class="num">${fmt(r.a)}</td>
+        <td class="num">${fmt(r.b)}</td>
+        <td class="num">${deltaHtml(r.pct)}</td>
+      </tr>`).join('')}
+    </tbody>`;
+  $$('th[data-k]', el).forEach(th => th.onclick = () => {
+    const k = th.dataset.k;
+    S.ui.cmpDateSort = (S.ui.cmpDateSort.key === k) ? { key: k, dir: S.ui.cmpDateSort.dir === 'desc' ? 'asc' : 'desc' } : { key: k, dir: 'desc' };
+    renderDateCompareTable();
+  });
+}
+
 function hourlyOverlayRows() {
   const O = base('comparison', true).filter(o => !o.cancelled);
   const w = comparisonWindows(O);
@@ -2721,6 +2770,18 @@ function renderComparison() {
   const hourly = hourlyOverlayRows();
   if (hourly) lineChart('c-cmphourly', hourly.labels, hourly.series, { fmt: cmpFmt(), dl: false });
   else mk('c-cmphourly', { __empty: true });
+
+  // Date-wise comparison defaults to Yesterday vs Today on first visit (the
+  // most recently-usable pair), then stays exactly where the user left it --
+  // never reset by a later re-render (e.g. the 10-min auto-refresh).
+  if (!S.ui.cmpDateA || !S.ui.cmpDateB) {
+    const w = comparisonWindows(base('comparison', true).filter(o => !o.cancelled));
+    if (w) { S.ui.cmpDateA = w.yesterdayKey; S.ui.cmpDateB = w.latestDate; }
+  }
+  const dA = $('#cmpDateA'), dB = $('#cmpDateB');
+  if (dA) dA.value = S.ui.cmpDateA || '';
+  if (dB) dB.value = S.ui.cmpDateB || '';
+  renderDateCompareTable();
 }
 
 // ================= PAGE: ACCOUNTING (Zoho Books) =================
@@ -3156,6 +3217,8 @@ window.addEventListener('hashchange', () => {
 $('#srchBrand').oninput = () => fillList('#lstBrand', '#srchBrand', uniq(S.orders.map(o => o.brand)).sort(), S.selBrands);
 $('#srchLoc').oninput = () => fillList('#lstLoc', '#srchLoc', uniq(S.orders.map(o => o.location)).sort(), S.selLocs);
 $('#cmpBrandSearch').oninput = e => { S.ui.cmpBrandSearch = e.target.value; renderBrandDeltaTable(); };
+$('#cmpDateA').onchange = e => { S.ui.cmpDateA = e.target.value; renderDateCompareTable(); };
+$('#cmpDateB').onchange = e => { S.ui.cmpDateB = e.target.value; renderDateCompareTable(); };
 
 function setDates(from, to) {
   S.f.from = from; S.f.to = to;
