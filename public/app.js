@@ -3303,6 +3303,7 @@ function renderAccounting() {
   const trueNetProfit = has ? grub.netSales - grub.commission - z.expenses : 0;
   const bankOnly = has ? (z.bankAccounts || []).filter(a => a.type === 'bank').reduce((s, a) => s + (+a.balance || 0), 0) : 0;
   const cashOnly = has ? (z.bankAccounts || []).filter(a => a.type === 'cash').reduce((s, a) => s + (+a.balance || 0), 0) : 0;
+  const totalProcurement = has ? (z.bills || []).reduce((s, b) => s + (+b.total || 0), 0) : 0;
 
   kpis('kpi-accounting', [
     ['Total Income', has ? money(grub.netSales) : '–', false, drill(openAccountingTrendDrillModal), false, 'GrubCENTER Net Sales for the current month -- the real revenue source, since Zoho Books never records sales invoices for this business. Click for the full month-by-month history.', 'drill'],
@@ -3313,6 +3314,7 @@ function renderAccounting() {
     ['Cash', has ? money(cashOnly) : '–', false, drill(() => openAccountingCashDrillModal('cash')), false, 'Sum of all active cash account balances in Zoho Books. Click for the per-account breakdown.', 'drill'],
     ['A/R Outstanding', has ? money(z.ar) : '–', false, drill(() => openAccountingAgingDrillModal('ar')), false, 'Total unpaid invoice balance (Accounts Receivable aging summary). Click for the aging breakdown and outstanding invoices.', 'drill'],
     ['A/P Outstanding', has ? money(z.ap) : '–', false, drill(() => openAccountingAgingDrillModal('ap')), false, 'Total unpaid bill balance (Accounts Payable aging summary). Click for the aging breakdown and outstanding bills.', 'drill'],
+    ['Total Procurement Amount', has ? money(totalProcurement) : '–', false, drill(() => show('export')), false, "Sum of every Zoho Books bill (all statuses) -- total amount procured from vendors, not just what's still outstanding. Click to open Data Export and download the full list.", 'nav'],
     ['Overdue Invoices', has ? `${z.overdueInvoices.count} · ${money(z.overdueInvoices.amount)}` : '–', false, drill(() => openAccountingOverdueDrillModal('invoices')), false, 'Count and total balance of invoices past their due date. Click to list them.', 'drill'],
     ['Overdue Bills', has ? money(z.overdueBills.amount) : '–', false, drill(() => openAccountingOverdueDrillModal('bills')), false, `Total balance of ${has ? z.overdueBills.count : 0} vendor bill(s) past their due date. Click to list them.`, 'drill'],
     ['Total Invoices', has ? cnt(z.invoices.length) : '–', false, drill(() => show('export')), false, 'All Zoho Books invoices, any status. Click to open Data Export and download the full list.', 'nav'],
