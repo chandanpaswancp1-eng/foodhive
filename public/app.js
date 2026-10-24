@@ -89,7 +89,7 @@ const S = {
     cgroup: 'brand', pgroup: 'brand', rgroup: 'cuisine', igroup: 'brand',
     dgroup: 'brand', rmode: 'estimated', activeStage: null, itemsView: '86',
     cmpChannelSort: { key: 'wowPct', dir: 'desc' }, cmpBrandSort: { key: 'pct', dir: 'desc' }, cmpBrandSearch: '', cmpMetric: 'sales',
-    cmpDateSort: { key: 'pct', dir: 'desc' }, cmpDateA: '', cmpDateB: '', cmpDateDim: 'channel'
+    cmpDateSort: { key: 'pct', dir: 'desc' }, cmpDateA: '', cmpDateB: '', cmpDateDim: 'channel', cmpDateInited: false
   },
   rng: {}, selBrands: new Set(), selLocs: new Set()
 };
@@ -138,11 +138,19 @@ function mk(id, cfg) {
   }
   charts[id] = new Chart(el, cfg);
 }
-const baseOpts = (extra = {}) => Object.assign({
-  responsive: true, maintainAspectRatio: false,
-  layout: { padding: { top: 18, right: 4 } },
-  plugins: { legend: { display: false }, tooltip: pbiTooltip }
-}, extra);
+// Deep-merge plugins/layout so callers that override e.g. plugins.legend
+// don't silently lose the shared tooltip/padding defaults.
+const baseOpts = (extra = {}) => {
+  const base = {
+    responsive: true, maintainAspectRatio: false,
+    layout: { padding: { top: 18, right: 4 } },
+    plugins: { legend: { display: false }, tooltip: pbiTooltip }
+  };
+  if (extra.layout) base.layout = { ...base.layout, ...extra.layout, padding: { ...base.layout.padding, ...(extra.layout.padding || {}) } };
+  if (extra.plugins) base.plugins = { ...base.plugins, ...extra.plugins };
+  const { layout, plugins, ...rest } = extra;
+  return Object.assign(base, rest);
+};
 
 const lbl = (fmt, o = {}) => Object.assign({ display: true, anchor: 'end', align: 'end', font: { size: 10, weight: '600' }, color: K, formatter: fmt, clamp: true }, o);
 const pctLbl = () => ({ display: true, align: 'bottom', offset: 6, backgroundColor: 'rgba(255,255,255,.9)', borderRadius: 3, padding: 1, color: K, font: { size: 10, weight: '600' }, formatter: v => v.toFixed(1) + '%' });
@@ -576,9 +584,7 @@ function getPeriodStats(page) {
 }
 
 function getDefaultPeriod() {
-  const st = getPeriodStats();
-  if (!st) return fullRange();
-  return [st.latestDate, st.latestDate];
+  return fullRange();
 }
 
 // ---------------- Brand/Channel multi-select filter ----------------
@@ -2050,7 +2056,7 @@ function renderItemSales() {
 const EST_DEFAULT = 15, DELAY_LIMIT = 10;
 function renderDelayed() {
   const allOrders = base('delayed').filter(o => !o.cancelled).map(o => {
-    const p = prepOf(o); const est = o.estPrep || EST_DEFAULT; return { o, p, est, delay: p == null ? null : p - est };
+    const p = prepOf(o); const est = o.estPrep != null ? o.estPrep : EST_DEFAULT; return { o, p, est, delay: p == null ? null : p - est };
   }).filter(x => x.p != null);
   const delayed = allOrders.filter(x => x.delay > DELAY_LIMIT);
   const isOnlyDelayed = !!S.f.onlyDelayed;
@@ -2908,7 +2914,32 @@ function renderBrandDeltaTable() {
   });
 }
 
+// The Comparison page's own filter bar (FILTERS.comparison) only exposes a
+// Location dropdown -- but base('comparison', true) also respects
+// S.f.channel (added so row-clicks can cross-filter) and S.f.brand (applied
+// unconditionally for every page). Without this, a channel filter set on
+// the Sales/Commission page, or a channel/brand row click left active from
+// a previous visit, silently narrows every table/KPI here with no on-screen
+// explanation -- this renders a dismissible chip whenever either is active,
+// on every render (not just page navigation, since buildFilters() only runs
+// on show()) so it never goes stale.
+function renderComparisonActiveFilters() {
+  const el = $('#cmpActiveFilters');
+  if (!el) return;
+  const chips = [];
+  if (S.f.channel !== 'All') chips.push({ label: `Channel: ${S.f.channel}`, clear: () => { S.f.channel = 'All'; } });
+  if (S.f.brand !== 'All') chips.push({ label: `Brand: ${S.f.brand}`, clear: () => { S.f.brand = 'All'; } });
+  if (!chips.length) { el.innerHTML = ''; return; }
+  el.innerHTML = chips.map((c, i) => `<span class="cmp-chip" data-i="${i}">${esc(c.label)} <b>✕</b></span>`).join('');
+  $$('.cmp-chip', el).forEach((chip, i) => chip.onclick = () => {
+    chips[i].clear();
+    syncFilterUI();
+    render();
+  });
+}
+
 function renderComparison() {
+  renderComparisonActiveFilters();
   const chanRows = channelDeltaRows();
   const todayTotal = sum(chanRows, r => r.todayNet), ydayTotal = sum(chanRows, r => r.ydayNet);
   const twTotal = sum(chanRows, r => r.twNet), lwTotal = sum(chanRows, r => r.lwNet);
@@ -2939,10 +2970,13 @@ function renderComparison() {
 
   // Date-wise comparison defaults to Yesterday vs Today on first visit (the
   // most recently-usable pair), then stays exactly where the user left it --
-  // never reset by a later re-render (e.g. the 10-min auto-refresh).
-  if (!S.ui.cmpDateA || !S.ui.cmpDateB) {
+  // never reset by a later re-render (e.g. the 10-min auto-refresh). Gated
+  // on cmpDateInited (not on the fields themselves being falsy) so that a
+  // user who deliberately blanks a date field doesn't get it silently
+  // overwritten back to the default on the next render.
+  if (!S.ui.cmpDateInited) {
     const w = comparisonWindows(base('comparison', true).filter(o => !o.cancelled));
-    if (w) { S.ui.cmpDateA = w.yesterdayKey; S.ui.cmpDateB = w.latestDate; }
+    if (w) { S.ui.cmpDateA = w.yesterdayKey; S.ui.cmpDateB = w.latestDate; S.ui.cmpDateInited = true; }
   }
   const dA = $('#cmpDateA'), dB = $('#cmpDateB');
   if (dA) dA.value = S.ui.cmpDateA || '';
@@ -3424,6 +3458,15 @@ function resetFilters() {
 $('#btnAll').onclick = () => {
   resetFilters();
   S.selBrands.clear(); S.selLocs.clear();
+  // resetFilters() only iterates S.f -- the Comparison page's date-wise
+  // picker and brand search live in S.ui, so they need their own reset,
+  // or they'd silently survive a "Reset All Filters" click. Sort order and
+  // the Net Sales|Orders toggle are left alone: those are view preferences,
+  // the same category as S.ui.metric/group/cmetric on other pages, none of
+  // which #btnAll resets either.
+  S.ui.cmpDateA = ''; S.ui.cmpDateB = ''; S.ui.cmpDateInited = false;
+  S.ui.cmpBrandSearch = '';
+  const cbs = $('#cmpBrandSearch'); if (cbs) cbs.value = '';
   setDates(...fullRange());
   initRanges();
   buildFilters();
@@ -3817,11 +3860,11 @@ if ($('#mCached')) $('#mCached').onclick = async () => { await loadCached(); };
 $('#btnData').onclick = () => { $('#modal').hidden = false; $('#mStatus').textContent = $('#srcBadge').textContent; };
 
 let syncPolling = false;
-async function syncNow() {
+async function syncNow(full = false) {
   if (syncPolling) return;
   const btn = $('#btnSync'), msg = $('#syncMsg');
   if (!btn) return;
-  btn.disabled = true; btn.textContent = '⏳ Syncing…';
+  btn.disabled = true; btn.textContent = full ? '⏳ Full re-sync…' : '⏳ Syncing…';
   if (msg) { msg.textContent = ''; msg.className = 'sync-msg'; }
   const done = (text, cls) => {
     if (msg) { msg.textContent = text; msg.className = 'sync-msg' + (cls ? ' ' + cls : ''); }
@@ -3831,22 +3874,30 @@ async function syncNow() {
   try {
     const before = await fetch('/api/status').then(r => r.json()).then(j => j.lastSync || 0).catch(() => 0);
     const range = (S.f.from && S.f.to) ? `?from=${S.f.from}&to=${S.f.to}` : '';
-    const res = await fetch('/api/refresh' + range).then(r => r.json());
+    const fullParam = full ? '&full=1' : '';
+    const res = await fetch('/api/refresh' + range + fullParam).then(r => r.json());
     if (res.configured === false) { done(res.message || 'GrubCENTER not configured on this server', 'err'); return; }
     syncPolling = true;
     const deadline = Date.now() + 90000;
     (async function poll() {
       if (Date.now() > deadline) { done('Still syncing in the background — check back shortly'); return; }
       const st = await fetch('/api/status').then(r => r.json()).catch(() => null);
-      if (st && st.lastSync > before) {
-        const [ordRes, availRes, oiRes] = await Promise.all([fetch('/api/orders'), fetch('/api/availability'), fetch('/api/order-items')]);
-        const ordData = await ordRes.json();
-        let items = S.items;
-        try { const itJson = await availRes.json(); if (itJson.items) items = itJson.items; } catch (_) {}
-        let lineItems = S.lineItems;
-        try { const oiJson = await oiRes.json(); if (oiJson.items) lineItems = oiJson.items; } catch (_) {}
-        setData(ordData.orders, items, lineItems, 'live', `● Live · GrubCENTER (${ordData.orders.length})`);
-        done(`✓ Synced — ${ordData.orders.length} orders`, 'ok');
+      if (st) {
+        // Wait for any in-flight sync to finish
+        if (st.syncing) { setTimeout(poll, 2500); return; }
+        if (st.lastSync > before) {
+          const [ordRes, availRes, oiRes] = await Promise.all([fetch('/api/orders'), fetch('/api/availability'), fetch('/api/order-items')]);
+          const ordData = await ordRes.json();
+          let items = S.items;
+          try { const itJson = await availRes.json(); if (itJson.items) items = itJson.items; } catch (_) {}
+          let lineItems = S.lineItems;
+          try { const oiJson = await oiRes.json(); if (oiJson.items) lineItems = oiJson.items; } catch (_) {}
+          setData(ordData.orders, items, lineItems, 'live', `● Live · GrubCENTER (${ordData.orders.length})`);
+          done(`✓ Synced — ${ordData.orders.length} orders`, 'ok');
+          return;
+        }
+        // Sync completed but no new data
+        done('✓ Sync complete — no new orders', 'ok');
         return;
       }
       setTimeout(poll, 2500);
@@ -3855,7 +3906,9 @@ async function syncNow() {
     done('✗ ' + e.message, 'err');
   }
 }
-if ($('#btnSync')) $('#btnSync').onclick = syncNow;
+// Default sync button (range-limited). Full re-sync is available via the
+// console: window.FoodHive.S or by calling syncNow(true).
+if ($('#btnSync')) $('#btnSync').onclick = () => syncNow(false);
 
 let acctSyncPolling = false;
 async function syncAccountingNow() {
@@ -4050,7 +4103,7 @@ function loadDemo() {
   window.charts = charts;
   window.timeRangeForGrain = timeRangeForGrain;
   window.syncFilterUI = syncFilterUI;
-  window.FoodHive = { S, show, render, setData, base, syncFilterUI, charts };
+  window.FoodHive = { S, show, render, setData, base, syncFilterUI, charts, syncNow };
 })();
 
 // "Last synced Xm ago", independent of any particular data fetch so it

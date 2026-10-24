@@ -591,6 +591,13 @@ nav a.on { background: #fff; border-color: var(--k); }
 .cmp-datewise-pick input[type="date"] {
   font: inherit; font-size: 12px; padding: 5px 8px; border: 1px solid var(--line); border-radius: 4px; background: #fff; color: var(--k);
 }
+.cmp-active-filters { margin: 0 0 8px; }
+.cmp-active-filters:empty { margin: 0; }
+.cmp-chip {
+  display: inline-flex; align-items: center; gap: 6px; background: var(--k); color: var(--y);
+  font-size: 12px; font-weight: 700; padding: 5px 10px; border-radius: 14px; margin: 0 8px 0 0; cursor: pointer;
+}
+.cmp-chip b { font-weight: 900; }
 .cmp-row { cursor: pointer; transition: background-color .15s ease; }
 .cmp-row:hover { background: #fdf6e0; }
 .cmp-row.active { background: #FFFDF2; }

@@ -97,43 +97,66 @@ function findPartnerId(claims) {
 }
 
 // ---------- grubtech calls ----------
-async function gt(method, base, p, query, body) {
+// Rate-limit (429) retry with backoff. GrubCENTER enforces a per-minute
+// request cap; hitting it mid-sync would fail whole days. Retry up to 3
+// times with growing backoff before giving up.
+async function gt(method, base, p, query, body, retries = 3) {
   const s = await ensureSession();
   const url = base.replace(/\/$/, '') + '/' + p.replace(/^\//, '') + (query ? '?' + new URLSearchParams(query) : '');
-  const r = await fetch(url, {
-    method,
-    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + (CFG.tokenType === 'access' ? s.accessToken : s.idToken) },
-    body: method === 'GET' ? undefined : JSON.stringify(body || {})
-  });
-  const text = await r.text();
-  let json; try { json = JSON.parse(text); } catch (_) { json = text; }
-  if (!r.ok) { const e = new Error(`Grubtech ${r.status} ${url}: ${typeof json === 'string' ? json.slice(0, 200) : JSON.stringify(json).slice(0, 300)}`); e.status = r.status; throw e; }
-  return json;
+  for (let attempt = 0; attempt < retries; attempt++) {
+    const r = await fetch(url, {
+      method,
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + (CFG.tokenType === 'access' ? s.accessToken : s.idToken) },
+      body: method === 'GET' ? undefined : JSON.stringify(body || {})
+    });
+    const text = await r.text();
+    let json; try { json = JSON.parse(text); } catch (_) { json = text; }
+    if (r.ok) return json;
+    // 429 Too Many Requests: back off and retry. Other errors are thrown.
+    if (r.status === 429 && attempt < retries - 1) {
+      await new Promise(res => setTimeout(res, 2000 * (attempt + 1)));
+      continue;
+    }
+    const e = new Error(`Grubtech ${r.status} ${url}: ${typeof json === 'string' ? json.slice(0, 200) : JSON.stringify(json).slice(0, 300)}`);
+    e.status = r.status;
+    throw e;
+  }
+  throw new Error(`Grubtech rate limit exceeded after ${retries} retries: ${url}`);
 }
 
 const rowsOf = d => Array.isArray(d) ? d : (d && (d.rows || d.data || d.items || d.content || d.results || d.orders || d.records)) || [];
 const bounds = (from, to) => ({ timezone: CFG.timezone, from: `${from}T00:00:00.000Z`, to: `${to}T23:59:59.999Z` });
 
+// Fetch one single page of a day range from a specific base, with retries.
+async function fetchOnePage(base, pathPart, pid, query) {
+  let lastErr;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const d = await gt('POST', base, `${pathPart.replace(/\/$/, '')}/${pid}`, query, {});
+      return rowsOf(d);
+    } catch (e) { lastErr = e; if (attempt < 2) await new Promise(res => setTimeout(res, 1000 * (attempt + 1))); }
+  }
+  throw lastErr;
+}
+
 // Fetch one single-day range, with offset pagination for busy days.
+// If a base returns page 0 but some subsequent pages fail, we retry the
+// failed pages up to 3 times before falling back to the next API base,
+// so we never silently drop orders due to a transient page fetch failure.
 async function fetchPagedOneRange(pathPart, from, to, maxPages, s, pid) {
   let lastErr;
   for (const base of CFG.apiBases) {
     try {
-      const first = await gt('POST', base, `${pathPart.replace(/\/$/, '')}/${pid}`,
-        { ...bounds(from, to), limit: CFG.pageSize, offset: 0 }, {});
-      const firstRows = rowsOf(first);
-      const all = [...firstRows];
-      if (firstRows.length < CFG.pageSize) return all;
+      const first = await fetchOnePage(base, pathPart, pid, { ...bounds(from, to), limit: CFG.pageSize, offset: 0 });
+      const all = [...first];
+      if (first.length < CFG.pageSize) return all;
 
-      // Parallel batch fetch for remaining pages
+      // Parallel batch fetch for remaining pages, with per-page retries
       const pagePromises = [];
       const batchSize = Math.min(maxPages, 16);
       for (let page = 1; page < batchSize; page++) {
         pagePromises.push(
-          gt('POST', base, `${pathPart.replace(/\/$/, '')}/${pid}`,
-            { ...bounds(from, to), limit: CFG.pageSize, offset: page * CFG.pageSize }, {})
-            .then(d => rowsOf(d))
-            .catch(() => [])
+          fetchOnePage(base, pathPart, pid, { ...bounds(from, to), limit: CFG.pageSize, offset: page * CFG.pageSize })
         );
       }
       const results = await Promise.all(pagePromises);
@@ -181,7 +204,11 @@ async function fetchPaged(pathPart, from, to, maxPages = 20) {
   const s = await ensureSession();
   const pid = findPartnerId(s.claims);
   const days = dayChunks(from, to);
-  const CONCURRENCY = 3;
+  // Reduced from 3 to 2: each day already fans out up to 16 parallel page
+  // requests. 3 days × 16 pages = 48 concurrent requests reliably triggers
+  // GrubCENTER rate limiting (429). 2 days keeps throughput high while
+  // staying under the rate-limit threshold.
+  const CONCURRENCY = 2;
   const all = [];
   const failedDays = [];
   for (let i = 0; i < days.length; i += CONCURRENCY) {
@@ -190,6 +217,8 @@ async function fetchPaged(pathPart, from, to, maxPages = 20) {
       fetchDayWithRetry(pathPart, day, maxPages, s, pid).then(rows => ({ day, rows }))
     ));
     results.forEach(({ day, rows }) => { if (rows === null) failedDays.push(day); else all.push(...rows); });
+    // Small delay between batches to further reduce rate-limit risk
+    if (i + CONCURRENCY < days.length) await new Promise(res => setTimeout(res, 500));
   }
   if (failedDays.length) console.warn(`[GrubCENTER Sync] ${pathPart}: ${failedDays.length} day(s) could not be fetched and are MISSING from this sync: ${failedDays.join(', ')}`);
   return all;
@@ -757,6 +786,7 @@ http.createServer(async (req, res) => {
           out.claims = { email: s.claims.email, partnerStatus: s.claims.partnerStatus };
           out.lastSync = STORE.lastSync;
           out.cachedCount = STORE.ordersArray.length;
+          out.syncing = STORE.syncing;
         } catch (e) { out.error = e.message; }
       }
       return sendGzip(req, res, 200, out);
@@ -765,6 +795,13 @@ http.createServer(async (req, res) => {
     if (u.pathname === '/api/refresh') {
       if (!(CFG.email && CFG.password)) {
         return sendGzip(req, res, 200, { ok: false, configured: false, message: 'GrubCENTER credentials not configured on this server' });
+      }
+      const full = u.searchParams.get('full') === '1';
+      // `full=1` forces a complete 45-day re-sync regardless of cached data,
+      // useful when the local cache is suspected to be incomplete or stale.
+      if (full) {
+        syncGrubcenter(daysAgo(45), today()).catch(() => {});
+        return sendGzip(req, res, 200, { ok: true, configured: true, message: 'Full 45-day re-sync started' });
       }
       syncGrubcenter(u.searchParams.get('from'), u.searchParams.get('to')).catch(() => {});
       return sendGzip(req, res, 200, { ok: true, configured: true, message: 'Sync started' });
@@ -782,13 +819,11 @@ http.createServer(async (req, res) => {
       }
 
       // If cache is stale (>10 min) and not currently syncing, kick off background
-      // sync -- narrowed to a recent window when the client passed no explicit
-      // range (the common case), matching the scheduled 10-min refresh and the
-      // Vercel mirror's api/orders.js: a full syncGrubcenter() default (45 days)
-      // takes minutes, so firing that on every stale page load left "today"
-      // visibly lagging GrubCENTER's live totals between syncs.
+      // sync covering the requested range (or the last 45 days when no explicit
+      // range is given). This ensures older date ranges aren't left stale just
+      // because the 10-minute scheduled refresh only covers the last 14 days.
       if (Date.now() - STORE.lastSync > SYNC_INTERVAL_MS && !STORE.syncing && CFG.email && CFG.password) {
-        const bgFrom = from || daysAgo(14);
+        const bgFrom = from || daysAgo(45);
         const bgItemsFrom = from || daysAgo(7);
         const bgTo = to || today();
         syncGrubcenter(bgFrom, bgTo, bgItemsFrom).catch(() => {});
