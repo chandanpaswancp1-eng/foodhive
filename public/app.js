@@ -49,10 +49,14 @@ const dowOf = t => DOW[(dubaiDOW(t) + 6) % 7];
 function toCleanMs(v) {
   if (v == null) return null;
   if (typeof v === 'number') return v + 4 * 3600000;
+  // String timestamps (e.g. "2026-10-11T17:04:43Z") are UTC. Parse as UTC
+  // then apply the Dubai offset, matching how numeric epoch-ms values are
+  // handled above. Without this, string timestamps would be read as local
+  // time and be off by up to 4 hours on non-Dubai systems.
   const s = String(v).replace(/Z$/, '').replace('T', ' ');
   const m = s.match(/^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})/);
-  if (!m) return Date.parse(v) || null;
-  return new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]).getTime();
+  if (!m) return Date.parse(v) + 4 * 3600000 || null;
+  return Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]) + 4 * 3600000;
 }
 const mins = (a, b) => {
   const ma = toCleanMs(a), mb = toCleanMs(b);
