@@ -65,40 +65,63 @@ function findPartnerId(claims) {
   throw new Error('Could not find a partnerId in login token.');
 }
 
-async function gt(method, base, p, query, body, session) {
+// Rate-limit (429) retry with backoff. GrubCENTER enforces a per-minute
+// request cap; hitting it mid-sync would fail whole days. Retry up to 3
+// times with growing backoff before giving up.
+async function gt(method, base, p, query, body, session, retries = 3) {
   const url = base.replace(/\/$/, '') + '/' + p.replace(/^\//, '') + (query ? '?' + new URLSearchParams(query) : '');
-  const r = await fetch(url, {
-    method,
-    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + (CFG.tokenType === 'access' ? session.accessToken : session.idToken) },
-    body: method === 'GET' ? undefined : JSON.stringify(body || {})
-  });
-  const text = await r.text();
-  let json; try { json = JSON.parse(text); } catch (_) { json = text; }
-  if (!r.ok) { const e = new Error(`Grubtech ${r.status} ${url}: ${typeof json === 'string' ? json.slice(0, 200) : JSON.stringify(json).slice(0, 300)}`); e.status = r.status; throw e; }
-  return json;
+  for (let attempt = 0; attempt < retries; attempt++) {
+    const r = await fetch(url, {
+      method,
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + (CFG.tokenType === 'access' ? session.accessToken : session.idToken) },
+      body: method === 'GET' ? undefined : JSON.stringify(body || {})
+    });
+    const text = await r.text();
+    let json; try { json = JSON.parse(text); } catch (_) { json = text; }
+    if (r.ok) return json;
+    if (r.status === 429 && attempt < retries - 1) {
+      await new Promise(res => setTimeout(res, 2000 * (attempt + 1)));
+      continue;
+    }
+    const e = new Error(`Grubtech ${r.status} ${url}: ${typeof json === 'string' ? json.slice(0, 200) : JSON.stringify(json).slice(0, 300)}`);
+    e.status = r.status;
+    throw e;
+  }
+  throw new Error(`Grubtech rate limit exceeded after ${retries} retries: ${url}`);
 }
 
 const rowsOf = d => Array.isArray(d) ? d : (d && (d.rows || d.data || d.items || d.content || d.results || d.orders || d.records)) || [];
 const bounds = (from, to) => ({ timezone: CFG.timezone, from: `${from}T00:00:00.000Z`, to: `${to}T23:59:59.999Z` });
 
+// Fetch one single page of a day range from a specific base, with retries.
+async function fetchOnePage(base, pathPart, pid, query, session) {
+  let lastErr;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const d = await gt('POST', base, `${pathPart.replace(/\/$/, '')}/${pid}`, query, {}, session);
+      return rowsOf(d);
+    } catch (e) { lastErr = e; if (attempt < 2) await new Promise(res => setTimeout(res, 1000 * (attempt + 1))); }
+  }
+  throw lastErr;
+}
+
+// Fetch one single-day range, with offset pagination for busy days.
+// If a base returns page 0 but some subsequent pages fail, we retry the
+// failed pages up to 3 times before falling back to the next API base,
+// so we never silently drop orders due to a transient page fetch failure.
 async function fetchPagedOneRange(pathPart, from, to, maxPages, session, pid) {
   let lastErr;
   for (const base of CFG.apiBases) {
     try {
-      const first = await gt('POST', base, `${pathPart.replace(/\/$/, '')}/${pid}`,
-        { ...bounds(from, to), limit: CFG.pageSize, offset: 0 }, {}, session);
-      const firstRows = rowsOf(first);
-      const all = [...firstRows];
-      if (firstRows.length < CFG.pageSize) return all;
+      const first = await fetchOnePage(base, pathPart, pid, { ...bounds(from, to), limit: CFG.pageSize, offset: 0 }, session);
+      const all = [...first];
+      if (first.length < CFG.pageSize) return all;
 
       const pagePromises = [];
       const batchSize = Math.min(maxPages, 16);
       for (let page = 1; page < batchSize; page++) {
         pagePromises.push(
-          gt('POST', base, `${pathPart.replace(/\/$/, '')}/${pid}`,
-            { ...bounds(from, to), limit: CFG.pageSize, offset: page * CFG.pageSize }, {}, session)
-            .then(d => rowsOf(d))
-            .catch(() => [])
+          fetchOnePage(base, pathPart, pid, { ...bounds(from, to), limit: CFG.pageSize, offset: page * CFG.pageSize }, session)
         );
       }
       const results = await Promise.all(pagePromises);
@@ -150,7 +173,11 @@ async function fetchDayWithRetry(pathPart, day, maxPages, session, pid) {
 async function fetchPaged(pathPart, from, to, maxPages, session) {
   const pid = findPartnerId(session.claims);
   const days = dayChunks(from, to);
-  const CONCURRENCY = 3;
+  // Reduced from 3 to 2: each day already fans out up to 16 parallel page
+  // requests. 3 days × 16 pages = 48 concurrent requests reliably triggers
+  // GrubCENTER rate limiting (429). 2 days keeps throughput high while
+  // staying under the rate-limit threshold.
+  const CONCURRENCY = 2;
   const all = [];
   for (let i = 0; i < days.length; i += CONCURRENCY) {
     const batch = days.slice(i, i + CONCURRENCY);
@@ -158,6 +185,7 @@ async function fetchPaged(pathPart, from, to, maxPages, session) {
       fetchDayWithRetry(pathPart, day, maxPages, session, pid)
     ));
     results.forEach(rows => all.push(...rows));
+    if (i + CONCURRENCY < days.length) await new Promise(res => setTimeout(res, 500));
   }
   return all;
 }

@@ -36,7 +36,7 @@ module.exports = async (req, res) => {
   // refetching it (see the data-accuracy plan's Fix 2). When the client
   // passed an explicit from, honor that exact range for both, unchanged.
   if (configured() && Date.now() - meta.lastSync > SYNC_INTERVAL_MS) {
-    const bgFrom = from || dubaiDateKey(Date.now() - 14 * 864e5);
+    const bgFrom = from || dubaiDateKey(Date.now() - 45 * 864e5);
     const bgItemsFrom = from || dubaiDateKey(Date.now() - 7 * 864e5);
     const bgTo = to || dubaiDateKey(Date.now());
     waitUntil(syncOnce(bgFrom, bgTo, bgItemsFrom).catch(() => {}));
