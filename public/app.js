@@ -1068,7 +1068,7 @@ function renderItemSalesDrillBody() {
 function renderSales() {
   const all = base('sales'); const O = all.filter(o => !o.cancelled);
   const net = sum(O, o => o.netSales), rec = sum(O, o => o.receiptTotal), disc = sum(O, o => o.discount), n = O.length;
-  const top = salesAgg(O, o => o.brand).sort((a, b) => b.sales - a.sales)[0];
+  const top = salesAgg(O, o => o.brand).sort((a, b) => metricOf(b, S.ui.metric) - metricOf(a, S.ui.metric))[0];
   // 'sales' scopes the projection to the active brand/location/channel/
   // payment/partner/day filters -- previously this always read raw
   // S.orders, so Projected Month-End showed the same whole-company figure
@@ -1217,16 +1217,11 @@ function renderSales() {
       renderSales();
     };
   }
-  const f = S.f;
-  const timeOrders = S.orders.filter(o => {
-    if (o.cancelled) return false;
-    if (!eq(o.brand, f.brand) || !eq(o.location, f.location)) return false;
-    if (!eq(o.channel, f.channel) || !eq(o.payment, f.payment) || !eq(o.partner, f.partner)) return false;
-    if (f.day !== 'All' && dowOf(o.receivedAt) !== f.day) return false;
-    if (f.slot && f.slot !== 'All' && slotOf(dubaiHour(o.receivedAt)) !== f.slot) return false;
-    if (f.hour != null && f.hour !== 'All' && String(dubaiHour(o.receivedAt)) !== String(f.hour)) return false;
-    return true;
-  });
+  // O is already filtered by base('sales') which applies date + brand +
+  // location + channel + payment + partner + day + slot + hour filters.
+  // Using O here ensures the time series chart respects the same filters as
+  // the KPI cards, instead of showing all-time data from S.orders.
+  const timeOrders = O;
   const ts = salesAgg(timeOrders, o => grainKey[S.ui.grain](o.receivedAt)).sort((a, b) => (a.k < b.k ? -1 : 1));
 
   const timeBarColors = ts.map(r => {
@@ -1509,13 +1504,10 @@ function renderCancel() {
   $('#t-cbrand').textContent = `Orders Value | Total Orders by ${S.ui.cgroup === 'brand' ? 'Brand' : 'Cuisine'}`;
   hbar('c-cbrand', salesAgg(C, o => gk(o, S.ui.cgroup)).map(r => ({ k: r.k, v: mv(r) })).sort((a, b) => b.v - a.v).slice(0, 14), { fmt: lbf, filterKey: S.ui.cgroup === 'brand' ? 'brand' : 'cuisine' });
 
-  const timeCancel = S.orders.filter(o => {
-    if (!o.cancelled) return false;
-    if (!eq(o.brand, S.f.brand) || !eq(o.location, S.f.location)) return false;
-    if (!eq(o.channel, S.f.channel) || !eq(o.reason, S.f.reason)) return false;
-    if (S.f.post !== 'All' && (S.f.post === 'Yes') !== o.postCancelled) return false;
-    return true;
-  });
+  // C is already filtered by base('cancel') which applies date + brand +
+  // location + channel + reason + post filters. Using C here ensures the
+  // cancellation trend chart respects the same date range as the KPI cards.
+  const timeCancel = C;
   const tr = salesAgg(timeCancel, o => dkey(o.receivedAt)).sort((a, b) => (a.k < b.k ? -1 : 1));
   const tot = n || 1;
   const cBarColors = tr.map(r => {
