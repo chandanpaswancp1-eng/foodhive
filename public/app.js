@@ -2081,7 +2081,11 @@ function renderDelayed() {
     if (!rows.length) return mk(id, { __empty: true });
     const opts = baseOpts({
       plugins: { legend: { display: true, position: 'top', align: 'start', labels: { boxWidth: 8, boxHeight: 8, font: { size: 10 } } } },
-      scales: { x: { ...gridless, ticks: { autoSkip: false, maxRotation: 0, font: { size: 10 }, callback(v) { return trunc(this.getLabelForValue(v), 11); } } }, y: { display: false, beginAtZero: true }, y1: { display: false, beginAtZero: true } }
+      // grace: the tallest bar otherwise reaches the very top of the plot
+      // area, so its value label is painted above it into the legend row
+      // (the "768" / ">10 Min %" overlap). 10% headroom keeps the label
+      // inside the plot.
+      scales: { x: { ...gridless, ticks: { autoSkip: false, maxRotation: 0, font: { size: 10 }, callback(v) { return trunc(this.getLabelForValue(v), 11); } } }, y: { display: false, beginAtZero: true, grace: '10%' }, y1: { display: false, beginAtZero: true, grace: '10%' } }
     });
     if (filterKey) addBarClick(opts, r => r.k, filterKey);
     mk(id, {
@@ -2127,14 +2131,21 @@ function renderDelayed() {
     d: avg(g.rows.map(x => x.delay)),
     count: g.rows.length
   })).sort((a, b) => b.d - a.d);
-  const mx = rk.length ? rk[0].d || 1 : 1;
+  // Heat scale: only POSITIVE delays are bad. The previous denominator was
+  // rk[0].d (the largest average) with no floor, so when every outlet beat
+  // its estimate the max was negative, every r.d/mx ratio came out >= 1 and
+  // the whole table was painted the darkest red -- the "worst" colour for
+  // the best outcomes. Clamp the denominator to >= 1 and give early outlets
+  // a green tint instead.
+  const maxPositive = rk.reduce((m, r) => Math.max(m, r.d), 1);
   const thPrefix = isOnlyDelayed ? '🚨 Delayed Outlets (>10m)' : (S.ui.dgroup === 'brand' ? 'Brand' : 'Cuisine');
   const curTargetKey = S.f[S.ui.dgroup === 'brand' ? 'brand' : 'cuisine'];
   const filterField = S.ui.dgroup === 'brand' ? 'brand' : 'cuisine';
   $('#delayTable').innerHTML = `<thead><tr><th style="text-align:left">${thPrefix}</th><th>Orders</th><th>Avg Delay (min)</th></tr></thead><tbody>${rk.map((r, i) => {
-    const t = Math.max(0, Math.min(1, r.d / mx));
+    const t = r.d <= 0 ? 0 : Math.min(1, r.d / maxPositive);
+    const heat = r.d <= 0 ? '#eef7ee' : `hsl(4,85%,${Math.max(40, 94 - t * 40)}%)`;
     const isRowActive = curTargetKey === r.targetKey;
-    return `<tr style="cursor:pointer;background:${isRowActive ? '#FFFDF2' : (i % 2 ? '#111' : '#fff')};color:${isRowActive ? '#000' : (i % 2 ? '#fff' : '#111')};outline:${isRowActive ? '2px solid #b38600' : 'none'}" onclick="(() => { S.f['${filterField}'] = (S.f['${filterField}'] === '${esc(r.targetKey)}' ? 'All' : '${esc(r.targetKey)}'); syncFilterUI(); render(); })()"><td>${isRowActive ? '✓ ' : ''}${esc(r.name)}</td><td>${r.count}</td><td style="background:hsl(4,85%,${Math.max(40, 94 - t * 40)}%);color:#111;font-weight:700">${r.d.toFixed(2)}</td></tr>`;
+    return `<tr style="cursor:pointer;background:${isRowActive ? '#FFFDF2' : (i % 2 ? '#111' : '#fff')};color:${isRowActive ? '#000' : (i % 2 ? '#fff' : '#111')};outline:${isRowActive ? '2px solid #b38600' : 'none'}" onclick="(() => { S.f['${filterField}'] = (S.f['${filterField}'] === '${esc(r.targetKey)}' ? 'All' : '${esc(r.targetKey)}'); syncFilterUI(); render(); })()"><td>${isRowActive ? '✓ ' : ''}${esc(r.name)}</td><td>${r.count}</td><td style="background:${heat};color:#111;font-weight:700">${r.d.toFixed(2)}</td></tr>`;
   }).join('')}</tbody>`;
 }
 
