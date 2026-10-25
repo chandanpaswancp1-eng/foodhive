@@ -24,20 +24,19 @@ module.exports = async (req, res) => {
   // own 45-day default: a full resync takes minutes, so on-demand triggers
   // firing that same slow full resync on every stale page load left
   // "today"'s totals visibly lagging GrubCENTER's live numbers between
-  // syncs. Settled older orders rarely change -- the daily cron
-  // (api/sync-cron.js) and the explicit "Sync Now" button still cover full
-  // historical refreshes.
+  // syncs (and routinely blew past this function's execution limit, which
+  // meant the sync never completed at all). Settled older orders rarely
+  // change -- the daily cron (api/sync-cron.js) and the explicit "Sync Now"
+  // button still cover wider historical refreshes.
   //
-  // Orders/ops/cancellations get a wider 14-day window than order-items'
-  // 7 days: they're confirmed lightweight (complete even at the full 45-day
-  // window, per the timing that originally forced order-items down to 7
-  // days), and a late cancellation/ops update can land on an order received
-  // many days ago -- too narrow a window here risks silently never
-  // refetching it (see the data-accuracy plan's Fix 2). When the client
+  // Orders/ops/cancellations get a 7-day window; order-items gets 3. Both
+  // are sized to finish comfortably inside the function's maxDuration even
+  // after the pagination fix (which now issues ~2 requests per day instead
+  // of 1, because GrubCENTER under-reports page sizes). When the client
   // passed an explicit from, honor that exact range for both, unchanged.
   if (configured() && Date.now() - meta.lastSync > SYNC_INTERVAL_MS) {
-    const bgFrom = from || dubaiDateKey(Date.now() - 45 * 864e5);
-    const bgItemsFrom = from || dubaiDateKey(Date.now() - 7 * 864e5);
+    const bgFrom = from || dubaiDateKey(Date.now() - 7 * 864e5);
+    const bgItemsFrom = from || dubaiDateKey(Date.now() - 3 * 864e5);
     const bgTo = to || dubaiDateKey(Date.now());
     waitUntil(syncOnce(bgFrom, bgTo, bgItemsFrom).catch(() => {}));
   }

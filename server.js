@@ -45,7 +45,11 @@ const CFG = {
   cancelPath: '/sales-data/cancelled-orders/report/',
   itemsPath: E.GRUBCENTER_ITEMS_PATH || '/operations-data/item-availability/snapshot/',
   orderItemsPath: E.GRUBCENTER_ORDER_ITEMS_PATH || '/menu-data/menu-items/order-items-sales/',
-  pageSize: +E.GRUBCENTER_PAGE_SIZE || 200,
+  // 500, not 200: GrubCENTER returns ~limit-3 rows per page, so a 200-row
+  // page needs a second request for any day over ~197 orders -- and every
+  // busy day here runs 200-300. 500 covers a normal day in ONE request,
+  // roughly halving total sync time and rate-limit exposure.
+  pageSize: +E.GRUBCENTER_PAGE_SIZE || 500,
 
   // Zoho Books (OAuth2 self-client, read-only scopes)
   zohoClientId: E.ZOHO_CLIENT_ID,
@@ -97,21 +101,42 @@ function findPartnerId(claims) {
 }
 
 // ---------- grubtech calls ----------
-// Rate-limit (429) retry with backoff. GrubCENTER enforces a per-minute
-// request cap; hitting it mid-sync would fail whole days. Retry up to 3
-// times with growing backoff before giving up.
+// Retry policy for the reporting API:
+//  - 429 (per-minute request cap): exponential backoff, 3 attempts.
+//  - Network-level failures (ECONNRESET / socket hang up / DNS blip):
+//    same backoff. Without this, a single dropped connection failed a whole
+//    day, and with 45 days x 4 reports that turned a ~2-minute sync into a
+//    20+ minute retry crawl.
+//  - 401/403: force a fresh Cognito login once (the 1-hour token can expire
+//    mid-sync) and retry.
 async function gt(method, base, p, query, body, retries = 3) {
-  const s = await ensureSession();
+  let s = await ensureSession();
   const url = base.replace(/\/$/, '') + '/' + p.replace(/^\//, '') + (query ? '?' + new URLSearchParams(query) : '');
   for (let attempt = 0; attempt < retries; attempt++) {
-    const r = await fetch(url, {
-      method,
-      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + (CFG.tokenType === 'access' ? s.accessToken : s.idToken) },
-      body: method === 'GET' ? undefined : JSON.stringify(body || {})
-    });
-    const text = await r.text();
+    let r, text;
+    try {
+      r = await fetch(url, {
+        method,
+        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + (CFG.tokenType === 'access' ? s.accessToken : s.idToken) },
+        body: method === 'GET' ? undefined : JSON.stringify(body || {})
+      });
+      text = await r.text();
+    } catch (err) {
+      if (attempt < retries - 1) {
+        await new Promise(res => setTimeout(res, 1500 * (attempt + 1)));
+        continue;
+      }
+      const cause = err && err.cause ? (err.cause.code || err.cause.message) : '';
+      throw new Error(`Grubtech network error ${url}: ${err.message}${cause ? ' (' + cause + ')' : ''}`);
+    }
     let json; try { json = JSON.parse(text); } catch (_) { json = text; }
     if (r.ok) return json;
+    // Expired/revoked token: refresh the session once and retry.
+    if ((r.status === 401 || r.status === 403) && attempt < retries - 1) {
+      session = null;
+      s = await ensureSession();
+      continue;
+    }
     // 429 Too Many Requests: back off and retry. Other errors are thrown.
     if (r.status === 429 && attempt < retries - 1) {
       await new Promise(res => setTimeout(res, 2000 * (attempt + 1)));
@@ -139,30 +164,58 @@ async function fetchOnePage(base, pathPart, pid, query) {
   throw lastErr;
 }
 
+// Dedupe key for paginated rows. Order-level reports (order-details, ops,
+// cancellations) carry one row per order, so the order id is the natural
+// key. Order-items rows are one row per LINE ITEM and share their parent
+// orderId -- keying those by orderId would collapse a multi-item order into
+// a single line -- so fall back to the full row payload, which only removes
+// exact duplicates produced by overlapping page windows.
+function pagedRowKey(pathPart, r) {
+  const isLineItems = pathPart.replace(/\/$/, '') === CFG.orderItemsPath.replace(/\/$/, '');
+  if (isLineItems) return 'json:' + JSON.stringify(r);
+  const id = r.orderId || r.id || r.uniqueOrderId || r.externalId;
+  return id ? 'id:' + String(id) : 'json:' + JSON.stringify(r);
+}
+
 // Fetch one single-day range, with offset pagination for busy days.
 // If a base returns page 0 but some subsequent pages fail, we retry the
 // failed pages up to 3 times before falling back to the next API base,
 // so we never silently drop orders due to a transient page fetch failure.
+//
+// IMPORTANT: GrubCENTER returns FEWER rows than the requested `limit` even
+// when more pages exist. Confirmed against the live API: a 303-order day
+// asked for limit=200 returns 197 rows on page 0, with the remaining 106
+// rows at offset=200. The old `rows.length < pageSize -> last page` check
+// therefore stopped after page 0 on every busy day, which is exactly why
+// the dashboard looked permanently stuck at 197 orders (Oct 24's first
+// page) no matter how many times it synced. The only reliable end-of-data
+// signal is an empty page, so page until one comes back.
+//
+// Rows are deduped by order id because the API applies `offset` before its
+// own internal filtering, so consecutive page windows can overlap by a
+// couple of rows (a blind concat would double-count them).
 async function fetchPagedOneRange(pathPart, from, to, maxPages, s, pid) {
   let lastErr;
   for (const base of CFG.apiBases) {
     try {
-      const first = await fetchOnePage(base, pathPart, pid, { ...bounds(from, to), limit: CFG.pageSize, offset: 0 });
-      const all = [...first];
-      if (first.length < CFG.pageSize) return all;
-
-      // Parallel batch fetch for remaining pages, with per-page retries
-      const pagePromises = [];
-      const batchSize = Math.min(maxPages, 16);
-      for (let page = 1; page < batchSize; page++) {
-        pagePromises.push(
-          fetchOnePage(base, pathPart, pid, { ...bounds(from, to), limit: CFG.pageSize, offset: page * CFG.pageSize })
-        );
-      }
-      const results = await Promise.all(pagePromises);
-      for (const rows of results) {
-        all.push(...rows);
-        if (rows.length < CFG.pageSize) break;
+      const all = [];
+      const seen = new Set();
+      let offset = 0;
+      while (offset < maxPages * CFG.pageSize) {
+        const rows = await fetchOnePage(base, pathPart, pid, { ...bounds(from, to), limit: CFG.pageSize, offset });
+        if (!rows.length) break;
+        let added = 0;
+        for (const r of rows) {
+          const key = pagedRowKey(pathPart, r);
+          if (seen.has(key)) continue;
+          seen.add(key);
+          all.push(r);
+          added++;
+        }
+        // A full page of already-seen rows means the server ignored `offset`
+        // and re-served the same window -- stop instead of looping.
+        if (!added) break;
+        offset += CFG.pageSize;
       }
       return all;
     } catch (e) { lastErr = e; if (e.status && ![404, 405].includes(e.status)) throw e; }
@@ -170,13 +223,12 @@ async function fetchPagedOneRange(pathPart, from, to, maxPages, s, pid) {
   throw lastErr;
 }
 
-// GrubCENTER's order-details endpoint silently caps a wide [from, to] range
-// to roughly one page's worth of (apparently most-recent) rows instead of
-// paginating through the whole range -- confirmed experimentally: a single
-// day returns its true, complete count (e.g. matches GrubCENTER's own
-// "Yesterday" dashboard figure exactly), but a 3-day range returns FEWER
-// total rows than that single busiest day alone returns by itself. Querying
-// day-by-day and merging is the only way to get a complete pull.
+// Query the range day-by-day and merge. A wide [from, to] range does
+// paginate correctly now that the empty-page stop condition is used, but
+// day-chunking is still deliberate: it isolates a transient failure to one
+// day instead of losing a whole multi-week pull, keeps each day's page set
+// small (busy days run ~300 rows), and matches how GrubCENTER's own
+// dashboard reports daily totals.
 function dayChunks(from, to) {
   const days = [];
   for (let d = new Date(from + 'T00:00:00Z'); d <= new Date(to + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + 1)) {
@@ -217,6 +269,10 @@ async function fetchPaged(pathPart, from, to, maxPages = 20) {
       fetchDayWithRetry(pathPart, day, maxPages, s, pid).then(rows => ({ day, rows }))
     ));
     results.forEach(({ day, rows }) => { if (rows === null) failedDays.push(day); else all.push(...rows); });
+    // Progress log so a long sync is visibly moving instead of looking hung.
+    if (i % 10 === 0 || i + CONCURRENCY >= days.length) {
+      console.log(`[GrubCENTER Sync] ${pathPart}: ${Math.min(i + CONCURRENCY, days.length)}/${days.length} days, ${all.length} rows`);
+    }
     // Small delay between batches to further reduce rate-limit risk
     if (i + CONCURRENCY < days.length) await new Promise(res => setTimeout(res, 500));
   }
@@ -263,9 +319,16 @@ function preloadData() {
 
   let list = [];
   if (fs.existsSync(allFile)) {
-    try { list = JSON.parse(fs.readFileSync(allFile, 'utf8')); } catch (_) {}
-  } else if (fs.existsSync(cachedFile)) {
-    try { list = N.normalizeOrders(JSON.parse(fs.readFileSync(cachedFile, 'utf8'))); } catch (_) {}
+    try { list = JSON.parse(fs.readFileSync(allFile, 'utf8')); }
+    catch (e) { console.warn('[Cache Preload] all_orders.json unreadable, falling back to cached_orders.json:', e.message); }
+  }
+  // Fall back to the older raw export if the master cache is missing,
+  // empty, or corrupt -- otherwise a single bad write would silently boot
+  // the dashboard with 0 (or a handful of) orders.
+  if (!Array.isArray(list) || !list.length) {
+    if (fs.existsSync(cachedFile)) {
+      try { list = N.normalizeOrders(JSON.parse(fs.readFileSync(cachedFile, 'utf8'))); } catch (_) {}
+    }
   }
 
   const officialBrandsFile = path.join(__dirname, 'data', 'official_foodhive_brands.json');
@@ -295,6 +358,18 @@ function preloadData() {
   console.log(`[Cache Preload] Loaded ${STORE.ordersArray.length} master FoodHive orders, ${STORE.itemsArray.length} 86-items & ${STORE.orderItemsArray.length} order line items in ${Date.now() - t0}ms`);
 }
 preloadData();
+
+// Atomic JSON persist (write temp + rename) so an interrupted write can
+// never leave a truncated cache behind. See the call site in
+// syncGrubcenter() for why this matters.
+function persistJson(file, data) {
+  const dest = path.join(__dirname, 'data', file);
+  const tmp = dest + '.tmp';
+  fs.writeFile(tmp, JSON.stringify(data), err => {
+    if (err) { console.error(`[Cache Persist] ${file} write failed:`, err.message); return; }
+    fs.rename(tmp, dest, err2 => { if (err2) console.error(`[Cache Persist] ${file} rename failed:`, err2.message); });
+  });
+}
 
 const REOPENED_RE = /\breopen(ed)?\b/i;
 
@@ -425,9 +500,13 @@ async function syncGrubcenter(from, to, itemsFrom) {
       .concat(normOrderItems.filter(hasValidDate));
     console.log(`[GrubCENTER Sync Complete] ${STORE.orderItemsArray.length} order line items in store (${normOrderItems.length} refreshed for this window)`);
 
-    // Async persist to disk
-    fs.writeFile(path.join(__dirname, 'data', 'all_orders.json'), JSON.stringify(STORE.ordersArray), () => {});
-    fs.writeFile(path.join(__dirname, 'data', 'order_items.json'), JSON.stringify(STORE.orderItemsArray), () => {});
+    // Atomic cache persist: write to a temp file then rename over the real
+    // one. A plain fs.writeFile() interrupted mid-write (Ctrl-C, crash, OOM)
+    // leaves truncated JSON behind, and the next boot then silently falls
+    // back to an older/smaller cache -- which looks exactly like the sync
+    // "losing" thousands of orders. rename() is atomic on one filesystem.
+    persistJson('all_orders.json', STORE.ordersArray);
+    persistJson('order_items.json', STORE.orderItemsArray);
   } catch (err) {
     console.error('[GrubCENTER Sync Error]', err.message);
   } finally {
@@ -435,9 +514,12 @@ async function syncGrubcenter(from, to, itemsFrom) {
   }
 }
 
-// Background warm sync on boot
+// Background warm sync on boot. BOOT_SYNC_DAYS exists mainly so a quick
+// smoke test can boot with a 5-day pull instead of waiting on the full
+// 45-day backfill; production behavior is unchanged (45 days).
+const BOOT_SYNC_DAYS = +E.BOOT_SYNC_DAYS || 45;
 setTimeout(() => {
-  if (CFG.email && CFG.password) syncGrubcenter().catch(() => {});
+  if (CFG.email && CFG.password) syncGrubcenter(daysAgo(BOOT_SYNC_DAYS), today()).catch(() => {});
 }, 500);
 
 // Background refresh every 10 minutes. Scoped to a narrower-than-45-day

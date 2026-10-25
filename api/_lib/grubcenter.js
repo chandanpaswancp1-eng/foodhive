@@ -23,7 +23,11 @@ const CFG = {
   cancelPath: '/sales-data/cancelled-orders/report/',
   itemsPath: E.GRUBCENTER_ITEMS_PATH || '/operations-data/item-availability/snapshot/',
   orderItemsPath: E.GRUBCENTER_ORDER_ITEMS_PATH || '/menu-data/menu-items/order-items-sales/',
-  pageSize: +E.GRUBCENTER_PAGE_SIZE || 200
+  // 500, not 200: GrubCENTER returns ~limit-3 rows per page, so a 200-row
+  // page needs a second request for any day over ~197 orders -- and every
+  // busy day here runs 200-300. 500 covers a normal day in ONE request,
+  // roughly halving total sync time and rate-limit exposure.
+  pageSize: +E.GRUBCENTER_PAGE_SIZE || 500
 };
 
 const configured = () => !!(CFG.email && CFG.password);
@@ -65,18 +69,31 @@ function findPartnerId(claims) {
   throw new Error('Could not find a partnerId in login token.');
 }
 
-// Rate-limit (429) retry with backoff. GrubCENTER enforces a per-minute
-// request cap; hitting it mid-sync would fail whole days. Retry up to 3
-// times with growing backoff before giving up.
+// Retry policy for the reporting API:
+//  - 429 (per-minute request cap): exponential backoff, 3 attempts.
+//  - Network-level failures (ECONNRESET / socket hang up / DNS blip):
+//    same backoff. Without this, a single dropped connection failed a whole
+//    day, and with a 45-day x 4-report pull that turned a ~2-minute sync
+//    into a 20+ minute retry crawl.
 async function gt(method, base, p, query, body, session, retries = 3) {
   const url = base.replace(/\/$/, '') + '/' + p.replace(/^\//, '') + (query ? '?' + new URLSearchParams(query) : '');
   for (let attempt = 0; attempt < retries; attempt++) {
-    const r = await fetch(url, {
-      method,
-      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + (CFG.tokenType === 'access' ? session.accessToken : session.idToken) },
-      body: method === 'GET' ? undefined : JSON.stringify(body || {})
-    });
-    const text = await r.text();
+    let r, text;
+    try {
+      r = await fetch(url, {
+        method,
+        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + (CFG.tokenType === 'access' ? session.accessToken : session.idToken) },
+        body: method === 'GET' ? undefined : JSON.stringify(body || {})
+      });
+      text = await r.text();
+    } catch (err) {
+      if (attempt < retries - 1) {
+        await new Promise(res => setTimeout(res, 1500 * (attempt + 1)));
+        continue;
+      }
+      const cause = err && err.cause ? (err.cause.code || err.cause.message) : '';
+      throw new Error(`Grubtech network error ${url}: ${err.message}${cause ? ' (' + cause + ')' : ''}`);
+    }
     let json; try { json = JSON.parse(text); } catch (_) { json = text; }
     if (r.ok) return json;
     if (r.status === 429 && attempt < retries - 1) {
@@ -105,29 +122,58 @@ async function fetchOnePage(base, pathPart, pid, query, session) {
   throw lastErr;
 }
 
+// Dedupe key for paginated rows. Order-level reports (order-details, ops,
+// cancellations) carry one row per order, so the order id is the natural
+// key. Order-items rows are one row per LINE ITEM and share their parent
+// orderId -- keying those by orderId would collapse a multi-item order into
+// a single line -- so fall back to the full row payload, which only removes
+// exact duplicates produced by overlapping page windows.
+function pagedRowKey(pathPart, r) {
+  const isLineItems = pathPart.replace(/\/$/, '') === CFG.orderItemsPath.replace(/\/$/, '');
+  if (isLineItems) return 'json:' + JSON.stringify(r);
+  const id = r.orderId || r.id || r.uniqueOrderId || r.externalId;
+  return id ? 'id:' + String(id) : 'json:' + JSON.stringify(r);
+}
+
 // Fetch one single-day range, with offset pagination for busy days.
 // If a base returns page 0 but some subsequent pages fail, we retry the
 // failed pages up to 3 times before falling back to the next API base,
 // so we never silently drop orders due to a transient page fetch failure.
+//
+// IMPORTANT: GrubCENTER returns FEWER rows than the requested `limit` even
+// when more pages exist. Confirmed against the live API: a 303-order day
+// asked for limit=200 returns 197 rows on page 0, with the remaining 106
+// rows at offset=200. The old `rows.length < pageSize -> last page` check
+// therefore stopped after page 0 on every busy day, which is exactly why
+// the dashboard looked permanently stuck at 197 orders (Oct 24's first
+// page) no matter how many times it synced. The only reliable end-of-data
+// signal is an empty page, so page until one comes back.
+//
+// Rows are deduped by order id because the API applies `offset` before its
+// own internal filtering, so consecutive page windows can overlap by a
+// couple of rows (a blind concat would double-count them).
 async function fetchPagedOneRange(pathPart, from, to, maxPages, session, pid) {
   let lastErr;
   for (const base of CFG.apiBases) {
     try {
-      const first = await fetchOnePage(base, pathPart, pid, { ...bounds(from, to), limit: CFG.pageSize, offset: 0 }, session);
-      const all = [...first];
-      if (first.length < CFG.pageSize) return all;
-
-      const pagePromises = [];
-      const batchSize = Math.min(maxPages, 16);
-      for (let page = 1; page < batchSize; page++) {
-        pagePromises.push(
-          fetchOnePage(base, pathPart, pid, { ...bounds(from, to), limit: CFG.pageSize, offset: page * CFG.pageSize }, session)
-        );
-      }
-      const results = await Promise.all(pagePromises);
-      for (const rows of results) {
-        all.push(...rows);
-        if (rows.length < CFG.pageSize) break;
+      const all = [];
+      const seen = new Set();
+      let offset = 0;
+      while (offset < maxPages * CFG.pageSize) {
+        const rows = await fetchOnePage(base, pathPart, pid, { ...bounds(from, to), limit: CFG.pageSize, offset }, session);
+        if (!rows.length) break;
+        let added = 0;
+        for (const r of rows) {
+          const key = pagedRowKey(pathPart, r);
+          if (seen.has(key)) continue;
+          seen.add(key);
+          all.push(r);
+          added++;
+        }
+        // A full page of already-seen rows means the server ignored `offset`
+        // and re-served the same window -- stop instead of looping.
+        if (!added) break;
+        offset += CFG.pageSize;
       }
       return all;
     } catch (e) { lastErr = e; if (e.status && ![404, 405].includes(e.status)) throw e; }
@@ -135,17 +181,15 @@ async function fetchPagedOneRange(pathPart, from, to, maxPages, session, pid) {
   throw lastErr;
 }
 
-// GrubCENTER's order-details endpoint silently caps a wide [from, to] range
-// to roughly one page's worth of (apparently most-recent) rows instead of
-// paginating through the whole range -- confirmed experimentally against
-// the live API: a single day returns its true, complete count (matches
-// GrubCENTER's own dashboard exactly), but a multi-day range returns FEWER
-// total rows than that range's single busiest day returns by itself.
-// Querying day-by-day and merging is the only way to get a complete pull.
+// Query the range day-by-day and merge. A wide [from, to] range does
+// paginate correctly now that the empty-page stop condition is used, but
+// day-chunking is still deliberate: it isolates a transient failure to one
+// day instead of losing a whole multi-week pull, keeps each day's page set
+// small (busy days run ~300 rows), and matches how GrubCENTER's own
+// dashboard reports daily totals.
 // Note: on Vercel this means sync duration scales with the day count in
-// [from, to] -- keep the window reasonable (the default 45 days is already
-// chunked into CONCURRENCY-sized batches below) or it may hit the
-// function's max execution duration.
+// [from, to] -- keep the window reasonable or it may hit the function's
+// max execution duration.
 function dayChunks(from, to) {
   const days = [];
   for (let d = new Date(from + 'T00:00:00Z'); d <= new Date(to + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + 1)) {
@@ -156,7 +200,10 @@ function dayChunks(from, to) {
 
 // One retry before giving up on a day (kept short -- Vercel functions have
 // a max execution duration, so this trades some reliability for staying
-// within it, unlike server.js's more patient 3-attempt version).
+// within it, unlike server.js's more patient 3-attempt version). Returns
+// null (not []) on failure so the caller can tell "failed" apart from
+// "legitimately 0 orders that day" and report the gap instead of silently
+// treating it as empty.
 async function fetchDayWithRetry(pathPart, day, maxPages, session, pid) {
   try {
     return await fetchPagedOneRange(pathPart, day, day, maxPages, session, pid);
@@ -165,7 +212,7 @@ async function fetchDayWithRetry(pathPart, day, maxPages, session, pid) {
       return await fetchPagedOneRange(pathPart, day, day, maxPages, session, pid);
     } catch (e2) {
       console.warn(`[sync] giving up on ${pathPart} ${day}: ${e2.message}`);
-      return [];
+      return null;
     }
   }
 }
@@ -173,20 +220,28 @@ async function fetchDayWithRetry(pathPart, day, maxPages, session, pid) {
 async function fetchPaged(pathPart, from, to, maxPages, session) {
   const pid = findPartnerId(session.claims);
   const days = dayChunks(from, to);
-  // Reduced from 3 to 2: each day already fans out up to 16 parallel page
-  // requests. 3 days × 16 pages = 48 concurrent requests reliably triggers
-  // GrubCENTER rate limiting (429). 2 days keeps throughput high while
-  // staying under the rate-limit threshold.
+  // Reduced from 3 to 2: each day already fans out multiple page requests.
+  // 3 days of parallel page fetches reliably triggers GrubCENTER rate
+  // limiting (429). 2 days keeps throughput high while staying under the
+  // rate-limit threshold.
   const CONCURRENCY = 2;
   const all = [];
+  const failedDays = [];
   for (let i = 0; i < days.length; i += CONCURRENCY) {
     const batch = days.slice(i, i + CONCURRENCY);
     const results = await Promise.all(batch.map(day =>
-      fetchDayWithRetry(pathPart, day, maxPages, session, pid)
+      fetchDayWithRetry(pathPart, day, maxPages, session, pid).then(rows => ({ day, rows }))
     ));
-    results.forEach(rows => all.push(...rows));
+    results.forEach(({ day, rows }) => { if (rows === null) failedDays.push(day); else all.push(...rows); });
+    if (i % 10 === 0 || i + CONCURRENCY >= days.length) {
+      console.log(`[sync] ${pathPart}: ${Math.min(i + CONCURRENCY, days.length)}/${days.length} days, ${all.length} rows`);
+    }
     if (i + CONCURRENCY < days.length) await new Promise(res => setTimeout(res, 500));
   }
+  // Surface gaps to the caller (syncOnce logs them) instead of letting a
+  // partial pull look like a complete one.
+  all.failedDays = failedDays;
+  if (failedDays.length) console.warn(`[sync] ${pathPart}: ${failedDays.length} day(s) could not be fetched: ${failedDays.join(', ')}`);
   return all;
 }
 
@@ -238,6 +293,12 @@ async function syncOnce(from, to, itemsFrom) {
   const rawOps = await fetchPaged(CFG.opsPath, f, t, 20, session).catch(() => []);
   const rawCancels = await fetchPaged(CFG.cancelPath, f, t, 10, session).catch(() => []);
   const rawOrderItems = await fetchPaged(CFG.orderItemsPath, orderItemsFrom, t, 25, session).catch(() => []);
+  const failedDays = {
+    orders: rawSales.failedDays || [],
+    ops: rawOps.failedDays || [],
+    cancel: rawCancels.failedDays || [],
+    orderItems: rawOrderItems.failedDays || []
+  };
 
   const opsMap = new Map();
   rawOps.forEach(o => {
@@ -318,6 +379,12 @@ async function syncOnce(from, to, itemsFrom) {
   const ordersArray = [...ordersMap.values()];
   await writeOrders(ordersArray);
 
+  // A completely empty sales pull over a multi-day window is a failed pull,
+  // not a legitimately empty range -- don't mark the cache fresh, so the
+  // next page load retries immediately instead of waiting 10 minutes.
+  const noSalesRows = rawSales.length === 0;
+  if (noSalesRows) console.warn(`[sync] order-details returned 0 rows for ${f}..${t}; leaving lastSync untouched so the next request retries`);
+
   // Line items: [orderItemsFrom, t] (not the wider [f, t]) is re-fetched in
   // full each sync, so it's the authoritative set for every day in THAT
   // window -- replace whatever the store already held for those days rather
@@ -337,13 +404,21 @@ async function syncOnce(from, to, itemsFrom) {
   await writeOrderItems(orderItemsArray);
 
   await writeMeta({
-    lastSync: Date.now(),
+    lastSync: noSalesRows ? (meta.lastSync || 0) : Date.now(),
     session,
     liveOpsCount: rawOps.length,
     liveCancelCount: rawCancels.length
   });
 
-  return { ok: true, total: ordersArray.length, newCount, opsCount: rawOps.length, cancelCount: rawCancels.length, orderItemsCount: orderItemsArray.length };
+  return {
+    ok: true,
+    total: ordersArray.length,
+    newCount,
+    opsCount: rawOps.length,
+    cancelCount: rawCancels.length,
+    orderItemsCount: orderItemsArray.length,
+    failedDays
+  };
 }
 
 // Optional brand allow-list, same convention as server.js's data/official_foodhive_brands.json,

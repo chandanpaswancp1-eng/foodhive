@@ -21,11 +21,11 @@ module.exports = async (req, res) => {
   // (syncOnce() refreshes orders + order-items together; /api/orders already
   // triggers the same background sync on its own staleness check, so this is
   // a harmless redundant trigger if both endpoints are hit around the same time.)
-  // See api/orders.js for why orders/ops/cancel get a wider 14-day window
-  // than order-items' 7 days when the client didn't ask for a specific range.
+  // Same 7-day orders / 3-day order-items window as api/orders.js -- sized to
+  // finish within the function's maxDuration after the pagination fix.
   if (configured() && Date.now() - meta.lastSync > SYNC_INTERVAL_MS) {
-    const bgFrom = from || dubaiDateKey(Date.now() - 14 * 864e5);
-    const bgItemsFrom = from || dubaiDateKey(Date.now() - 7 * 864e5);
+    const bgFrom = from || dubaiDateKey(Date.now() - 7 * 864e5);
+    const bgItemsFrom = from || dubaiDateKey(Date.now() - 3 * 864e5);
     const bgTo = to || dubaiDateKey(Date.now());
     waitUntil(syncOnce(bgFrom, bgTo, bgItemsFrom).catch(() => {}));
   }
