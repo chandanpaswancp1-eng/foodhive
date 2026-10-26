@@ -68,7 +68,9 @@ async function cognito(target, body) {
   const r = await fetch(`https://cognito-idp.${CFG.region}.amazonaws.com/`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-amz-json-1.1', 'X-Amz-Target': `AWSCognitoIdentityProviderService.${target}` },
-    body: JSON.stringify(body)
+    body: JSON.stringify(body),
+    // A hung auth socket must not wedge the caller forever (see gt()).
+    signal: AbortSignal.timeout(20_000)
   });
   const j = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(j.message || j.__type || `Cognito ${r.status}`);
@@ -118,7 +120,12 @@ async function gt(method, base, p, query, body, retries = 3) {
       r = await fetch(url, {
         method,
         headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + (CFG.tokenType === 'access' ? s.accessToken : s.idToken) },
-        body: method === 'GET' ? undefined : JSON.stringify(body || {})
+        body: method === 'GET' ? undefined : JSON.stringify(body || {}),
+        // Without a timeout a single stalled connection leaves the sync
+        // promise (and STORE.syncing) pending forever, which silently kills
+        // every later auto-sync and makes "Sync Now" do nothing until the
+        // process is restarted. The retry loop below handles the abort.
+        signal: AbortSignal.timeout(45_000)
       });
       text = await r.text();
     } catch (err) {
@@ -355,28 +362,55 @@ function preloadData() {
     try { STORE.zoho = JSON.parse(fs.readFileSync(zohoFile, 'utf8')); } catch (_) {}
   }
 
+  // Seed lastSync from the cache's own write time. Without this every restart
+  // reports lastSync: 0, so the first page load is treated as stale (starting
+  // yet another sync) and the Sync Now completion baseline is wrong until one
+  // lands. The mtime is exactly when the last successful sync persisted it.
+  try {
+    if (fs.existsSync(allFile)) STORE.lastSync = fs.statSync(allFile).mtimeMs;
+  } catch (_) {}
+
   console.log(`[Cache Preload] Loaded ${STORE.ordersArray.length} master FoodHive orders, ${STORE.itemsArray.length} 86-items & ${STORE.orderItemsArray.length} order line items in ${Date.now() - t0}ms`);
 }
 preloadData();
 
 // Atomic JSON persist (write temp + rename) so an interrupted write can
-// never leave a truncated cache behind. See the call site in
-// syncGrubcenter() for why this matters.
+// never leave a truncated cache behind. See runSync() for why this matters.
+//
+// Writes for the same file are serialized and use a unique temp name: the
+// scheduled refresh and a manual "Sync Now" can now run at the same time,
+// and two writers sharing one `.tmp` path could otherwise rename a
+// half-written file over the real cache.
+let persistSeq = 0;
+const persistChains = new Map();
 function persistJson(file, data) {
   const dest = path.join(__dirname, 'data', file);
-  const tmp = dest + '.tmp';
-  fs.writeFile(tmp, JSON.stringify(data), err => {
-    if (err) { console.error(`[Cache Persist] ${file} write failed:`, err.message); return; }
-    fs.rename(tmp, dest, err2 => { if (err2) console.error(`[Cache Persist] ${file} rename failed:`, err2.message); });
-  });
+  const tmp = `${dest}.${process.pid}.${++persistSeq}.tmp`;
+  const prev = persistChains.get(file) || Promise.resolve();
+  const job = prev.then(() => new Promise(resolve => {
+    fs.writeFile(tmp, JSON.stringify(data), err => {
+      if (err) { console.error(`[Cache Persist] ${file} write failed:`, err.message); resolve(); return; }
+      fs.rename(tmp, dest, err2 => {
+        if (err2) console.error(`[Cache Persist] ${file} rename failed:`, err2.message);
+        resolve();
+      });
+    });
+  }));
+  persistChains.set(file, job);
+  return job;
 }
 
 const REOPENED_RE = /\breopen(ed)?\b/i;
 
 // 2. Synchronize live GrubCENTER data into master store
-async function syncGrubcenter(from, to, itemsFrom) {
-  if (STORE.syncing) return;
-  STORE.syncing = true;
+//
+// Both the scheduled refresh and the UI's "Sync Now" button funnel through
+// runSync(). They used to share a single `if (STORE.syncing) return;` guard,
+// so a button press during the (multi-minute) background pull was silently
+// discarded while /api/refresh still answered "Sync started" -- the exact
+// reason the button looked dead. Manual refreshes now run alongside a
+// background pull; each entry point still dedupes against itself.
+async function runSync(from, to, itemsFrom) {
   const f = from || daysAgo(45), t = to || today();
   // order-items can get its own, narrower window than orders/ops/cancel --
   // see api/_lib/grubcenter.js's syncOnce() for why (far more rows/page per
@@ -509,39 +543,69 @@ async function syncGrubcenter(from, to, itemsFrom) {
     persistJson('order_items.json', STORE.orderItemsArray);
   } catch (err) {
     console.error('[GrubCENTER Sync Error]', err.message);
-  } finally {
-    STORE.syncing = false;
   }
 }
 
-// Background warm sync on boot. BOOT_SYNC_DAYS exists mainly so a quick
-// smoke test can boot with a 5-day pull instead of waiting on the full
-// 45-day backfill; production behavior is unchanged (45 days).
-const BOOT_SYNC_DAYS = +E.BOOT_SYNC_DAYS || 45;
+let bgSyncPromise = null;
+let manualSyncPromise = null;
+const syncBusy = () => !!(bgSyncPromise || manualSyncPromise);
+
+function syncGrubcenter(from, to, itemsFrom) {
+  if (bgSyncPromise) return bgSyncPromise;
+  STORE.syncing = true;
+  bgSyncPromise = runSync(from, to, itemsFrom).finally(() => {
+    bgSyncPromise = null;
+    STORE.syncing = syncBusy();
+  });
+  return bgSyncPromise;
+}
+
+// UI "Sync Now". Deliberately does NOT join bgSyncPromise: a 14-day
+// background pull takes minutes, so waiting for it would put the button back
+// where it started. A narrow (1-3 day) pull costs a handful of extra
+// requests, and both syncs merge into the same in-memory STORE.
+function syncNowManual(from, to, itemsFrom) {
+  if (manualSyncPromise) return manualSyncPromise;
+  STORE.syncing = true;
+  manualSyncPromise = runSync(from, to, itemsFrom).finally(() => {
+    manualSyncPromise = null;
+    STORE.syncing = syncBusy();
+  });
+  return manualSyncPromise;
+}
+
+// Background warm sync on boot. A 14-day window is enough to catch up after
+// a restart (the rest of the history is already on disk); a deeper backfill
+// is still available through /api/refresh?full=1. BOOT_SYNC_DAYS exists so a
+// quick smoke test can boot with a shorter pull.
+const BOOT_SYNC_DAYS = +E.BOOT_SYNC_DAYS || 14;
+let lastWideSyncAt = Date.now();
 setTimeout(() => {
-  if (CFG.email && CFG.password) syncGrubcenter(daysAgo(BOOT_SYNC_DAYS), today()).catch(() => {});
+  if (!CFG.email || !CFG.password) return;
+  lastWideSyncAt = Date.now();
+  syncGrubcenter(daysAgo(BOOT_SYNC_DAYS), today(), daysAgo(7)).catch(() => {});
 }, 500);
 
-// Background refresh every 10 minutes. Scoped to a narrower-than-45-day
-// window so each tick is fast and reliably keeps today's running totals
-// current -- a full 45-day resync (as the boot sync above does) takes
-// several minutes, so if the routine refresh re-pulled the whole window
-// every 10 minutes it would often still be mid-sync when the next tick
-// fired, letting "today" drift stale against GrubCENTER's own live totals
-// between ticks.
-//
-// orders/ops/cancellations get 14 days here, not order-items' 7: they're
-// confirmed lightweight (complete even at the full 45-day window -- 7 days
-// was specifically forced by order-items' much heavier per-day pagination),
-// and a late cancellation/ops update can land on an order received many
-// days ago. Too narrow a window risks never refetching it until the next
-// full resync, which on this long-running process only happens at the next
-// restart -- 14 days leaves meaningful headroom to catch that without
-// reintroducing the slowness that forced order-items down to 7.
+// Frequent (10-minute) refresh: just today + yesterday. This is what keeps
+// the live totals moving. The old 14-day window took ~6 minutes per tick, so
+// a background sync was running for most of every 10-minute cycle and any
+// Sync Now press in that window used to be silently discarded.
 const SYNC_INTERVAL_MS = 10 * 60 * 1000;
 setInterval(() => {
-  if (CFG.email && CFG.password) syncGrubcenter(daysAgo(14), today(), daysAgo(7)).catch(() => {});
+  if (CFG.email && CFG.password) syncGrubcenter(daysAgo(1), today(), daysAgo(1)).catch(() => {});
 }, SYNC_INTERVAL_MS);
+
+// Wider reconciliation every 3 hours (plus the boot pull above): a late
+// cancellation / ops timestamp can land on an order received many days ago,
+// which a 2-day window would never pick up. The once-a-minute check skips
+// while another background pull is still running.
+const WIDE_SYNC_INTERVAL_MS = 3 * 60 * 60 * 1000;
+setInterval(() => {
+  if (!CFG.email || !CFG.password || bgSyncPromise) return;
+  if (Date.now() - lastWideSyncAt < WIDE_SYNC_INTERVAL_MS) return;
+  lastWideSyncAt = Date.now();
+  syncGrubcenter(daysAgo(14), today(), daysAgo(7)).catch(() => {});
+}, 60 * 1000);
 
 // ---------- Zoho Books (accounting) ----------
 let zohoSession = null;
@@ -859,16 +923,19 @@ http.createServer(async (req, res) => {
   const u = new URL(req.url, 'http://x');
   try {
     if (u.pathname === '/api/status') {
-      const out = { configured: !!(CFG.email && CFG.password), connected: false, user: CFG.email || null, partnerId: null };
+      // lastSync / syncing are reported even when the Cognito check fails:
+      // the UI polls them to know when a sync finished, and dropping them on
+      // an auth blip made the poll look like an eternal "still running".
+      const out = {
+        configured: !!(CFG.email && CFG.password), connected: false, user: CFG.email || null, partnerId: null,
+        lastSync: STORE.lastSync, cachedCount: STORE.ordersArray.length, syncing: syncBusy()
+      };
       if (out.configured) {
         try {
           const s = await ensureSession();
           out.connected = true;
           out.partnerId = findPartnerId(s.claims);
           out.claims = { email: s.claims.email, partnerStatus: s.claims.partnerStatus };
-          out.lastSync = STORE.lastSync;
-          out.cachedCount = STORE.ordersArray.length;
-          out.syncing = STORE.syncing;
         } catch (e) { out.error = e.message; }
       }
       return sendGzip(req, res, 200, out);
@@ -882,11 +949,33 @@ http.createServer(async (req, res) => {
       // `full=1` forces a complete 45-day re-sync regardless of cached data,
       // useful when the local cache is suspected to be incomplete or stale.
       if (full) {
+        const busy = !!bgSyncPromise;
         syncGrubcenter(daysAgo(45), today()).catch(() => {});
-        return sendGzip(req, res, 200, { ok: true, configured: true, message: 'Full 45-day re-sync started' });
+        return sendGzip(req, res, 200, {
+          ok: true, configured: true, busy,
+          message: busy ? 'A background sync is already running' : 'Full 45-day re-sync started'
+        });
       }
-      syncGrubcenter(u.searchParams.get('from'), u.searchParams.get('to')).catch(() => {});
-      return sendGzip(req, res, 200, { ok: true, configured: true, message: 'Sync started' });
+      // The button must return quickly. A 14-day pull takes ~6 minutes, and
+      // the old code silently ignored any press while that was running. Cap
+      // the on-demand window at 3 days (today only when no range is given),
+      // so it finishes in well under a minute and runs alongside a
+      // background sync instead of being dropped.
+      const to = u.searchParams.get('to') || today();
+      const requestedFrom = u.searchParams.get('from');
+      const maxDays = 3;
+      const minFrom = new Date(new Date(to + 'T00:00:00Z').getTime() - maxDays * 864e5).toISOString().slice(0, 10);
+      // No explicit range (the All / Week / Month pills) -> refresh just
+      // today. A short explicit range (one day, or a few) is honoured as-is;
+      // anything older is handled by the background reconciliation.
+      const from = requestedFrom && requestedFrom >= minFrom && requestedFrom <= to ? requestedFrom : to;
+      const busy = !!manualSyncPromise;
+      syncNowManual(from, to, from).catch(() => {});
+      return sendGzip(req, res, 200, {
+        ok: true, configured: true, busy,
+        message: busy ? 'A sync is already running' : 'Sync started',
+        from, to, days: dayChunks(from, to).length
+      });
     }
 
     if (u.pathname === '/api/orders') {
@@ -900,15 +989,18 @@ http.createServer(async (req, res) => {
         });
       }
 
-      // If cache is stale (>10 min) and not currently syncing, kick off background
-      // sync covering the requested range (or the last 45 days when no explicit
-      // range is given). This ensures older date ranges aren't left stale just
-      // because the 10-minute scheduled refresh only covers the last 14 days.
-      if (Date.now() - STORE.lastSync > SYNC_INTERVAL_MS && !STORE.syncing && CFG.email && CFG.password) {
-        const bgFrom = from || daysAgo(45);
-        const bgItemsFrom = from || daysAgo(7);
+      // If the cache is stale (>10 min) and nothing is currently syncing,
+      // kick off a narrow background refresh. A wide 45-day pull used to
+      // start here on every stale page load and take minutes; today +
+      // yesterday is enough to keep the visible totals moving, and the
+      // 3-hourly reconciliation covers late updates to older orders.
+      const stale = CFG.email && CFG.password && Date.now() - STORE.lastSync > SYNC_INTERVAL_MS;
+      if (stale && !syncBusy()) {
+        // Honour a short explicit range (e.g. the user opened a specific day
+        // that isn't cached yet), but never fan out to the whole selection.
         const bgTo = to || today();
-        syncGrubcenter(bgFrom, bgTo, bgItemsFrom).catch(() => {});
+        const bgFrom = from && from >= daysAgo(2) && from <= bgTo ? from : daysAgo(1);
+        syncGrubcenter(bgFrom, bgTo, bgFrom).catch(() => {});
       }
 
       return sendGzip(req, res, 200, {
@@ -917,7 +1009,8 @@ http.createServer(async (req, res) => {
         orders: filtered,
         opsCount: STORE.liveOpsCount,
         cancelCount: STORE.liveCancelCount,
-        lastSync: STORE.lastSync
+        lastSync: STORE.lastSync,
+        stale: !!stale
       });
     }
 

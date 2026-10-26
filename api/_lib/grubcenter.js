@@ -37,7 +37,9 @@ async function cognito(target, body) {
   const r = await fetch(`https://cognito-idp.${CFG.region}.amazonaws.com/`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-amz-json-1.1', 'X-Amz-Target': `AWSCognitoIdentityProviderService.${target}` },
-    body: JSON.stringify(body)
+    body: JSON.stringify(body),
+    // Never let a stalled auth socket outlive the function.
+    signal: AbortSignal.timeout(20_000)
   });
   const j = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(j.message || j.__type || `Cognito ${r.status}`);
@@ -83,7 +85,11 @@ async function gt(method, base, p, query, body, session, retries = 3) {
       r = await fetch(url, {
         method,
         headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + (CFG.tokenType === 'access' ? session.accessToken : session.idToken) },
-        body: method === 'GET' ? undefined : JSON.stringify(body || {})
+        body: method === 'GET' ? undefined : JSON.stringify(body || {}),
+        // A stalled connection would otherwise sit here until the function
+        // itself is killed, holding the whole sync open. The retry loop
+        // below treats the abort like any other network error.
+        signal: AbortSignal.timeout(45_000)
       });
       text = await r.text();
     } catch (err) {
@@ -379,11 +385,15 @@ async function syncOnce(from, to, itemsFrom) {
   const ordersArray = [...ordersMap.values()];
   await writeOrders(ordersArray);
 
-  // A completely empty sales pull over a multi-day window is a failed pull,
-  // not a legitimately empty range -- don't mark the cache fresh, so the
-  // next page load retries immediately instead of waiting 10 minutes.
-  const noSalesRows = rawSales.length === 0;
-  if (noSalesRows) console.warn(`[sync] order-details returned 0 rows for ${f}..${t}; leaving lastSync untouched so the next request retries`);
+  // A pull where EVERY requested day failed is a broken pull, not a
+  // legitimately empty range -- don't mark the cache fresh, so the next
+  // request retries immediately instead of waiting 10 minutes. An empty pull
+  // whose days all succeeded (e.g. "today" just after midnight) is a real
+  // result and must advance lastSync, otherwise the Sync Now button can
+  // never detect completion.
+  const rangeDays = dayChunks(f, t).length;
+  const allDaysFailed = rawSales.length === 0 && (rawSales.failedDays || []).length === rangeDays;
+  if (allDaysFailed) console.warn(`[sync] order-details failed for every day in ${f}..${t}; leaving lastSync untouched so the next request retries`);
 
   // Line items: [orderItemsFrom, t] (not the wider [f, t]) is re-fetched in
   // full each sync, so it's the authoritative set for every day in THAT
@@ -404,7 +414,7 @@ async function syncOnce(from, to, itemsFrom) {
   await writeOrderItems(orderItemsArray);
 
   await writeMeta({
-    lastSync: noSalesRows ? (meta.lastSync || 0) : Date.now(),
+    lastSync: allDaysFailed ? (meta.lastSync || 0) : Date.now(),
     session,
     liveOpsCount: rawOps.length,
     liveCancelCount: rawCancels.length

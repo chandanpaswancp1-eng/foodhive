@@ -20,25 +20,22 @@ module.exports = async (req, res) => {
   // Cache is stale: kick off a sync in the background without delaying this
   // response. When the client didn't ask for a specific range (the common
   // case -- the initial page load fetches with no from/to), default this
-  // background refresh to a narrow recent window rather than syncOnce()'s
-  // own 45-day default: a full resync takes minutes, so on-demand triggers
-  // firing that same slow full resync on every stale page load left
-  // "today"'s totals visibly lagging GrubCENTER's live numbers between
-  // syncs (and routinely blew past this function's execution limit, which
-  // meant the sync never completed at all). Settled older orders rarely
-  // change -- the daily cron (api/sync-cron.js) and the explicit "Sync Now"
-  // button still cover wider historical refreshes.
+  // background refresh to today + yesterday. A 45-day resync takes minutes
+  // and a 7-day one still ran ~3+ minutes locally, so the old wider defaults
+  // routinely blew past this function's execution limit and the sync never
+  // completed at all. Settled older orders rarely change -- the daily cron
+  // (api/sync-cron.js) and the explicit "Sync Now" button cover the rest.
   //
-  // Orders/ops/cancellations get a 7-day window; order-items gets 3. Both
-  // are sized to finish comfortably inside the function's maxDuration even
-  // after the pagination fix (which now issues ~2 requests per day instead
-  // of 1, because GrubCENTER under-reports page sizes). When the client
-  // passed an explicit from, honor that exact range for both, unchanged.
-  if (configured() && Date.now() - meta.lastSync > SYNC_INTERVAL_MS) {
-    const bgFrom = from || dubaiDateKey(Date.now() - 7 * 864e5);
-    const bgItemsFrom = from || dubaiDateKey(Date.now() - 3 * 864e5);
+  // Order-items uses the same narrow window: it has far more rows per day
+  // than orders and was the main reason a wider pull timed out.
+  const stale = configured() && Date.now() - (meta.lastSync || 0) > SYNC_INTERVAL_MS;
+  if (stale) {
     const bgTo = to || dubaiDateKey(Date.now());
-    waitUntil(syncOnce(bgFrom, bgTo, bgItemsFrom).catch(() => {}));
+    const earliest = dubaiDateKey(Date.now() - 2 * 864e5);
+    // Honour a short explicit range (a specific day the client opened), but
+    // never fan out to a wide selection.
+    const bgFrom = from && from >= earliest && from <= bgTo ? from : dubaiDateKey(Date.now() - 864e5);
+    waitUntil(syncOnce(bgFrom, bgTo, bgFrom).catch(() => {}));
   }
 
   res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
@@ -48,6 +45,10 @@ module.exports = async (req, res) => {
     orders: filtered,
     opsCount: meta.liveOpsCount || 0,
     cancelCount: meta.liveCancelCount || 0,
-    lastSync: meta.lastSync
+    lastSync: meta.lastSync,
+    // The response still carries the pre-sync cache; the client uses this
+    // flag to poll /api/status and re-fetch automatically once the
+    // background sync finishes, instead of requiring a second manual reload.
+    stale
   });
 };

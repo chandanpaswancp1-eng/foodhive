@@ -588,7 +588,15 @@ function getPeriodStats(page) {
 }
 
 function getDefaultPeriod() {
-  return fullRange();
+  // Open on the current day, not the whole cached history. "latestDate" is
+  // the newest day that actually has orders (which is today once the sync
+  // has landed) -- anchoring to it rather than the wall clock means an
+  // early-morning load shows yesterday's closing numbers instead of a blank
+  // page, and it stays in lockstep with the Today pill. "All" still shows
+  // the full history on demand.
+  const st = getPeriodStats();
+  if (!st) return fullRange();
+  return [st.latestDate, st.latestDate];
 }
 
 // ---------------- Brand/Channel multi-select filter ----------------
@@ -676,7 +684,9 @@ function buildFilters() {
       const stats = getPeriodStats();
       const isYesterday = stats && S.f.from === stats.yesterdayKey && S.f.to === stats.yesterdayKey;
       const isToday = stats && S.f.from === stats.latestDate && S.f.to === stats.latestDate;
-      const isWeek = stats && S.f.from === stats.weekStart && S.f.to === stats.latestDate;
+      // On a Monday "today" and "this week" are the same one-day range --
+      // don't light up both pills.
+      const isWeek = stats && !isToday && S.f.from === stats.weekStart && S.f.to === stats.latestDate;
       const isMonth = stats && S.f.from === stats.monthStart && S.f.to === stats.monthEnd;
       const isAll = stats && S.f.from === stats.minDate && S.f.to === stats.latestDate;
 
@@ -758,11 +768,12 @@ function initDateSlider() {
   function syncPillButtons() {
     const stats = getPeriodStats();
     if (!stats) return;
+    const isToday = S.f.from === stats.latestDate && S.f.to === stats.latestDate;
     $$('.pp-btn').forEach(btn => {
       const p = btn.dataset.p;
       const on = (p === 'yesterday' && S.f.from === stats.yesterdayKey && S.f.to === stats.yesterdayKey) ||
-                 (p === 'today' && S.f.from === stats.latestDate && S.f.to === stats.latestDate) ||
-                 (p === 'week' && S.f.from === stats.weekStart && S.f.to === stats.latestDate) ||
+                 (p === 'today' && isToday) ||
+                 (p === 'week' && !isToday && S.f.from === stats.weekStart && S.f.to === stats.latestDate) ||
                  (p === 'month' && S.f.from === stats.monthStart && S.f.to === stats.monthEnd) ||
                  (p === 'all' && S.f.from === stats.minDate && S.f.to === stats.latestDate);
       btn.classList.toggle('on', !!on);
@@ -3491,7 +3502,7 @@ $('#btnPrev').onclick = () => {
 };
 
 // ---------------- data loading ----------------
-function setData(orders, items, lineItems, source, label) {
+function setData(orders, items, lineItems, source, label, opts = {}) {
   if (orders) S.orders = orders;
   if (items) S.items = items;
   if (lineItems) S.lineItems = lineItems;
@@ -3502,9 +3513,17 @@ function setData(orders, items, lineItems, source, label) {
     badge.className = 'src-badge ' + (source === 'live' ? 'live' : source === 'error' ? 'err' : '');
   }
   S.loadedRange = fullRange();
-  S.selBrands.clear(); S.selLocs.clear();
-  resetFilters();
-  initRanges();
+  // A background refresh only adds/updates recent orders. Resetting filters
+  // here (as a full data load must) would silently wipe the brand, location,
+  // channel and prep-stage selections the user is looking at every couple
+  // of minutes, so only reset them when the caller explicitly asks for a
+  // fresh dataset. buildFilters() is still safe to rebuild -- it re-reads
+  // the preserved S.f/S.selBrands/S.selLocs values.
+  if (!opts.preserveFilters) {
+    S.selBrands.clear(); S.selLocs.clear();
+    resetFilters();
+    initRanges();
+  }
   buildFilters();
   buildToggles();
   render();
@@ -3873,45 +3892,74 @@ async function syncNow(full = false) {
   if (!btn) return;
   btn.disabled = true; btn.textContent = full ? '⏳ Full re-sync…' : '⏳ Syncing…';
   if (msg) { msg.textContent = ''; msg.className = 'sync-msg'; }
+  syncPolling = true;
+  let ticker = null;
   const done = (text, cls) => {
+    if (ticker) { clearInterval(ticker); ticker = null; }
     if (msg) { msg.textContent = text; msg.className = 'sync-msg' + (cls ? ' ' + cls : ''); }
     btn.disabled = false; btn.textContent = '🔄 Sync Now';
     syncPolling = false;
   };
   try {
     const before = await fetch('/api/status').then(r => r.json()).then(j => j.lastSync || 0).catch(() => 0);
-    const range = (S.f.from && S.f.to) ? `?from=${S.f.from}&to=${S.f.to}` : '';
-    const fullParam = full ? '&full=1' : '';
-    const res = await fetch('/api/refresh' + range + fullParam).then(r => r.json());
+
+    // The server caps an on-demand pull at 3 days (today only when no range
+    // is given). Send the visible range only when it is that short; wider
+    // views (Week/Month/All) fall back to the server's "today" default
+    // instead of asking for a minutes-long history re-pull.
+    let range = '';
+    if (!full && S.f.from && S.f.to) {
+      const spanDays = Math.round((new Date(S.f.to + 'T00:00:00Z') - new Date(S.f.from + 'T00:00:00Z')) / 864e5) + 1;
+      if (spanDays > 0 && spanDays <= 3) range = `?from=${S.f.from}&to=${S.f.to}`;
+    }
+    const qs = full ? '?full=1' : range;
+    const res = await fetch('/api/refresh' + qs).then(r => r.json());
     if (res.configured === false) { done(res.message || 'GrubCENTER not configured on this server', 'err'); return; }
-    syncPolling = true;
-    const deadline = Date.now() + 90000;
-    (async function poll() {
-      if (Date.now() > deadline) { done('Still syncing in the background — check back shortly'); return; }
-      const st = await fetch('/api/status').then(r => r.json()).catch(() => null);
-      if (st) {
-        // Wait for any in-flight sync to finish
-        if (st.syncing) { setTimeout(poll, 2500); return; }
-        if (st.lastSync > before) {
-          const [ordRes, availRes, oiRes] = await Promise.all([fetch('/api/orders'), fetch('/api/availability'), fetch('/api/order-items')]);
-          const ordData = await ordRes.json();
-          let items = S.items;
-          try { const itJson = await availRes.json(); if (itJson.items) items = itJson.items; } catch (_) {}
-          let lineItems = S.lineItems;
-          try { const oiJson = await oiRes.json(); if (oiJson.items) lineItems = oiJson.items; } catch (_) {}
-          setData(ordData.orders, items, lineItems, 'live', `● Live · GrubCENTER (${ordData.orders.length})`);
-          done(`✓ Synced — ${ordData.orders.length} orders`, 'ok');
-          return;
-        }
-        // Sync completed but no new data
-        done('✓ Sync complete — no new orders', 'ok');
-        return;
-      }
-      setTimeout(poll, 2500);
-    })();
+
+    const startedAt = Date.now();
+    const label = res.busy ? 'Waiting for the sync already in progress' : 'Fetching latest orders from GrubCENTER';
+    const paint = () => { if (msg) msg.textContent = `${label}… ${Math.round((Date.now() - startedAt) / 1000)}s`; };
+    paint();
+    ticker = setInterval(paint, 1000);
+
+    // The sync runs after the HTTP response is sent, so the only reliable
+    // completion signal is lastSync advancing past the value recorded before
+    // triggering. A 3-day pull finishes in ~20-60s; the old 120s deadline
+    // was shorter than the 14-day pull it used to trigger, which is why the
+    // button reported "still running" even when it was working.
+    const ok = await pollForSync(before, { timeoutMs: 5 * 60 * 1000, intervalMs: 3000, allowHidden: true });
+    if (ok) { done(`✓ ${syncedSummary(res)}`, 'ok'); return; }
+
+    const st = await fetch('/api/status').then(r => r.json()).catch(() => null);
+    if (st && st.lastSync > before) {
+      await fetchOrdersAndRender({ force: true });
+      done(`✓ ${syncedSummary(res)}`, 'ok');
+    } else {
+      done('Sync is still running in the background — the dashboard will update automatically', '');
+    }
   } catch (e) {
     done('✗ ' + e.message, 'err');
   }
+}
+
+// "Synced — 195 orders (2026-10-26)" for the window the server actually
+// pulled, instead of the size of the whole cache (which used to read like
+// all 6,700 orders had just arrived today).
+function syncedSummary(res) {
+  const from = (res && res.from) || S.f.from;
+  const to = (res && res.to) || S.f.to;
+  let n;
+  if (from || to) {
+    n = S.orders.filter(o => {
+      if (!o.receivedAt) return false;
+      const d = dkey(o.receivedAt);
+      return (!from || d >= from) && (!to || d <= to);
+    }).length;
+  } else {
+    n = S.orders.length;
+  }
+  const when = from && to ? (from === to ? from : `${from} → ${to}`) : '';
+  return `Synced — ${n} order${n === 1 ? '' : 's'}${when ? ` (${when})` : ''}`;
 }
 // Default sync button (range-limited). Full re-sync is available via the
 // console: window.FoodHive.S or by calling syncNow(true).
@@ -3969,7 +4017,7 @@ async function loadCached() {
     if (!j.orders || !j.orders.length) throw new Error('No export orders found.');
     log(`Loaded ${j.orders.length} orders & ${(j.items || []).length} 86-items.`);
     setData(j.orders, j.items || [], j.orderItems || [], 'exports', `● FoodHive Exports (${j.orders.length})`);
-    setDates(...fullRange());
+    setDates(...getDefaultPeriod());
     render();
     $('#modal').hidden = true;
     return true;
@@ -4034,29 +4082,95 @@ function loadDemo() {
   setDates(...fullRange()); render();
 }
 
+// ---------------- live data refresh ----------------
+// lastSync of the dataset currently in S.orders. Used to tell a real update
+// from a no-op poll, and as the completion signal for background syncs.
+let lastOrdersSync = 0;
+let backgroundWaitActive = false;
+
+async function fetchOrdersAndRender(opts = {}) {
+  const { initial = false, force = false } = opts;
+  const [ordRes, availRes, oiRes] = await Promise.all([
+    fetch('/api/orders'),
+    fetch('/api/availability'),
+    fetch('/api/order-items')
+  ]);
+  if (!ordRes.ok) throw new Error('orders HTTP ' + ordRes.status);
+  const ordData = await ordRes.json();
+  if (!ordData || !Array.isArray(ordData.orders) || !ordData.orders.length) return null;
+
+  let items = S.items;
+  try { const j = await availRes.json(); if (Array.isArray(j.items) && j.items.length) items = j.items; } catch (_) {}
+  let lineItems = S.lineItems;
+  try { const j = await oiRes.json(); if (Array.isArray(j.items) && j.items.length) lineItems = j.items; } catch (_) {}
+
+  // Detect an "All"/"Today" view BEFORE swapping the dataset, so a refresh
+  // that lands after midnight can move those ranges forward. Without this,
+  // a dashboard left open overnight keeps S.f.to pinned to yesterday and
+  // newly synced orders look like they never arrived.
+  const oldRange = fullRange();
+  const wasAll = !!(oldRange[0] && S.f.from === oldRange[0] && S.f.to === oldRange[1]);
+  const wasToday = !!(oldRange[1] && S.f.from === oldRange[1] && S.f.to === oldRange[1]);
+
+  const changed = force || initial || ordData.lastSync !== lastOrdersSync || ordData.orders.length !== S.orders.length;
+  if (changed) {
+    setData(ordData.orders, items, lineItems, 'live', `● Live · GrubCENTER (${ordData.orders.length})`, { preserveFilters: !initial });
+    if (initial) {
+      setDates(...getDefaultPeriod());
+    } else if (wasAll || wasToday) {
+      const nr = fullRange();
+      if (nr[1] && nr[1] !== oldRange[1]) {
+        setDates(...(wasAll ? nr : [nr[1], nr[1]]));
+        buildFilters();
+        render();
+      }
+    }
+  }
+  if (ordData.lastSync != null) {
+    lastOrdersSync = ordData.lastSync;
+    updateLastSyncIndicator(ordData.lastSync);
+  }
+  return ordData;
+}
+
+// A stale /api/orders response starts a sync in the background (waitUntil on
+// Vercel, fire-and-forget locally) but still returns the OLD cache. Poll
+// /api/status until lastSync moves past what we rendered, then repaint
+// automatically -- otherwise the page keeps showing the previous totals
+// until the user manually reloads. Vercel's /api/status does not expose a
+// `syncing` flag, so lastSync advancing is the only reliable completion
+// signal. Also used by the Sync Now button via syncNow().
+async function pollForSync(since, opts = {}) {
+  const deadline = Date.now() + (opts.timeoutMs || 4 * 60 * 1000);
+  while (Date.now() < deadline) {
+    await new Promise(r => setTimeout(r, opts.intervalMs || 5000));
+    // The background/boot poll can stop when the tab is hidden; a manual
+    // Sync Now must keep waiting even if the user switches tabs.
+    if (!opts.allowHidden && document.visibilityState === 'hidden') return false;
+    const st = await fetch('/api/status').then(r => r.json()).catch(() => null);
+    if (st && st.lastSync > since) {
+      try { await fetchOrdersAndRender({ force: true }); } catch (_) {}
+      return true;
+    }
+  }
+  return false;
+}
+
+async function waitForBackgroundSync(since, opts = {}) {
+  if (backgroundWaitActive) return false;
+  backgroundWaitActive = true;
+  try { return await pollForSync(since, opts); }
+  finally { backgroundWaitActive = false; }
+}
+
 // ---------------- instant parallel boot ----------------
 (async function boot() {
   const initialPage = RENDER[location.hash.slice(1)] ? location.hash.slice(1) : 'sales';
 
   // 1. Immediately fetch pre-warmed FoodHive master orders in parallel (<15ms)
+  let first = null;
   try {
-    const [ordRes, availRes, oiRes] = await Promise.all([
-      fetch('/api/orders'),
-      fetch('/api/availability'),
-      fetch('/api/order-items')
-    ]);
-    if (ordRes.ok) {
-      const ordData = await ordRes.json();
-      let items = [];
-      try { items = (await availRes.json()).items || []; } catch (_) {}
-      let lineItems = [];
-      try { lineItems = (await oiRes.json()).items || []; } catch (_) {}
-      if (ordData && ordData.orders && ordData.orders.length) {
-        setData(ordData.orders, items, lineItems, 'live', `● Live · GrubCENTER (${ordData.orders.length})`);
-        setDates(...getDefaultPeriod());
-        show(initialPage);
-      }
-    }
+    first = await fetchOrdersAndRender({ initial: true });
   } catch (err) {
     console.warn('Fast boot error:', err);
   }
@@ -4064,13 +4178,22 @@ function loadDemo() {
   // Fallback if needed
   if (!S.orders.length) {
     try { await loadCached(); } catch (_) { loadDemo(); }
-    show(initialPage);
   }
+  show(initialPage);
 
   // 2. Accounting KPIs (Zoho Books) — independent of the orders fetch above, non-blocking
-  fetch('/api/accounting').then(r => r.json()).then(z => { S.zoho = z; if (S.page === 'accounting' || S.page === 'ebitda') render(); }).catch(() => {});
+  const refreshAccounting = () => fetch('/api/accounting').then(r => r.json()).then(z => {
+    S.zoho = z;
+    if (S.page === 'accounting' || S.page === 'ebitda') render();
+  }).catch(() => {});
+  refreshAccounting();
+  setInterval(refreshAccounting, 10 * 60 * 1000);
 
-  // 2b. Check live status non-blockingly in the background
+  // 2b. If the cache was stale on load, follow the background sync that the
+  // orders request just kicked off and repaint when it lands.
+  if (first && first.stale && first.lastSync != null) waitForBackgroundSync(first.lastSync);
+
+  // 2c. Check live status non-blockingly in the background
   fetch('/api/status').then(r => r.json()).then(st => {
     if (st && st.connected) {
       const badge = $('#srcBadge');
@@ -4078,31 +4201,21 @@ function loadDemo() {
         badge.textContent = `● Live · GrubCENTER (${S.orders.length})`;
         badge.className = 'src-badge live';
       }
+      if (st.lastSync) updateLastSyncIndicator(st.lastSync);
     }
   }).catch(() => {});
 
-  // 3. Client auto-refresh every 10 minutes from server
+  // 3. Client auto-refresh every 2 minutes. The server only does the real
+  // GrubCENTER pull every 10 minutes, so most polls are cheap and simply
+  // return the current cache; when the cache IS stale the response triggers
+  // a background sync and the follow-up poll above paints its result.
   setInterval(async () => {
+    if (document.visibilityState === 'hidden') return;
     try {
-      const [ordRes, availRes, oiRes] = await Promise.all([
-        fetch('/api/orders'),
-        fetch('/api/availability'),
-        fetch('/api/order-items')
-      ]);
-      if (ordRes.ok) {
-        const ordData = await ordRes.json();
-        let items = S.items;
-        try { const itJson = await availRes.json(); if (itJson.items) items = itJson.items; } catch (_) {}
-        let lineItems = S.lineItems;
-        try { const oiJson = await oiRes.json(); if (oiJson.items) lineItems = oiJson.items; } catch (_) {}
-        if (ordData && ordData.orders && ordData.orders.length) {
-          setData(ordData.orders, items, lineItems, 'live', `● Live · GrubCENTER (${ordData.orders.length})`);
-          render();
-        }
-      }
+      const ordData = await fetchOrdersAndRender();
+      if (ordData && ordData.stale && ordData.lastSync != null) waitForBackgroundSync(ordData.lastSync);
     } catch (_) {}
-    fetch('/api/accounting').then(r => r.json()).then(z => { S.zoho = z; if (S.page === 'accounting' || S.page === 'ebitda') render(); }).catch(() => {});
-  }, 10 * 60 * 1000);
+  }, 2 * 60 * 1000);
 
   window.S = S;
   window.show = show;
@@ -4120,7 +4233,8 @@ function loadDemo() {
 // and self-corrects every sync, but only if the user can see it's there.
 function updateLastSyncIndicator(lastSync) {
   const el = $('#lastSyncAgo');
-  if (!el || !lastSync) return;
+  if (!el) return;
+  if (!lastSync) { el.textContent = 'Not synced yet'; el.classList.add('stale'); return; }
   const mins = Math.max(0, Math.round((Date.now() - lastSync) / 60000));
   el.textContent = mins < 1 ? 'Synced just now' : `Synced ${mins}m ago`;
   el.classList.toggle('stale', mins >= 10);
