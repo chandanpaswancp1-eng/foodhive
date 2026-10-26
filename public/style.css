@@ -603,6 +603,7 @@ nav a.on { background: #fff; border-color: var(--k); }
 .cmp-row.active { background: #FFFDF2; }
 .cmp-row.active td:first-child { color: #b38600; }
 .cmp-row.active td:first-child::before { content: "● "; }
+.cmp-empty { padding: 10px; color: #a35b00; background: #FFF8E1; font-style: italic; font-weight: 600; }
 .delta { font-weight: 700; white-space: nowrap; }
 .delta.up { color: #2e7d32; }
 .delta.down { color: #c62828; }

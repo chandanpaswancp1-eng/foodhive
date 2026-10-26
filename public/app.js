@@ -2683,10 +2683,42 @@ function deltaHtml(pct) {
 const cmpMetricKey = () => (S.ui.cmpMetric === 'orders' ? 'orders' : 'sales');
 const cmpFmt = () => (S.ui.cmpMetric === 'orders' ? cnt : money);
 
+// base('comparison', true) minus one or more dimensions. A table's own row
+// axis must never be narrowed by the selection that its own rows produce:
+// clicking a channel row used to set S.f.channel, which base() then applied to
+// the same table, collapsing an 8-row comparison down to the single row that
+// was just clicked. Each row's figures are already scoped to its own channel/
+// brand, so keeping the full axis changes no numbers -- it only keeps the
+// comparison readable. Every other active filter still applies.
+function cmpBaseExcept(...dims) {
+  const f = S.f;
+  const skip = new Set(dims);
+  return S.orders.filter(o => {
+    if (!eq(o.brand, skip.has('brand') ? 'All' : f.brand)) return false;
+    if (!eq(o.location, f.location)) return false;
+    if (!eq(o.cuisine, f.cuisine)) return false;
+    if (!eq(o.channel, skip.has('channel') ? 'All' : f.channel)) return false;
+    return true;
+  });
+}
+
+// The page's date windows (Today / Yesterday / This Week / Last Week) come
+// from the structural filters only -- never from channel or brand, which are
+// the axes the widgets drill into. Deriving them per-widget let a drill-through
+// silently redefine "today", so the tables and the hourly chart could end up
+// comparing different pairs of days after a row click.
+function cmpWindows() {
+  return comparisonWindows(cmpBaseExcept('channel', 'brand').filter(o => !o.cancelled));
+}
+
+// A row is "active" when it matches S.f[dim], which may be 'All', a single
+// value set by a row click, or an array set by the multi-select filter.
+const cmpRowActive = (dim, k) => (Array.isArray(S.f[dim]) ? S.f[dim].includes(k) : S.f[dim] === k);
+
 function channelDeltaRows() {
-  const O = base('comparison', true).filter(o => !o.cancelled);
-  const w = comparisonWindows(O);
+  const w = cmpWindows();
   if (!w) return [];
+  const O = cmpBaseExcept('channel').filter(o => !o.cancelled);
   const mk = cmpMetricKey();
   const inWin = (from, to) => O.filter(o => { const k = dkey(o.receivedAt); return k >= from && k <= to; });
   const byKey = rows => new Map(rows.map(r => [r.k, r[mk]]));
@@ -2694,7 +2726,12 @@ function channelDeltaRows() {
   const ydayM = byKey(salesAgg(inWin(w.yesterdayKey, w.yesterdayKey), o => o.channel));
   const thisWkM = byKey(salesAgg(inWin(w.thisWeekStart, w.latestDate), o => o.channel));
   const lastWkM = byKey(salesAgg(inWin(w.lastWeekStart, w.lastWeekEnd), o => o.channel));
-  const channels = uniq(O.map(o => o.channel)).filter(Boolean).sort();
+  // The channel list comes from the structural view, not from O: with a brand
+  // selected, deriving it from O dropped every other channel, so examining one
+  // brand collapsed this comparison table too (Bagel Bloom sells on a single
+  // channel, so the table became one row). The row's own figures still come
+  // from O, so a channel that doesn't carry the brand correctly reads 0.
+  const channels = uniq(cmpBaseExcept('channel', 'brand').map(o => o.channel)).filter(Boolean).sort();
   return channels.map(ch => {
     const todayNet = todayM.get(ch) || 0, ydayNet = ydayM.get(ch) || 0;
     const twNet = thisWkM.get(ch) || 0, lwNet = lastWkM.get(ch) || 0;
@@ -2706,9 +2743,9 @@ function channelDeltaRows() {
 }
 
 function brandDeltaRows() {
-  const O = base('comparison', true).filter(o => !o.cancelled);
-  const w = comparisonWindows(O);
+  const w = cmpWindows();
   if (!w) return [];
+  const O = cmpBaseExcept('brand').filter(o => !o.cancelled);
   const mk = cmpMetricKey();
   const prevDayM = new Map(salesAgg(O.filter(o => dkey(o.receivedAt) === w.yesterdayKey), o => o.brand).map(r => [r.k, r[mk]]));
   const sdlwM = new Map(salesAgg(O.filter(o => dkey(o.receivedAt) === w.yesterdaySameDayLastWeekKey), o => o.brand).map(r => [r.k, r[mk]]));
@@ -2733,15 +2770,22 @@ function dateCompareKeyFn() {
   return o => o.channel;
 }
 function dateCompareRows(dateA, dateB) {
-  const O = base('comparison', true).filter(o => !o.cancelled);
-  const mk = cmpMetricKey();
   const dim = S.ui.cmpDateDim || 'channel';
+  // Same rule as the two tables above: the dimension being tabulated keeps
+  // every key so the date-to-date delta stays readable after a row click,
+  // while any other active filter still applies.
+  const O = (dim === 'channel' || dim === 'brand' ? cmpBaseExcept(dim) : cmpBaseExcept()).filter(o => !o.cancelled);
+  const mk = cmpMetricKey();
   const keyFn = dateCompareKeyFn();
   const aM = new Map(salesAgg(O.filter(o => dkey(o.receivedAt) === dateA), keyFn).map(r => [r.k, r[mk]]));
   const bM = new Map(salesAgg(O.filter(o => dkey(o.receivedAt) === dateB), keyFn).map(r => [r.k, r[mk]]));
   const keys = dim === 'hour'
     ? Array.from({ length: 24 }, (_, h) => pad(h) + ':00')
-    : uniq(O.map(keyFn)).filter(Boolean).sort();
+    // Channel is a short, fixed list, so tabulating it by the structural view
+    // keeps the table's shape stable while a brand is selected (a channel that
+    // doesn't carry that brand reads 0). Brand is a long tail, so it stays
+    // scoped to the active channel rather than listing hundreds of empty rows.
+    : uniq((dim === 'channel' ? cmpBaseExcept('channel', 'brand') : O).map(keyFn)).filter(Boolean).sort();
   return keys.map(k => {
     const a = aM.get(k) || 0, b = bM.get(k) || 0;
     return { k, a, b, pct: deltaPct(b, a) };
@@ -2758,7 +2802,7 @@ function renderDateCompareTable() {
   const sdlwBtn = $('#cmpDateSdlwBtn');
   if (sdlwBtn) {
     sdlwBtn.onclick = () => {
-      const w = comparisonWindows(base('comparison', true).filter(o => !o.cancelled));
+      const w = cmpWindows();
       if (!w) return;
       S.ui.cmpDateA = w.sameDayLastWeekKey;
       S.ui.cmpDateB = w.latestDate;
@@ -2796,6 +2840,16 @@ function renderDateCompareTable() {
   const sortState = S.ui.cmpDateSort;
   const rows = sortRows(dateCompareRows(dateA, dateB), sortState, { k: r => r.k, a: r => r.a, b: r => r.b, pct: r => r.pct });
   const totA = sum(rows, r => r.a), totB = sum(rows, r => r.b);
+  // A date outside the cache produced a silent column of zeros and a "–"
+  // delta, which reads like "that day sold nothing" rather than "there is no
+  // data for it". Say so explicitly, and name the range that does exist.
+  const stats = getPeriodStats();
+  const emptyDates = [];
+  if (!totA) emptyDates.push(dateA);
+  if (!totB) emptyDates.push(dateB);
+  const emptyNote = emptyDates.length
+    ? `<tr><td colspan="4" class="cmp-empty">No orders on ${emptyDates.map(esc).join(' or ')}${stats ? ` — this dashboard only has orders for ${esc(stats.minDate)} to ${esc(stats.latestDate)}` : ''}.</td></tr>`
+    : '';
   el.innerHTML = `<thead><tr>
       <th data-k="k">${dimLabel}${sortArrow(sortState, 'k')}</th>
       <th data-k="a">${esc(dateA)}${sortArrow(sortState, 'a')}</th>
@@ -2805,7 +2859,8 @@ function renderDateCompareTable() {
       <tr style="background:#1d1d1d;color:#FCD258;font-weight:700">
         <td>TOTAL</td><td class="num">${fmt(totA)}</td><td class="num">${fmt(totB)}</td><td class="num">${deltaHtml(deltaPct(totB, totA))}</td>
       </tr>
-      ${rows.map(r => `<tr class="${clickable ? 'cmp-row' : ''}${clickable && S.f[dim] === r.k ? ' active' : ''}"${clickable ? ` data-channel="${esc(r.k)}"` : ''}>
+      ${emptyNote}
+      ${rows.map(r => `<tr class="${clickable ? 'cmp-row' : ''}${clickable && cmpRowActive(dim, r.k) ? ' active' : ''}"${clickable ? ` data-channel="${esc(r.k)}"` : ''}>
         <td>${esc(r.k)}</td>
         <td class="num">${fmt(r.a)}</td>
         <td class="num">${fmt(r.b)}</td>
@@ -2820,16 +2875,16 @@ function renderDateCompareTable() {
   if (!clickable) return;
   $$('tr.cmp-row', el).forEach(tr => tr.onclick = () => {
     const v = tr.dataset.channel;
-    S.f[dim] = (S.f[dim] === v ? 'All' : v);
+    S.f[dim] = cmpRowActive(dim, v) ? 'All' : v;
     syncFilterUI();
     render();
   });
 }
 
 function hourlyOverlayRows() {
-  const O = base('comparison', true).filter(o => !o.cancelled);
-  const w = comparisonWindows(O);
+  const w = cmpWindows();
   if (!w) return null;
+  const O = base('comparison', true).filter(o => !o.cancelled);
   const today = O.filter(o => dkey(o.receivedAt) === w.latestDate);
   const sdlw = O.filter(o => dkey(o.receivedAt) === w.sameDayLastWeekKey);
   const hoursPresent = uniq([...today, ...sdlw].map(o => dubaiHour(o.receivedAt)));
@@ -2838,10 +2893,19 @@ function hourlyOverlayRows() {
   const hours = Array.from({ length: hi - lo + 1 }, (_, i) => lo + i);
   const isOrders = S.ui.cmpMetric === 'orders';
   const byHour = (arr, h) => { const inHour = arr.filter(o => dubaiHour(o.receivedAt) === h); return isOrders ? inHour.length : sum(inHour, o => o.netSales); };
+  // Hours that haven't happened yet on the latest day have no orders, but
+  // plotting them as 0 drew a cliff at the end of today's line that read as a
+  // collapse in sales; last week's line carries on to midnight. Emit null
+  // instead so Chart.js stops the line rather than claiming zero revenue. Only
+  // when the latest day IS the current Dubai day -- on an older day the zeros
+  // are real.
+  const nowKey = dkey(Date.now());
+  const futureCut = w.latestDate === nowKey ? dubaiHour(Date.now()) : null;
+  const todayAt = h => (futureCut != null && h > futureCut ? null : byHour(today, h));
   return {
     labels: hours.map(h => pad(h) + ':00'),
     series: [
-      { name: `Today (${w.latestDate})`, color: Y, data: hours.map(h => byHour(today, h)) },
+      { name: `Today (${w.latestDate})`, color: Y, data: hours.map(todayAt) },
       { name: `Same Day Last Week (${w.sameDayLastWeekKey})`, color: BLUE, data: hours.map(h => byHour(sdlw, h)) }
     ]
   };
@@ -2877,7 +2941,7 @@ function renderChannelDeltaTable() {
       <th data-k="lwNet">Last Week${sortArrow(sortState, 'lwNet')}</th>
       <th data-k="twNet">This Week${sortArrow(sortState, 'twNet')}</th>
       <th data-k="wowPct">Week-over-Week${sortArrow(sortState, 'wowPct')}</th>
-    </tr></thead><tbody>${rows.map(r => `<tr class="cmp-row${S.f.channel === r.channel ? ' active' : ''}" data-channel="${esc(r.channel)}">
+    </tr></thead><tbody>${rows.map(r => `<tr class="cmp-row${cmpRowActive('channel', r.channel) ? ' active' : ''}" data-channel="${esc(r.channel)}">
       <td>${esc(r.channel)}</td>
       <td class="num">${fmt(r.ydayNet)}</td>
       <td class="num">${fmt(r.todayNet)}</td>
@@ -2893,7 +2957,7 @@ function renderChannelDeltaTable() {
   });
   $$('tr.cmp-row', el).forEach(tr => tr.onclick = () => {
     const ch = tr.dataset.channel;
-    S.f.channel = (S.f.channel === ch ? 'All' : ch);
+    S.f.channel = cmpRowActive('channel', ch) ? 'All' : ch;
     syncFilterUI();
     render();
   });
@@ -2913,7 +2977,7 @@ function renderBrandDeltaTable() {
       <th data-k="prevDayNet">Previous Day ${metricLabel}${sortArrow(sortState, 'prevDayNet')}</th>
       <th data-k="sdlwNet">Same Day Last Week ${metricLabel}${sortArrow(sortState, 'sdlwNet')}</th>
       <th data-k="pct">%Δ${sortArrow(sortState, 'pct')}</th>
-    </tr></thead><tbody>${rows.map(r => `<tr class="cmp-row${S.f.brand === r.brand ? ' active' : ''}" data-brand="${esc(r.brand)}">
+    </tr></thead><tbody>${rows.map(r => `<tr class="cmp-row${cmpRowActive('brand', r.brand) ? ' active' : ''}" data-brand="${esc(r.brand)}">
       <td>${esc(r.brand)}</td>
       <td class="num">${fmt(r.prevDayNet)}</td>
       <td class="num">${fmt(r.sdlwNet)}</td>
@@ -2926,7 +2990,7 @@ function renderBrandDeltaTable() {
   });
   $$('tr.cmp-row', el).forEach(tr => tr.onclick = () => {
     const b = tr.dataset.brand;
-    S.f.brand = (S.f.brand === b ? 'All' : b);
+    S.f.brand = cmpRowActive('brand', b) ? 'All' : b;
     syncFilterUI();
     render();
   });
@@ -2945,8 +3009,12 @@ function renderComparisonActiveFilters() {
   const el = $('#cmpActiveFilters');
   if (!el) return;
   const chips = [];
-  if (S.f.channel !== 'All') chips.push({ label: `Channel: ${S.f.channel}`, clear: () => { S.f.channel = 'All'; } });
-  if (S.f.brand !== 'All') chips.push({ label: `Brand: ${S.f.brand}`, clear: () => { S.f.brand = 'All'; } });
+  // The multi-select filter stores an array; show it as a list rather than
+  // letting String(array) render "Deliveroo,Talabat".
+  const fmtFilterVal = v => (Array.isArray(v) ? v.join(', ') : v);
+  const isFiltered = v => v !== 'All' && !(Array.isArray(v) && v.length === 0);
+  if (isFiltered(S.f.channel)) chips.push({ label: `Channel: ${fmtFilterVal(S.f.channel)}`, clear: () => { S.f.channel = 'All'; } });
+  if (isFiltered(S.f.brand)) chips.push({ label: `Brand: ${fmtFilterVal(S.f.brand)}`, clear: () => { S.f.brand = 'All'; } });
   if (!chips.length) { el.innerHTML = ''; return; }
   el.innerHTML = chips.map((c, i) => `<span class="cmp-chip" data-i="${i}">${esc(c.label)} <b>✕</b></span>`).join('');
   $$('.cmp-chip', el).forEach((chip, i) => chip.onclick = () => {
@@ -2958,23 +3026,34 @@ function renderComparisonActiveFilters() {
 
 function renderComparison() {
   renderComparisonActiveFilters();
-  const chanRows = channelDeltaRows();
+  // channelDeltaRows() deliberately returns every channel so its own table
+  // stays a comparison after a row click; the KPI totals still have to follow
+  // the selected channel, so narrow the rows here rather than in the table.
+  const chanRows = channelDeltaRows().filter(r => eq(r.channel, S.f.channel));
   const todayTotal = sum(chanRows, r => r.todayNet), ydayTotal = sum(chanRows, r => r.ydayNet);
   const twTotal = sum(chanRows, r => r.twNet), lwTotal = sum(chanRows, r => r.lwNet);
   const brandRows = brandDeltaRows();
-  const ranked = brandRows.filter(r => r.pct != null).sort((a, b) => b.pct - a.pct);
-  const topGainer = ranked[0], topDecliner = ranked[ranked.length - 1];
+  // A row only counts as "gaining" if it actually rose and as "declining" only
+  // if it actually fell. Taking max() and min() of one list labelled the
+  // smallest riser as the "Top Declining Brand" on days when nothing declined,
+  // and -- once a brand filter left a single row -- showed the same brand in
+  // both cards, one ▲ and one ▼.
+  const ranked = brandRows.filter(r => r.pct != null);
+  const topGainer = ranked.filter(r => r.pct > 0).sort((a, b) => b.pct - a.pct)[0] || null;
+  const topDecliner = ranked.filter(r => r.pct < 0).sort((a, b) => a.pct - b.pct)[0] || null;
+  const chanLabel = Array.isArray(S.f.channel) ? S.f.channel.join(', ') : S.f.channel;
+  const scopeDesc = (S.f.channel === 'All' || chanLabel === '') ? 'across all channels' : `for ${chanLabel}`;
 
   const fmt = cmpFmt();
   const metricLabel = S.ui.cmpMetric === 'orders' ? 'Orders' : 'Net Sales';
   const metricDesc = S.ui.cmpMetric === 'orders' ? 'order count' : 'net sales';
   kpis('kpi-comparison', [
-    [`${metricLabel} Today`, fmt(todayTotal), false, null, false, `Total ${metricDesc} across all channels for the latest day in the data.`],
-    [`${metricLabel} Yesterday`, fmt(ydayTotal), false, null, false, `Total ${metricDesc} the day before.`],
-    ['Day-over-Day', deltaHtml(deltaPct(todayTotal, ydayTotal)), false, null, false, `Today vs Yesterday, blended ${metricDesc} across all channels.`],
-    ['Week-over-Week', deltaHtml(deltaPct(twTotal, lwTotal)), false, null, false, `This week-to-date vs the same partial span last week, blended ${metricDesc} across all channels.`],
-    ['Top Gaining Brand', topGainer ? esc(topGainer.brand) : '–', true, topGainer ? () => { S.f.brand = (S.f.brand === topGainer.brand ? 'All' : topGainer.brand); syncFilterUI(); render(); } : null, !!topGainer && S.f.brand === topGainer.brand, topGainer ? `${topGainer.brand}: ${deltaHtml(topGainer.pct).replace(/<[^>]+>/g, '')} vs same day last week (${metricDesc}). Click to filter the page to this brand (click again to clear).` : ''],
-    ['Top Declining Brand', topDecliner ? esc(topDecliner.brand) : '–', true, topDecliner ? () => { S.f.brand = (S.f.brand === topDecliner.brand ? 'All' : topDecliner.brand); syncFilterUI(); render(); } : null, !!topDecliner && S.f.brand === topDecliner.brand, topDecliner ? `${topDecliner.brand}: ${deltaHtml(topDecliner.pct).replace(/<[^>]+>/g, '')} vs same day last week (${metricDesc}). Click to filter the page to this brand (click again to clear).` : '']
+    [`${metricLabel} Today`, fmt(todayTotal), false, null, false, `Total ${metricDesc} ${scopeDesc} for the latest day in the data.`],
+    [`${metricLabel} Yesterday`, fmt(ydayTotal), false, null, false, `Total ${metricDesc} ${scopeDesc} the day before.`],
+    ['Day-over-Day', deltaHtml(deltaPct(todayTotal, ydayTotal)), false, null, false, `Today vs Yesterday, blended ${metricDesc} ${scopeDesc}.`],
+    ['Week-over-Week', deltaHtml(deltaPct(twTotal, lwTotal)), false, null, false, `This week-to-date vs the same partial span last week, blended ${metricDesc} ${scopeDesc}.`],
+    ['Top Gaining Brand', topGainer ? esc(topGainer.brand) : '–', true, topGainer ? () => { S.f.brand = cmpRowActive('brand', topGainer.brand) ? 'All' : topGainer.brand; syncFilterUI(); render(); } : null, !!topGainer && cmpRowActive('brand', topGainer.brand), topGainer ? `${topGainer.brand}: ${deltaHtml(topGainer.pct).replace(/<[^>]+>/g, '')} vs same day last week (${metricDesc}, ${scopeDesc}). Click to filter the page to this brand (click again to clear).` : `No brand was up on the same day last week (${metricDesc}, ${scopeDesc}).`],
+    ['Top Declining Brand', topDecliner ? esc(topDecliner.brand) : '–', true, topDecliner ? () => { S.f.brand = cmpRowActive('brand', topDecliner.brand) ? 'All' : topDecliner.brand; syncFilterUI(); render(); } : null, !!topDecliner && cmpRowActive('brand', topDecliner.brand), topDecliner ? `${topDecliner.brand}: ${deltaHtml(topDecliner.pct).replace(/<[^>]+>/g, '')} vs same day last week (${metricDesc}, ${scopeDesc}). Click to filter the page to this brand (click again to clear).` : `No brand was down on the same day last week (${metricDesc}, ${scopeDesc}).`]
   ]);
 
   renderChannelDeltaTable();
@@ -2993,12 +3072,21 @@ function renderComparison() {
   // user who deliberately blanks a date field doesn't get it silently
   // overwritten back to the default on the next render.
   if (!S.ui.cmpDateInited) {
-    const w = comparisonWindows(base('comparison', true).filter(o => !o.cancelled));
+    const w = cmpWindows();
     if (w) { S.ui.cmpDateA = w.yesterdayKey; S.ui.cmpDateB = w.latestDate; S.ui.cmpDateInited = true; }
   }
+  // Bound the pickers to the cached range so the calendar greys out days this
+  // dashboard has no orders for (the table still explains it for typed dates).
+  const periodStats = getPeriodStats();
   const dA = $('#cmpDateA'), dB = $('#cmpDateB');
-  if (dA) dA.value = S.ui.cmpDateA || '';
-  if (dB) dB.value = S.ui.cmpDateB || '';
+  if (dA) {
+    dA.value = S.ui.cmpDateA || '';
+    if (periodStats) { dA.min = periodStats.minDate; dA.max = periodStats.latestDate; }
+  }
+  if (dB) {
+    dB.value = S.ui.cmpDateB || '';
+    if (periodStats) { dB.min = periodStats.minDate; dB.max = periodStats.latestDate; }
+  }
   renderDateCompareTable();
 }
 
