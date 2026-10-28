@@ -2169,17 +2169,18 @@ function renderDelayed() {
 function commissionChannelAgg() {
   const O = base('commission').filter(o => !o.cancelled);
   const net = sum(O, o => o.netSales);
+  const gross = sum(O, o => o.receiptTotal);
   const commission = sum(O, o => FHCommission.commissionForOrder(o));
   const chanAgg = groupBy(O, o => o.channel).map(g => {
     const cNet = sum(g.rows, o => o.netSales);
     const cComm = sum(g.rows, o => FHCommission.commissionForOrder(o));
     return { k: g.k, netSales: cNet, commission: cComm, orders: g.rows.length, effRate: cNet ? cComm / cNet : 0 };
   });
-  return { net, commission, chanAgg };
+  return { net, gross, commission, chanAgg };
 }
 
 function renderCommission() {
-  const { net, commission, chanAgg } = commissionChannelAgg();
+  const { net, gross, commission, chanAgg } = commissionChannelAgg();
   const topComm = chanAgg.slice().sort((a, b) => b.commission - a.commission)[0];
 
   kpis('kpi-commission', [
@@ -2191,6 +2192,10 @@ function renderCommission() {
     ['Blended Commission %', net ? pc(commission / net, 1) : '0%', false, () => {
       openCommissionDrillModal();
     }, false, 'Total Commission / Net Sales across all channels. Click to view the full per-channel breakdown.', 'drill'],
+
+    ['Commission % of Gross Sales', gross ? pc(commission / gross, 1) : '0%', false, () => {
+      openCommissionDrillModal();
+    }, false, 'Total Commission / Gross Sales (receipt total, VAT-inclusive, before discount). Click to view the full per-channel breakdown.', 'drill'],
 
     ['Highest-Commission Channel', topComm ? esc(topComm.k) : '–', true, () => {
       if (!topComm) return;
