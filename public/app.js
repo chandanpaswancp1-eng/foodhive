@@ -2836,7 +2836,9 @@ function renderDateCompareTable() {
       seg.appendChild(b);
     });
   }
-  const sortState = S.ui.cmpDateSort;
+  // Hours are a time axis, so they always read 00:00 to 23:00. Sorting them by
+  // %Δ scrambled the clock order (the default sort is %Δ descending).
+  const sortState = dim === 'hour' ? { key: 'k', dir: 'asc' } : S.ui.cmpDateSort;
   const rows = sortRows(dateCompareRows(dateA, dateB), sortState, { k: r => r.k, a: r => r.a, b: r => r.b, pct: r => r.pct });
   const totA = sum(rows, r => r.a), totB = sum(rows, r => r.b);
   // A date outside the cache produced a silent column of zeros and a "–"
