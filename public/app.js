@@ -38,6 +38,12 @@ const DUBAI_OFFSET_MS = 4 * 3600 * 1000;
 const dubaiDate = t => new Date(new Date(t).getTime() + DUBAI_OFFSET_MS);
 const dkey = t => { const d = dubaiDate(t); return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`; };
 const dubaiHour = t => dubaiDate(t).getUTCHours();
+// Calendar-day arithmetic on 'YYYY-MM-DD' keys, done in UTC so the result never
+// depends on the viewer's timezone (local-midnight Date math shifted a day back
+// for viewers ahead of Dubai).
+const addDays = (key, n) => { const d = new Date(key + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
+const weekdayOf = key => new Date(key + 'T00:00:00Z').getUTCDay();
+const shortDay = key => new Date(key + 'T00:00:00Z').toLocaleDateString('en-GB', { timeZone: 'UTC', day: 'numeric', month: 'short' });
 const dubaiDOW = t => dubaiDate(t).getUTCDay();
 const money = n => { const s = n < 0 ? '-' : '', a = Math.abs(n); return s + (a >= 1e6 ? (a / 1e6).toFixed(2) + 'M' : a >= 1e3 ? (a / 1e3).toFixed(2) + 'K' : a.toFixed(2)); };
 const cnt = n => n >= 1e6 ? (n / 1e6).toFixed(2) + 'M' : n >= 1e4 ? (n / 1e3).toFixed(1).replace(/\.0$/, '') + 'K' : String(Math.round(n));
@@ -435,18 +441,14 @@ function getPeriodStats(page) {
 
   // Yesterday -- same "one day before the latest full-dataset date" anchor
   // the #btnPrev nav button already uses, so the two never disagree.
-  const yd = new Date(maxDate + 'T00:00:00');
-  yd.setDate(yd.getDate() - 1);
-  const yesterdayKey = dkey(yd);
+  const yesterdayKey = addDays(maxDate, -1);
   const yesterdayOrders = srcOrders.filter(o => !o.cancelled && dkey(o.receivedAt) === yesterdayKey);
   const yesterdayNet = sum(yesterdayOrders, o => o.netSales);
 
   // This Week (from Monday of latestDate)
+  const weekStart = addDays(latestDate, -((weekdayOf(latestDate) + 6) % 7));
+  // Local-date read of day-of-month for the projection below; not used for keys.
   const ld = new Date(latestDate + 'T00:00:00');
-  const dow = (ld.getDay() + 6) % 7;
-  const ws = new Date(ld);
-  ws.setDate(ld.getDate() - dow);
-  const weekStart = dkey(ws);
   const weekOrders = srcOrders.filter(o => !o.cancelled && dkey(o.receivedAt) >= weekStart && dkey(o.receivedAt) <= latestDate);
   const weekNet = sum(weekOrders, o => o.netSales);
 
@@ -2632,36 +2634,31 @@ function comparisonWindows(orders) {
   if (!ts.length) return null;
   const latestDate = dkey(Math.max(...ts));
 
-  const ld = new Date(latestDate + 'T00:00:00');
-  const yd = new Date(ld); yd.setDate(ld.getDate() - 1);
-  const yesterdayKey = dkey(yd);
-
-  const sdlw = new Date(ld); sdlw.setDate(ld.getDate() - 7);
-  const sameDayLastWeekKey = dkey(sdlw); // today's weekday, 7 days ago -- used by the "Today vs Same Day Last Week" hourly overlay
+  const yesterdayKey = addDays(latestDate, -1);
+  const sameDayLastWeekKey = addDays(latestDate, -7); // used by the "Today vs Same Day Last Week" hourly overlay
 
   // Yesterday's weekday, 7 days ago -- NOT the same as sameDayLastWeekKey
-  // above (that's anchored to TODAY, only 6 days before yesterday and on a
-  // different weekday). The Brand table compares Previous Day against this,
-  // so both sides must be the identical weekday, 7 days apart -- otherwise
-  // it silently compares e.g. a Monday to the prior week's Tuesday.
-  const ydlw = new Date(yd); ydlw.setDate(yd.getDate() - 7);
-  const yesterdaySameDayLastWeekKey = dkey(ydlw);
+  // above. The Brand table compares Previous Day against this, so both sides
+  // must be the identical weekday, 7 days apart.
+  const yesterdaySameDayLastWeekKey = addDays(yesterdayKey, -7);
 
   // Monday-anchored week-to-date, same derivation as getPeriodStats' weekStart.
-  const dow = (ld.getDay() + 6) % 7;
-  const ws = new Date(ld); ws.setDate(ld.getDate() - dow);
-  const thisWeekStart = dkey(ws);
+  const thisWeekStart = addDays(latestDate, -((weekdayOf(latestDate) + 6) % 7));
 
   // Last week's SAME partial span (Mon .. same weekday), not the full prior
-  // week -- mirrors getPeriodStats' cmpDay/prevSamePeriodEnd guard so a
-  // week that's only 3 days old isn't compared against a full 7-day prior
-  // week.
-  const lws = new Date(ws); lws.setDate(ws.getDate() - 7);
-  const lastWeekStart = dkey(lws);
-  const lwe = new Date(ld); lwe.setDate(ld.getDate() - 7);
-  const lastWeekEnd = dkey(lwe);
+  // week -- so a week that's only 3 days old isn't compared against a full
+  // 7-day prior week.
+  const lastWeekStart = addDays(thisWeekStart, -7);
+  const lastWeekEnd = sameDayLastWeekKey;
 
-  return { latestDate, yesterdayKey, sameDayLastWeekKey, yesterdaySameDayLastWeekKey, thisWeekStart, lastWeekStart, lastWeekEnd };
+  // When the latest day is the live Dubai day it is only partly over. Yesterday
+  // is then cut at the same elapsed time (now minus 24h), so Day-over-Day
+  // compares like with like instead of a partial day against a full one.
+  // null means the latest day is complete and no cut applies.
+  const nowMs = Date.now();
+  const yesterdayCutMs = latestDate === dkey(nowMs) ? nowMs - 24 * 3600 * 1000 : null;
+
+  return { latestDate, yesterdayKey, sameDayLastWeekKey, yesterdaySameDayLastWeekKey, thisWeekStart, lastWeekStart, lastWeekEnd, yesterdayCutMs };
 }
 
 // null (never Infinity/NaN) when there's no prior-period sales to compare
@@ -2724,6 +2721,7 @@ function channelDeltaRows() {
   const byKey = rows => new Map(rows.map(r => [r.k, r[mk]]));
   const todayM = byKey(salesAgg(inWin(w.latestDate, w.latestDate), o => o.channel));
   const ydayM = byKey(salesAgg(inWin(w.yesterdayKey, w.yesterdayKey), o => o.channel));
+  const ydayToNowM = byKey(salesAgg(O.filter(o => dkey(o.receivedAt) === w.yesterdayKey && (w.yesterdayCutMs == null || o.receivedAt <= w.yesterdayCutMs)), o => o.channel));
   const thisWkM = byKey(salesAgg(inWin(w.thisWeekStart, w.latestDate), o => o.channel));
   const lastWkM = byKey(salesAgg(inWin(w.lastWeekStart, w.lastWeekEnd), o => o.channel));
   // The channel list comes from the structural view, not from O: with a brand
@@ -2734,9 +2732,10 @@ function channelDeltaRows() {
   const channels = uniq(cmpBaseExcept('channel', 'brand').map(o => o.channel)).filter(Boolean).sort();
   return channels.map(ch => {
     const todayNet = todayM.get(ch) || 0, ydayNet = ydayM.get(ch) || 0;
+    const ydayToNowNet = ydayToNowM.get(ch) || 0;
     const twNet = thisWkM.get(ch) || 0, lwNet = lastWkM.get(ch) || 0;
     return {
-      channel: ch, todayNet, ydayNet, dodPct: deltaPct(todayNet, ydayNet),
+      channel: ch, todayNet, ydayNet, ydayToNowNet, dodPct: deltaPct(todayNet, ydayToNowNet),
       twNet, lwNet, wowPct: deltaPct(twNet, lwNet)
     };
   });
@@ -2752,7 +2751,7 @@ function brandDeltaRows() {
   const brands = uniq(O.map(o => o.brand)).filter(Boolean);
   return brands.map(b => {
     const prevDayNet = prevDayM.get(b) || 0, sdlwNet = sdlwM.get(b) || 0;
-    return { brand: b, prevDayNet, sdlwNet, pct: deltaPct(prevDayNet, sdlwNet) };
+    return { brand: b, prevDayNet, sdlwNet, delta: prevDayNet - sdlwNet, pct: deltaPct(prevDayNet, sdlwNet) };
   });
 }
 
@@ -2933,13 +2932,15 @@ function renderChannelDeltaTable() {
     twNet: r => r.twNet, lwNet: r => r.lwNet, wowPct: r => r.wowPct
   });
   const sortState = S.ui.cmpChannelSort;
+  const w = cmpWindows() || {};
+  const on = key => (key ? ` <span class="muted small">${shortDay(key)}</span>` : '');
   el.innerHTML = `<thead><tr>
       <th data-k="channel">Channel${sortArrow(sortState, 'channel')}</th>
-      <th data-k="ydayNet">Yesterday${sortArrow(sortState, 'ydayNet')}</th>
-      <th data-k="todayNet">Today${sortArrow(sortState, 'todayNet')}</th>
-      <th data-k="dodPct">Day-over-Day${sortArrow(sortState, 'dodPct')}</th>
-      <th data-k="lwNet">Last Week${sortArrow(sortState, 'lwNet')}</th>
-      <th data-k="twNet">This Week${sortArrow(sortState, 'twNet')}</th>
+      <th data-k="ydayNet">Yesterday${on(w.yesterdayKey)}${sortArrow(sortState, 'ydayNet')}</th>
+      <th data-k="todayNet">Today${on(w.latestDate)}${sortArrow(sortState, 'todayNet')}</th>
+      <th data-k="dodPct" title="Today vs yesterday at the same time of day">Day-over-Day${sortArrow(sortState, 'dodPct')}</th>
+      <th data-k="lwNet">Last Week${on(w.lastWeekStart)}${sortArrow(sortState, 'lwNet')}</th>
+      <th data-k="twNet">This Week${on(w.thisWeekStart)}${sortArrow(sortState, 'twNet')}</th>
       <th data-k="wowPct">Week-over-Week${sortArrow(sortState, 'wowPct')}</th>
     </tr></thead><tbody>${rows.map(r => `<tr class="cmp-row${cmpRowActive('channel', r.channel) ? ' active' : ''}" data-channel="${esc(r.channel)}">
       <td>${esc(r.channel)}</td>
@@ -2972,10 +2973,12 @@ function renderBrandDeltaTable() {
   const filtered = brandDeltaRows().filter(r => r.brand.toLowerCase().includes(q));
   const sortState = S.ui.cmpBrandSort;
   const rows = sortRows(filtered, sortState, { brand: r => r.brand, prevDayNet: r => r.prevDayNet, sdlwNet: r => r.sdlwNet, pct: r => r.pct });
+  const w = cmpWindows() || {};
+  const on = key => (key ? ` <span class="muted small">${shortDay(key)}</span>` : '');
   el.innerHTML = `<thead><tr>
       <th data-k="brand">Brand${sortArrow(sortState, 'brand')}</th>
-      <th data-k="prevDayNet">Previous Day ${metricLabel}${sortArrow(sortState, 'prevDayNet')}</th>
-      <th data-k="sdlwNet">Same Day Last Week ${metricLabel}${sortArrow(sortState, 'sdlwNet')}</th>
+      <th data-k="prevDayNet">Previous Day ${metricLabel}${on(w.yesterdayKey)}${sortArrow(sortState, 'prevDayNet')}</th>
+      <th data-k="sdlwNet">Same Day Last Week ${metricLabel}${on(w.yesterdaySameDayLastWeekKey)}${sortArrow(sortState, 'sdlwNet')}</th>
       <th data-k="pct">%Δ${sortArrow(sortState, 'pct')}</th>
     </tr></thead><tbody>${rows.map(r => `<tr class="cmp-row${cmpRowActive('brand', r.brand) ? ' active' : ''}" data-brand="${esc(r.brand)}">
       <td>${esc(r.brand)}</td>
@@ -3031,16 +3034,18 @@ function renderComparison() {
   // the selected channel, so narrow the rows here rather than in the table.
   const chanRows = channelDeltaRows().filter(r => eq(r.channel, S.f.channel));
   const todayTotal = sum(chanRows, r => r.todayNet), ydayTotal = sum(chanRows, r => r.ydayNet);
+  const ydayToNowTotal = sum(chanRows, r => r.ydayToNowNet);
   const twTotal = sum(chanRows, r => r.twNet), lwTotal = sum(chanRows, r => r.lwNet);
   const brandRows = brandDeltaRows();
-  // A row only counts as "gaining" if it actually rose and as "declining" only
-  // if it actually fell. Taking max() and min() of one list labelled the
-  // smallest riser as the "Top Declining Brand" on days when nothing declined,
-  // and -- once a brand filter left a single row -- showed the same brand in
-  // both cards, one ▲ and one ▼.
-  const ranked = brandRows.filter(r => r.pct != null);
-  const topGainer = ranked.filter(r => r.pct > 0).sort((a, b) => b.pct - a.pct)[0] || null;
-  const topDecliner = ranked.filter(r => r.pct < 0).sort((a, b) => a.pct - b.pct)[0] || null;
+  // Movers are ranked by absolute change in the metric's own units, not by %.
+  // A brand going 1 -> 4 orders is +300% but is noise, so a brand needs a real
+  // base (5 orders / AED 100) on at least one side to qualify. A row only
+  // counts as "gaining" if it actually rose and "declining" only if it fell.
+  const minBase = S.ui.cmpMetric === 'orders' ? 5 : 100;
+  const movers = brandRows.filter(r => Math.max(r.prevDayNet, r.sdlwNet) >= minBase);
+  const topGainer = movers.filter(r => r.delta > 0).sort((a, b) => b.delta - a.delta)[0] || null;
+  const topDecliner = movers.filter(r => r.delta < 0).sort((a, b) => a.delta - b.delta)[0] || null;
+  const moverText = r => `${r.brand}: ${r.delta > 0 ? 'up' : 'down'} ${fmt(Math.abs(r.delta))} (${deltaHtml(r.pct).replace(/<[^>]+>/g, '')}) vs same day last week (${metricDesc}, ${scopeDesc}).`;
   const chanLabel = Array.isArray(S.f.channel) ? S.f.channel.join(', ') : S.f.channel;
   const scopeDesc = (S.f.channel === 'All' || chanLabel === '') ? 'across all channels' : `for ${chanLabel}`;
 
@@ -3050,10 +3055,10 @@ function renderComparison() {
   kpis('kpi-comparison', [
     [`${metricLabel} Today`, fmt(todayTotal), false, null, false, `Total ${metricDesc} ${scopeDesc} for the latest day in the data.`],
     [`${metricLabel} Yesterday`, fmt(ydayTotal), false, null, false, `Total ${metricDesc} ${scopeDesc} the day before.`],
-    ['Day-over-Day', deltaHtml(deltaPct(todayTotal, ydayTotal)), false, null, false, `Today vs Yesterday, blended ${metricDesc} ${scopeDesc}.`],
+    ['Day-over-Day', deltaHtml(deltaPct(todayTotal, ydayToNowTotal)), false, null, false, `Today vs Yesterday at the same time of day, ${metricDesc} ${scopeDesc}. Yesterday is only counted up to this time so a part-day is not compared with a full day.`],
     ['Week-over-Week', deltaHtml(deltaPct(twTotal, lwTotal)), false, null, false, `This week-to-date vs the same partial span last week, blended ${metricDesc} ${scopeDesc}.`],
-    ['Top Gaining Brand', topGainer ? esc(topGainer.brand) : '–', true, topGainer ? () => { S.f.brand = cmpRowActive('brand', topGainer.brand) ? 'All' : topGainer.brand; syncFilterUI(); render(); } : null, !!topGainer && cmpRowActive('brand', topGainer.brand), topGainer ? `${topGainer.brand}: ${deltaHtml(topGainer.pct).replace(/<[^>]+>/g, '')} vs same day last week (${metricDesc}, ${scopeDesc}). Click to filter the page to this brand (click again to clear).` : `No brand was up on the same day last week (${metricDesc}, ${scopeDesc}).`],
-    ['Top Declining Brand', topDecliner ? esc(topDecliner.brand) : '–', true, topDecliner ? () => { S.f.brand = cmpRowActive('brand', topDecliner.brand) ? 'All' : topDecliner.brand; syncFilterUI(); render(); } : null, !!topDecliner && cmpRowActive('brand', topDecliner.brand), topDecliner ? `${topDecliner.brand}: ${deltaHtml(topDecliner.pct).replace(/<[^>]+>/g, '')} vs same day last week (${metricDesc}, ${scopeDesc}). Click to filter the page to this brand (click again to clear).` : `No brand was down on the same day last week (${metricDesc}, ${scopeDesc}).`]
+    ['Top Gaining Brand', topGainer ? esc(topGainer.brand) : '–', true, topGainer ? () => { S.f.brand = cmpRowActive('brand', topGainer.brand) ? 'All' : topGainer.brand; syncFilterUI(); render(); } : null, !!topGainer && cmpRowActive('brand', topGainer.brand), topGainer ? `${moverText(topGainer)} Click to filter the page to this brand (click again to clear).` : `No brand with a real base was up on the same day last week (${metricDesc}, ${scopeDesc}).`],
+    ['Top Declining Brand', topDecliner ? esc(topDecliner.brand) : '–', true, topDecliner ? () => { S.f.brand = cmpRowActive('brand', topDecliner.brand) ? 'All' : topDecliner.brand; syncFilterUI(); render(); } : null, !!topDecliner && cmpRowActive('brand', topDecliner.brand), topDecliner ? `${moverText(topDecliner)} Click to filter the page to this brand (click again to clear).` : `No brand with a real base was down on the same day last week (${metricDesc}, ${scopeDesc}).`]
   ]);
 
   renderChannelDeltaTable();
