@@ -3803,6 +3803,8 @@ function renderTargets() {
   const ach = FHGrowth.achievement({ achieved: achievedSel, target: tgt.sales, elapsedDays: planning ? 0 : elapsed, totalDays });
   const ordAch = FHGrowth.achievement({ achieved: ordersSel, target: tgt.orders, elapsedDays: planning ? 0 : elapsed, totalDays });
   const hasTarget = tgt.sales > 0;
+  // Average Net Sales per day: last 30 days before the month starts, month to date afterwards.
+  const runRateDaily = planning ? achievedSel / totalDays : ach.currentDaily;
   const rag = hasTarget ? (planning ? FHGrowth.projectedRag(achievedSel, tgt.sales) : ach.rag) : 'none';
   const gapTxt = hasTarget ? (ach.gap > 0 ? money(ach.gap) : 'Ahead by ' + money(-ach.gap)) : '–';
   const pctTxt = hasTarget && ach.pct != null ? pc(ach.pct, 1) : '–';
@@ -3818,14 +3820,16 @@ function renderTargets() {
   const kpiList = planning ? [
     targetCell,
     ['Projected Net Sales', money(achievedSel), false, noop, false, 'Last 30 days of Net Sales per day, multiplied by the days in the month, for the current selection.', ''],
+    ['Avg Run Rate / Day', `${money(runRateDaily)} <span class="muted small">${planning ? 'last 30 days' : 'month to date'}</span>`, false, noop, false, 'Average Net Sales per day for the current selection: last 30 days before the month starts, month to date afterwards.', ''],
     ['Projected % of Target', pctTxt, false, noop, false, 'Projected Net Sales / Net Sales target.', ''],
     ['Gap to Target', gapTxt, false, noop, false, 'Target minus projected Net Sales. Negative means the projection already beats target.', ''],
-    ['Target / Day vs Run-rate / Day', hasTarget ? `${money(tgt.sales / totalDays)} / ${money(achievedSel / totalDays)}` : money(achievedSel / totalDays), true, noop, false, 'Net Sales per day the target needs, against the last-30-day run-rate per day.', ''],
+    ['Target / Day vs Run-rate / Day', hasTarget ? `${money(tgt.sales / totalDays)} / ${money(runRateDaily)}` : money(runRateDaily), true, noop, false, 'Net Sales per day the target needs, against the last-30-day run-rate per day.', ''],
     ['Projected Orders', `${cnt(ordersSel)} / ${cnt(ordAch.target)}`, false, noop, false, 'Projected non-cancelled orders for the month against the orders target.', ''],
     ['Status', ragChip(rag), false, noop, false, 'Projection vs target: On track at 98% or more, At risk 90% to 98%, Off track below 90%.', '']
   ] : [
     targetCell,
     ['Achieved MTD', money(achievedSel), false, noop, false, 'Net Sales for the selected month to date, excluding cancelled orders.', ''],
+    ['Avg Run Rate / Day', `${money(runRateDaily)} <span class="muted small">${planning ? 'last 30 days' : 'month to date'}</span>`, false, noop, false, 'Average Net Sales per day for the current selection: last 30 days before the month starts, month to date afterwards.', ''],
     ['Achievement %', pctTxt, false, noop, false, 'Achieved Net Sales / Net Sales target.', ''],
     ['Gap to Target', gapTxt, false, noop, false, 'Target minus achieved. Negative means the target is already beaten.', ''],
     ['Need / Day vs Current / Day', hasTarget && ach.remainingDays ? `${money(ach.requiredDaily)} / ${money(ach.currentDaily)}` : money(ach.currentDaily), true, noop, false, 'Net Sales per day still needed to hit target, against the current daily run-rate.', ''],
@@ -3845,7 +3849,7 @@ function renderTargets() {
     ['Target (AED)', hasTarget ? money(tgt.sales) : '–'],
     [planning ? 'Projected (AED)' : 'Achieved (AED)', money(achievedSel)],
     ['Gap (AED)', gapTxt],
-    ['Run-rate per day (AED)', money(planning ? achievedSel / totalDays : ach.currentDaily)],
+    ['Run-rate per day (AED)', money(runRateDaily)],
     ['Orders (projected or achieved / target)', `${cnt(ordersSel)} / ${cnt(ordAch.target)}`]
   ]);
   kpiList.forEach(k => { tgtDetail['kpi:' + k[0]] = { title: k[0], subtitle: k[5] || '', html: kpiInputs }; });
