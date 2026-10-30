@@ -1092,3 +1092,15 @@ tbody tr[onclick]:hover, tr.daily-row:hover { filter: brightness(0.95); }
 .det-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .det-table th, .det-table td { text-align: left; padding: 7px 10px; border-bottom: 1px solid #eef1f2; vertical-align: top; }
 .det-table th { width: 42%; color: var(--g); font-weight: 600; }
+
+/* Channel requirements and recommended campaign. */
+.a-reqs { grid-column: span 12; }
+#tgtReqTable { width: 100%; border-collapse: collapse; font-size: 12px; }
+#tgtReqTable th { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--line); background: var(--y); color: var(--k); font-weight: 700; position: sticky; top: 0; }
+#tgtReqTable td { padding: 6px 10px; border-bottom: 1px solid #eef1f2; vertical-align: middle; }
+#tgtReqTable .num { text-align: right; font-variant-numeric: tabular-nums; }
+.tgt-row-req { cursor: pointer; }
+.tgt-row-req:hover { background: #fffbea; }
+.a-reqs .tbl-wrap { overflow-x: auto; }
+.cp-campaign { border-left: 3px solid var(--blue); background: #f4f6ff; border-radius: 6px; padding: 8px 10px; font-size: 12px; cursor: pointer; }
+.cp-campaign:hover { background: #e8ecff; }

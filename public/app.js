@@ -3610,7 +3610,7 @@ function setTarget(mKey, dim, key, metric, value) {
   }
   const row = mt.channels[key] || (mt.channels[key] = { sales: 0, orders: 0, manual: false });
   row[metric] = v;
-  row.manual = true;
+  if (metric !== 'budget') row.manual = true;
   saveTargets();
 }
 
@@ -3631,7 +3631,7 @@ function renderTargetSetup(mKey, mt) {
     const b = r.basis;
     const basis = b ? `${b.sharePct}% sales · ${b.commissionPct}% comm.` : '–';
     const mode = r.manual ? '<span class="mode mode-manual">Manual</span>' : '<span class="mode mode-auto">Auto</span>';
-    return row(ch, 'channel', ch, r, `<td class="muted small">${basis}</td><td>${mode}</td>`);
+    return row(ch, 'channel', ch, r, `<td class="num">${cell('channel', ch, 'budget', r.budget, 100)}</td><td class="muted small">${basis}</td><td>${mode}</td>`);
   }).join('');
   const sumCh = Object.values(mt.channels).reduce((s, r) => s + (+r.sales || 0), 0);
   const diff = mt.company.sales - sumCh;
@@ -3639,8 +3639,8 @@ function renderTargetSetup(mKey, mt) {
     : Math.abs(diff) < 5 ? `Channels add up to the company target.`
     : diff > 0 ? `Channels total AED ${money(sumCh)}: AED ${money(diff)} of the company target is unallocated.`
     : `Channels total AED ${money(sumCh)}: over-allocated by AED ${money(-diff)} against the company target.`;
-  $('#tgtSetupTable').innerHTML = `<thead><tr><th>Scope</th><th class="num">Net Sales target (AED)</th><th class="num">Orders target</th><th class="num">Implied AOV</th><th>Split basis</th><th>Mode</th></tr></thead><tbody>${
-    row('Company', 'company', '', mt.company, '<td></td><td></td>')
+  $('#tgtSetupTable').innerHTML = `<thead><tr><th>Scope</th><th class="num">Net Sales target (AED)</th><th class="num">Orders target</th><th class="num">Implied AOV</th><th class="num">Marketing budget (AED)</th><th>Split basis</th><th>Mode</th></tr></thead><tbody>${
+    row('Company', 'company', '', mt.company, '<td></td><td></td><td></td>')
   }${chRows}</tbody>`;
   $('#tgtSetupNote').textContent = footNote + (latest ? '' : ' No order data loaded yet.');
 }
@@ -3716,6 +3716,12 @@ function planCard(p, remaining) {
     : '<li class="muted small">No promotion needed: the channel is on pace and no rule fired.</li>';
   return `<div class="cp-card" data-tgt="plan:${esc(p.channel)}" tabindex="0" role="button">
     <div class="cp-head"><b>${esc(p.channel)}</b> <span class="stance ${STANCE_CLASS[p.stance] || 'st-bal'}">${esc(p.stance)}</span> ${ragChip(p.rag)}</div>
+    ${p.campaign ? `<div class="cp-campaign" data-tgt="camp:${esc(p.channel)}" tabindex="0" role="button">
+      <b>Recommended campaign: ${esc(p.campaign.name)}</b>
+      <div class="cp-pmeta">${esc(p.campaign.objective)}</div>
+      <div class="cp-pmeta">KPI: ${esc(p.campaign.kpis.join(', '))} · Effort: ${esc(p.campaign.effort)}</div>
+      ${p.aboveCap ? '<div class="cp-guard">Budget override is above the auto cap: extra spend is not counted in uplift.</div>' : ''}
+    </div>` : ''}
     <div class="cp-stats">Target AED ${money(p.target)} · ${p.planning ? 'Projected' : 'Achieved'} AED ${money(p.achieved)} (${p.pct == null ? '–' : pc(p.pct, 0)}) · Gap AED ${money(p.gap)}</div>
     <div class="cp-stats muted small">Commission ${p.commissionPct}% · Discount ${p.discPct}% · AOV AED ${p.aov} · Cancel rate ${p.cancelRate}%</div>
     ${p.guard ? `<div class="cp-guard">${esc(p.guard)}</div>` : ''}
@@ -3883,13 +3889,36 @@ function renderTargets() {
   const monthRows = planning ? [] : allMonth.map(o => ({ channel: o.channel, cancelled: o.cancelled, netSales: o.netSales }));
   const targets = {};
   Object.keys(mt.channels).forEach(ch => { targets[ch] = { sales: +mt.channels[ch].sales || 0, orders: +mt.channels[ch].orders || 0 }; });
+  // Brands per channel and net per brand over the last 30 days: feeds requirements and assortment.
+  const brandSets = {}, brandNet = {};
+  trailingLive.forEach(o => {
+    (brandSets[o.channel] = brandSets[o.channel] || new Set()).add(o.brand);
+    brandNet[o.brand] = (brandNet[o.brand] || 0) + o.netSales;
+  });
+  const brandsByCh = Object.fromEntries(Object.entries(brandSets).map(([c, set]) => [c, [...set]]));
+  const budgets = {};
+  Object.keys(mt.channels).forEach(ch => { if (+mt.channels[ch].budget > 0) budgets[ch] = +mt.channels[ch].budget; });
+  renderRequirements(FHGrowth.channelRequirements({ history, commissionRates, brandsByCh }));
   const { plans, baseline } = FHGrowth.channelPlans({
     history, monthRows, targets, commissionRates,
     forecast: planning ? forecastByCh : undefined,
-    elapsedDays: elapsed, totalDays, remainingDays: ach.remainingDays, monthKey: mKey, asOfDay: elapsed
+    elapsedDays: elapsed, totalDays, remainingDays: ach.remainingDays, monthKey: mKey, asOfDay: elapsed,
+    brandsByCh, brandNet, budgets
   });
   const cal = FHGrowth.promoCalendar(plans, { monthKey: mKey, totalDays, asOfDay: elapsed });
 
+  plans.forEach(p => {
+    if (!p.campaign) return;
+    const c = p.campaign;
+    tgtDetail['camp:' + p.channel] = {
+      title: c.name, subtitle: p.channel + ' · ' + p.stance,
+      html: detTable([
+        ['Objective', c.objective], ['Offer', c.offer], ['Timing', c.timing], ['KPIs', c.kpis.join(', ')],
+        ['Guardrails', c.guardrails.join(' · ')], ['Effort', c.effort], ['Budget (AED)', money(c.budget)],
+        ['Expected uplift (AED)', money(c.uplift)], ['Assumption', c.assumption]
+      ])
+    };
+  });
   const totalGap = sum(plans, p => p.gap);
   const totalUplift = sum(plans, p => p.uplift);
   const totalBudget = sum(plans, p => p.budget);
@@ -3929,6 +3958,51 @@ function renderTargets() {
   $('#tgtPlaybook').innerHTML = group('Operations') + group('Menu');
 }
 
+// Channel requirements table: contract facts, floors, discount, basket and peak hours.
+// Each row opens its full detail, including facts that are not applied per order.
+function renderRequirements(reqs) {
+  const t = $('#tgtReqTable');
+  if (!t) return;
+  const peak = r => (r.peakHours.length ? r.peakHours.map(h => pad(h) + ':00').join(', ') : '–');
+  t.innerHTML = `<thead><tr><th>Channel</th><th class="num">Commission</th><th class="num">Floor</th><th class="num">Orders below floor</th><th class="num">Discount</th><th class="num">AOV (AED)</th><th class="num">p75 basket (AED)</th><th class="num">Brands</th><th>Peak hours</th><th>Weakest day</th><th class="num">Share of orders</th></tr></thead><tbody>${
+    reqs.map(r => {
+      const key = 'req:' + r.channel;
+      tgtDetail[key] = {
+        title: `${r.channel}: channel requirements`,
+        subtitle: r.source || 'No contract on file',
+        html: detTable([
+          ['Commission', r.commissionPct + '%'],
+          ['Per-order floor (AED)', r.floorAED || 'none'],
+          ['Floor threshold (AED net)', r.floorThreshold || '–'],
+          ['Orders below floor', r.floorSharePct + '%'],
+          ['Discount', `${r.discountPct}% (${r.discountGapPts >= 0 ? '+' : ''}${r.discountGapPts} pts vs company)`],
+          ['AOV (AED)', r.aov],
+          ['p75 basket (AED)', r.p75Basket],
+          ['Brands sold', `${r.brands} (${Math.round(r.brandRatio * 100)}% of the widest channel)`],
+          ['Peak hours', peak(r)],
+          ['Weakest day', r.weakDay],
+          ['Not applied (not trackable per order)', r.notApplied || 'none'],
+          ['Note', r.note || '–'],
+          ['Source', r.source || '–']
+        ])
+      };
+      return `<tr class="tgt-row-req" data-tgt="${esc(key)}" tabindex="0" role="button">
+        <td><b>${esc(r.channel)}</b></td>
+        <td class="num">${r.commissionPct}%</td>
+        <td class="num">${r.floorAED ? 'AED ' + r.floorAED : '–'}</td>
+        <td class="num">${r.floorSharePct}%</td>
+        <td class="num">${r.discountPct}% <span class="muted small">(${r.discountGapPts >= 0 ? '+' : ''}${r.discountGapPts})</span></td>
+        <td class="num">${r.aov}</td>
+        <td class="num">${r.p75Basket}</td>
+        <td class="num">${r.brands}</td>
+        <td>${peak(r)}</td>
+        <td>${esc(r.weakDay)}</td>
+        <td class="num">${r.orderSharePct}%</td>
+      </tr>`;
+    }).join('')
+  }</tbody>`;
+}
+
 function downloadPlanCsv() {
   if (!tgtLast) return;
   const headers = ['Section', 'Channel / Group', 'Stance / Priority', 'Action', 'Detail', 'When', 'Duration (days)', 'Effort', 'Budget cap (AED)', 'Est. impact (AED)', 'Assumption'];
@@ -3943,6 +4017,15 @@ function downloadPlanCsv() {
     Detail: r.evidence, When: 'Ongoing', 'Duration (days)': '', Effort: r.effort,
     'Budget cap (AED)': '', 'Est. impact (AED)': r.impact, Assumption: r.assumption
   }));
+  tgtLast.plans.forEach(p => {
+    if (!p.campaign) return;
+    const c = p.campaign;
+    rows.push({
+      Section: 'Campaign brief', 'Channel / Group': p.channel, 'Stance / Priority': p.stance, Action: c.name,
+      Detail: `${c.objective} | ${c.offer}`, When: c.timing, 'Duration (days)': tgtLast.remaining, Effort: c.effort,
+      'Budget cap (AED)': c.budget, 'Est. impact (AED)': c.uplift, Assumption: `${c.guardrails.join('; ')}. ${c.assumption}`
+    });
+  });
   downloadCSV(`FoodHive_targets_plan_${tgtMonth}.csv`, headers, rows);
 }
 

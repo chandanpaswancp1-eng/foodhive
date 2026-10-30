@@ -38,6 +38,13 @@
     bundleAdoption: 0.10,
     comboDiscount: 0.10,
     ratingRisk: 4.0,          // brand average below this = fix before promoting
+    volumeBuildShare: 0.03,       // channel share of orders below this = Volume Build campaign
+    visibilityMaxCommission: 0.25, // commission at or below this qualifies for Funded Visibility
+    assortmentMaxRatio: 0.25,     // channel brand count below 25% of the widest channel = Assortment Expansion
+    assortmentRamp: 0.25,         // month-one share of added brands' sales (assumption)
+    topBrandsToAdd: 5,            // brands listed for Assortment Expansion
+    directDiscountTarget: 35,     // Direct Channel Upgrade discount depth target (%)
+    minBasketGuard: 25,           // Keeta minimum basket (AED) to stop orders below the commission floor
     hotItemDays: 3            // 86 events on this many distinct days for a top seller = supply issue
   };
 
@@ -201,6 +208,9 @@
     const histChannels = [...new Set(hist.map(r => r.channel))];
     const channelSet = [...new Set([...Object.keys(ctx.targets || {}), ...histChannels])];
 
+    const brandsByCh = ctx.brandsByCh || {};
+    const maxBrands = Math.max(1, ...Object.values(brandsByCh).map(b => b.length));
+    const reqByCh = Object.fromEntries(channelRequirements({ history: hist, commissionRates: ctx.commissionRates || {}, brandsByCh }).map(r => [r.channel, r]));
     const plans = channelSet.map(ch => {
       const rows = hist.filter(r => r.channel === ch);
       const prof = channelProfile(rows, CONFIG.statsDays);
@@ -302,11 +312,45 @@
         });
       }
 
-      const shown = promos.sort((a, b) => b.uplift - a.uplift).slice(0, 4)
+      // Brand coverage: top company brands this channel does not sell yet.
+      const brandsHere = brandsByCh[ch] || [];
+      const missingBrands = Object.entries(ctx.brandNet || {})
+        .filter(([b]) => !brandsHere.includes(b))
+        .sort((a, b) => b[1] - a[1]).slice(0, CONFIG.topBrandsToAdd).map(([b]) => b);
+      const brandRatio = brandsHere.length / maxBrands;
+      if (missingBrands.length && brandRatio < CONFIG.assortmentMaxRatio && remaining > 0) {
+        const avgNetPerBrand = prof.net / Math.max(1, brandsHere.length);
+        promos.push({
+          title: `Add ${missingBrands.length} top-selling brands`,
+          mechanic: 'Bring brands that sell well on other channels onto this one',
+          when: 'All days', effort: 'High',
+          uplift: missingBrands.length * avgNetPerBrand * (remaining / CONFIG.statsDays) * CONFIG.assortmentRamp,
+          counts: true,
+          assumption: `${missingBrands.length} brands x channel average net per brand AED ${round(avgNetPerBrand)} x ${remaining}/${CONFIG.statsDays} of a month x ${CONFIG.assortmentRamp * 100}% month-one ramp (assumption)`
+        });
+      }
+
+      // Budget: auto cap from promo margins; an override scales uplift down when below the cap.
+      const shownAll = promos.sort((a, b) => b.uplift - a.uplift).slice(0, 5)
         .map(p => ({ ...p, uplift: round(p.uplift), budget: p.counts && p.uplift > 0 ? round(p.uplift * (1 - c) * CONFIG.promoBudgetShare) : 0 }));
+      // Counted uplift never exceeds the channel gap: scale all promotions down together first.
+      const gapNow = Math.max(0, ach.gap);
+      const countedRaw = sumBy(shownAll.filter(p => p.counts), p => p.uplift);
+      const gapCap = gapNow > 0 && countedRaw > gapNow ? gapNow / countedRaw : 1;
+      const baseShown = shownAll.map(p => ({ ...p, uplift: round(p.uplift * gapCap, 2), budget: round(p.budget * gapCap, 2) }));
+      // Auto cap is the budget after the gap cap. An override below it scales everything down proportionally.
+      const autoBudget = sumBy(baseShown, p => p.budget);
+      const override = ctx.budgets ? (+ctx.budgets[ch] || 0) : 0;
+      const factor = override > 0 && autoBudget > 0 && override < autoBudget ? override / autoBudget : 1;
+      const shown = baseShown.map(p => ({ ...p, uplift: round(p.uplift * factor, 2), budget: round(p.budget * factor, 2) }));
       const uplift = sumBy(shown.filter(p => p.counts), p => p.uplift);
-      const budget = sumBy(shown, p => p.budget);
+      const promoBudget = sumBy(shown, p => p.budget);
+      const effBudget = override > 0 ? override : autoBudget;
+      const aboveCap = override > 0 && override > autoBudget;
       const gap = Math.max(0, ach.gap);
+      const campaign = campaignBrief({ channel: ch, stance, cancelFlag, gap, commissionPct: round(c * 100, 1), budget: round(effBudget), uplift: round(uplift) },
+        reqByCh[ch] || { aovVsCompany: 0, orderSharePct: 100, discountGapPts: 0, brandRatio: 1, peakHours: [], weakDay: '–', floorSharePct: 0, p75Basket: 0 },
+        { missingBrands, companyDisc, aboveCap, autoBudget: round(autoBudget) });
 
       return {
         channel: ch, stance, cancelFlag,
@@ -316,8 +360,8 @@
         commissionPct: round(c * 100, 1), discPct: round(prof.discPct, 1), aov: round(aov, 2),
         cancelRate: round(prof.cancelRate * 100, 1),
         guard: c >= CONFIG.marginGuardCommission ? `Commission ${round(c * 100)}%: cap the blanket discount at the company average (${round(companyDisc, 1)}%)` : '',
-        promos: shown,
-        uplift: round(uplift), budget: round(budget),
+        promos: shown, campaign, aboveCap, autoBudget: round(autoBudget), promoBudget: round(promoBudget),
+        uplift: round(uplift), budget: round(effBudget),
         coverage: gap > 0 ? round(Math.min(uplift, gap) / gap * 100) : null,
         stretch: round(Math.max(0, gap - uplift))
       };
@@ -325,6 +369,126 @@
 
     plans.sort((a, b) => b.gap - a.gap);
     return { plans, baseline: { discPct: round(companyDisc, 1), cancelRate: round(companyCancel * 100, 1) } };
+  }
+
+  // ---------- channel requirements and campaigns ----------
+  // Contract facts from public/commission.js (RATE_CARD, verified 2026-10-11).
+  // Facts that cannot be tracked per order are listed under notApplied.
+  const CHANNEL_REQUIREMENTS = {
+    'Talabat': { floorAED: 0, source: 'Letter of Agreement OQ-0010978599', notApplied: 'tPro AED 4/order at AED 30+ (loyalty flag not tracked); AED 262.50/month subscription' },
+    'Keeta 2.0': { floorAED: 6, source: 'Merchant Agreement AEWM-SE-E3-20028083', notApplied: 'AED 500/device one-time POS fee' },
+    'Deliveroo': { floorAED: 0, source: 'Service Pack cover sheet (tiers corrected 2026-10-11)', notApplied: 'AED 50/site/month platform fee from 1 Dec 2026', note: 'Commission 10% until 23 Oct 2026, 28% from 24 Oct 2026' },
+    'Take Away': { floorAED: 0, source: 'No aggregator contract', notApplied: '' },
+    'Careem': { floorAED: 0, source: 'Restaurant Enrollment Agreement', notApplied: 'Careem Plus AED 3/order (loyalty flag not tracked); 4%/month marketing commitment (merchant ad spend, not commission)' },
+    'Noon': { floorAED: 0, source: 'Noon Food Merchant Agreement + Annex', notApplied: 'noon one AED 3/order (loyalty flag not tracked)' }
+  };
+
+  // history: rows as in channelPlans (30 days, cancelled included).
+  // commissionRates: { channel: rate }. brandsByCh: { channel: [brand names] }.
+  function channelRequirements({ history = [], commissionRates = {}, brandsByCh = {} }) {
+    const base = channelProfile(history, CONFIG.statsDays);
+    const maxBrands = Math.max(1, ...Object.values(brandsByCh).map(b => b.length));
+    const chans = [...new Set(history.map(r => r.channel))];
+    return chans.map(ch => {
+      const rows = history.filter(r => r.channel === ch);
+      const prof = channelProfile(rows, CONFIG.statsDays);
+      if (prof.orders < CONFIG.minOrders) return null;
+      const live = rows.filter(r => !r.cancelled);
+      const req = CHANNEL_REQUIREMENTS[ch] || { floorAED: 0, source: '', notApplied: '' };
+      const c = commissionRates[ch] || 0;
+      const threshold = req.floorAED > 0 && c > 0 ? req.floorAED / c : 0;
+      const nets = live.map(r => r.netSales).sort((a, b) => a - b);
+      const p75 = nets.length ? nets[Math.floor(nets.length * 0.75)] : 0;
+      const topHours = prof.hourCounts.map((n, h) => [h, n]).filter(x => x[1] > 0)
+        .sort((a, b) => b[1] - a[1]).slice(0, 3).map(x => x[0]).sort((a, b) => a - b);
+      const weakest = prof.dowAvg.map((v, i) => [i, v, prof.dowDays[i]]).filter(x => x[2] >= 2).sort((a, b) => a[1] - b[1]);
+      const brands = (brandsByCh[ch] || []).length;
+      return {
+        channel: ch, commissionPct: round(c * 100, 1), floorAED: req.floorAED,
+        floorThreshold: round(threshold, 2),
+        floorSharePct: threshold > 0 && live.length ? round(live.filter(r => r.netSales < threshold).length / live.length * 100, 1) : 0,
+        discountPct: round(prof.discPct, 1), discountGapPts: round(prof.discPct - base.discPct, 1),
+        aov: round(prof.aov, 2), aovVsCompany: round(prof.aov - base.aov, 2), p75Basket: round(p75, 2),
+        brands, brandRatio: round(brands / maxBrands, 2),
+        orderSharePct: base.orders ? round(prof.orders / base.orders * 100, 1) : 0,
+        peakHours: topHours, weakDay: weakest.length ? DOW[weakest[0][0]] : '–',
+        source: req.source, notApplied: req.notApplied, note: req.note || ''
+      };
+    }).filter(Boolean).sort((a, b) => b.orderSharePct - a.orderSharePct);
+  }
+
+  // One headline campaign per channel, chosen by the first rule that fits.
+  function pickCampaign(p, req, ctx) {
+    if (p.cancelFlag) return 'Fix First';
+    if (p.commissionPct === 0 && req.aovVsCompany < 0) return 'Direct Channel Upgrade';
+    if (req.orderSharePct < CONFIG.volumeBuildShare * 100) return 'Volume Build';
+    if (req.discountGapPts >= CONFIG.discountExcessPts) return 'Discount Reset';
+    if (ctx.missingBrands.length && req.brandRatio < CONFIG.assortmentMaxRatio) return 'Assortment Expansion';
+    if (p.commissionPct <= CONFIG.visibilityMaxCommission * 100 && p.gap > 0) return 'Funded Visibility';
+    if (req.peakHours.length) return 'Peak-Hour Bundle';
+    return null;
+  }
+
+  function campaignBrief(p, req, ctx) {
+    const name = pickCampaign(p, req, ctx);
+    if (!name) return null;
+    const peak = req.peakHours.length ? hourLabel(req.peakHours) : 'channel peak hours';
+    const weak = req.weakDay !== '–' ? req.weakDay : 'weakest weekday';
+    const basket = req.p75Basket ? `AED ${round(req.p75Basket)}` : 'the channel basket';
+    const T = {
+      'Fix First': {
+        objective: 'Bring cancellations back under the company line before spending on promotions',
+        offer: 'No promotion on this channel until the cancel rate is under the flag',
+        kpis: ['Cancel rate', 'Accepted-order rate'], effort: 'Medium',
+        guardrails: ['Keep promotion budget at zero until the cancel rate is under the flag']
+      },
+      'Direct Channel Upgrade': {
+        objective: 'Lift basket and reorders on a 0% commission channel',
+        offer: `Combo that lifts the basket above AED 25, a pickup reorder offer, and discount toward ${CONFIG.directDiscountTarget}%`,
+        kpis: ['AOV', 'Reorder rate', 'Discount %'], effort: 'Low',
+        guardrails: ['Pause if orders fall more than 10% week on week']
+      },
+      'Volume Build': {
+        objective: 'Grow a small channel from a low base',
+        offer: `Visibility on ${weak} and peak hours (${peak}) with a higher budget cap`,
+        kpis: ['Orders per week', 'Share of company orders'], effort: 'Medium',
+        guardrails: ['Review after two weeks; pause if orders do not grow']
+      },
+      'Discount Reset': {
+        objective: 'Bring discount depth to the company average without losing orders',
+        offer: `Replace the flat discount with a spend-above offer at ${basket} (channel p75 basket)`,
+        kpis: ['Discount % of receipt', 'Orders', 'Net per order'], effort: 'Low',
+        guardrails: [`Cap discount at the company average (${round(ctx.companyDisc, 1)}%)`]
+          .concat(req.floorSharePct > 0 ? [`Minimum basket AED ${CONFIG.minBasketGuard}: orders below the commission floor lose money`] : [])
+      },
+      'Assortment Expansion': {
+        objective: 'Widen the menu across brands that sell well on other channels',
+        offer: `Onboard ${ctx.missingBrands.slice(0, 3).join(', ')} and promote them in week one`,
+        kpis: ['Brands live', 'Net per brand'], effort: 'High',
+        guardrails: ['Review each brand after three weeks; drop brands below the channel average']
+      },
+      'Funded Visibility': {
+        objective: 'Win share on a low-commission channel that is behind pace',
+        offer: `Sponsored placement on ${weak} and peak hours (${peak})`,
+        kpis: ['Orders', 'Share of channel orders'], effort: 'Medium',
+        guardrails: ['Stop if the cost per order exceeds the channel gross margin per order']
+      },
+      'Peak-Hour Bundle': {
+        objective: 'Grow the basket in the channel\'s busiest hours',
+        offer: `Bundle at ${basket} during ${peak}`,
+        kpis: ['Peak-hour orders', 'AOV'], effort: 'Low',
+        guardrails: ['Run only in the peak window']
+      }
+    };
+    const t = T[name];
+    return {
+      name, objective: t.objective, offer: t.offer, kpis: t.kpis, guardrails: t.guardrails, effort: t.effort,
+      timing: `Peak: ${peak}. Weakest day: ${weak}.`,
+      budget: p.budget, uplift: p.uplift,
+      assumption: ctx.aboveCap
+        ? `Budget override is above the auto cap of AED ${ctx.autoBudget}; the extra spend is not counted in uplift`
+        : `Uplift comes from the promotions listed on the card; budget at ${round(CONFIG.promoBudgetShare * 100)}% of incremental margin`
+    };
   }
 
   // ---------- promotion calendar ----------
@@ -505,5 +669,5 @@
     return { recs, gap: round(gap), estimated: round(estimated), covered: round(Math.min(estimated, gap)) };
   }
 
-  return { CONFIG, achievement, projectedRag, splitTarget, channelProfile, channelPlans, promoCalendar, playbook, DOW, daysInMonth, addDaysKey, dayOfKey };
+  return { CONFIG, CHANNEL_REQUIREMENTS, channelRequirements, campaignBrief, achievement, projectedRag, splitTarget, channelProfile, channelPlans, promoCalendar, playbook, DOW, daysInMonth, addDaysKey, dayOfKey };
 });
