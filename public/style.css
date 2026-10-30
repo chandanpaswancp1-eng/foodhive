@@ -1000,3 +1000,86 @@ tbody tr[onclick]:hover, tr.daily-row:hover { filter: brightness(0.95); }
     transition-duration: 0.001ms !important;
   }
 }
+
+/* ===== Targets & Growth page ===== */
+.tgt-bar { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin: 6px 0 10px; }
+.tgt-month { font-size: 12px; font-weight: 700; display: flex; align-items: center; gap: 8px; }
+.tgt-month input[type=month] { padding: 5px 8px; border: 1px solid var(--line); border-radius: 6px; font: inherit; background: #fff; }
+.g-targets { grid-template-columns: repeat(12, 1fr); }
+.a-tgtpace, .a-tgtchannel, .a-plans, .a-calendar, .a-playbook, .a-tgtsetup { grid-column: span 12; }
+.a-tgtpace { height: 340px; }
+.tgt-csv { margin-left: 10px; }
+.tgt-summary { padding: 10px 12px 0; font-size: 13px; }
+#tgtChannelTable, #tgtSetupTable { width: 100%; border-collapse: collapse; font-size: 12px; }
+#tgtChannelTable th, #tgtSetupTable th { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--line); background: var(--y); color: var(--k); font-weight: 700; position: sticky; top: 0; }
+#tgtChannelTable td, #tgtSetupTable td { padding: 6px 10px; border-bottom: 1px solid #eef1f2; vertical-align: middle; }
+#tgtChannelTable .num, #tgtSetupTable .num { text-align: right; font-variant-numeric: tabular-nums; }
+#tgtChannelTable .tgt-row { cursor: pointer; }
+#tgtChannelTable .tgt-row:hover { background: #fffbea; }
+#tgtChannelTable .tgt-row.on { background: var(--y2); }
+#tgtChannelTable .neg { color: #a11c1c; font-weight: 600; }
+#tgtChannelTable .pos { color: #1f7a36; font-weight: 600; }
+#tgtSetupTable .tgt-in { width: 110px; padding: 4px 6px; border: 1px solid var(--line); border-radius: 4px; text-align: right; font: inherit; background: #fff; }
+#tgtSetupTable .tgt-in:focus { outline: 2px solid var(--blue); outline-offset: -1px; }
+.mode { display: inline-block; padding: 1px 8px; border-radius: 9px; font-size: 11px; font-weight: 700; }
+.mode-auto { background: #eceff1; color: #455a64; }
+.mode-manual { background: #e8eaf6; color: var(--blue); }
+.rag { display: inline-block; padding: 2px 9px; border-radius: 10px; font-size: 11px; font-weight: 700; white-space: nowrap; }
+.rag-on { background: #e3f5e7; color: #1f7a36; }
+.rag-risk { background: #fff3cc; color: #8a6100; }
+.rag-off { background: #fde2e1; color: #a11c1c; }
+.rag-none { background: #eceff1; color: #555; }
+.tgt-plans { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 12px; padding: 12px; }
+.cp-card { border: 1px solid var(--line); border-radius: 8px; padding: 12px; background: #fff; display: flex; flex-direction: column; gap: 8px; }
+.cp-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 15px; }
+.cp-stats { font-size: 12px; color: var(--k); }
+.cp-guard { font-size: 12px; background: #fff3cc; color: #8a6100; border-radius: 6px; padding: 6px 8px; }
+.cp-promos { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 8px; }
+.cp-promo { font-size: 12px; }
+.cp-muted { opacity: .65; }
+.cp-ptitle { font-weight: 700; color: var(--k); }
+.cp-tag { font-size: 10px; font-weight: 600; color: var(--g); border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; margin-left: 4px; }
+.cp-pmeta { color: var(--g); }
+.cp-assume { color: var(--g); font-style: italic; font-size: 11px; }
+.cp-foot { font-size: 12px; font-weight: 700; border-top: 1px solid #eef1f2; padding-top: 8px; }
+.stance { font-size: 11px; font-weight: 700; padding: 2px 9px; border-radius: 10px; }
+.st-push { background: #e3f2fd; color: #0d47a1; }
+.st-protect { background: #f3e5f5; color: #6a1b9a; }
+.st-fix { background: #fde2e1; color: #a11c1c; }
+.st-bal { background: #eceff1; color: #455a64; }
+.a-calendar .tbl-wrap { overflow-x: auto; }
+.cal-table { width: 100%; border-collapse: collapse; font-size: 12px; min-width: 720px; }
+.cal-table th { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--line); background: var(--y); color: var(--k); font-weight: 700; }
+.cal-table td { padding: 6px 8px; border-bottom: 1px solid #eef1f2; vertical-align: top; }
+.cal-table .num { text-align: right; font-variant-numeric: tabular-nums; }
+.cal-table .cal-total td { font-weight: 700; background: #f6f8f9; }
+.cal-chip { background: #fffbea; border-left: 3px solid var(--y); border-radius: 4px; padding: 3px 6px; margin-bottom: 4px; font-size: 11px; }
+.cal-chip span { display: block; color: var(--g); font-size: 10px; }
+.tgt-playbook { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; padding: 12px; }
+.pb-group { grid-column: 1 / -1; font-weight: 800; font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--g); border-bottom: 2px solid var(--y); padding-bottom: 4px; margin-top: 4px; }
+.pb-empty { grid-column: 1 / -1; padding: 6px 0; }
+.pb-card { border: 1px solid var(--line); border-left: 4px solid var(--y); border-radius: 8px; padding: 10px 12px; background: #fff; display: flex; flex-direction: column; gap: 6px; }
+.pb-card.pb-high { border-left-color: #d9480f; }
+.pb-card.pb-medium { border-left-color: var(--y); }
+.pb-card.pb-low { border-left-color: #9a9a9a; }
+.pb-top { display: flex; justify-content: space-between; align-items: center; font-size: 11px; color: var(--g); }
+.pb-type { font-weight: 700; text-transform: uppercase; letter-spacing: .04em; }
+.pb-prio { font-weight: 600; }
+.pb-card h4 { margin: 0; font-size: 14px; color: var(--k); line-height: 1.3; }
+.pb-ev { margin: 0; font-size: 12px; color: var(--g); }
+.pb-foot { display: flex; justify-content: space-between; font-size: 12px; font-weight: 700; color: var(--k); }
+.pb-eff { font-weight: 500; color: var(--g); }
+.pb-assume { font-size: 11px; color: var(--g); font-style: italic; }
+@media (max-width: 720px) {
+  .tgt-plans, .tgt-playbook { grid-template-columns: 1fr; }
+}
+
+.cal-table td { text-align: left; }
+.cal-table td.num { text-align: right; }
+
+/* KPI row on the Targets page: equal tiles, same 10px gap as the panels below. */
+#kpi-targets { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+#kpi-targets .kpi { flex: none; min-width: 0; }
+#kpi-targets .kpi.wide { flex: none; }
+#kpi-targets .kpi .kv { font-size: 24px; overflow-wrap: anywhere; }
+#kpi-targets .kpi .kv .muted { font-size: 11px; }
