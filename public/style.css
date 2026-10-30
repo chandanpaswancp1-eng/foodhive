@@ -1083,3 +1083,12 @@ tbody tr[onclick]:hover, tr.daily-row:hover { filter: brightness(0.95); }
 #kpi-targets .kpi.wide { flex: none; }
 #kpi-targets .kpi .kv { font-size: 24px; overflow-wrap: anywhere; }
 #kpi-targets .kpi .kv .muted { font-size: 11px; }
+
+/* Click-to-detail: clickable items show a pointer, hover and focus state. */
+[data-tgt] { cursor: pointer; }
+[data-tgt]:hover { background: #fffbea; }
+[data-tgt]:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.cp-card[data-tgt]:hover { box-shadow: 0 2px 8px rgba(0,0,0,.08); }
+.det-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.det-table th, .det-table td { text-align: left; padding: 7px 10px; border-bottom: 1px solid #eef1f2; vertical-align: top; }
+.det-table th { width: 42%; color: var(--g); font-weight: 600; }

@@ -3531,6 +3531,17 @@ const STANCE_CLASS = { 'Push volume': 'st-push', 'Protect margin': 'st-protect',
 let allTargets = (() => { try { const raw = localStorage.getItem(TARGETS_KEY); return raw ? JSON.parse(raw) : {}; } catch (_) { return {}; } })();
 let tgtMonth = null;
 let tgtLast = null;
+// Click-to-detail registry: data-tgt keys on clickable elements map to a detail
+// shown in the shared KPI modal. Rebuilt on every render.
+let tgtDetail = {};
+let tgtChartDays = [];
+function openTgtDetail(key) {
+  const d = tgtDetail[key];
+  if (!d) return;
+  openKpiModal(d.title, d.subtitle);
+  $('#kpiModalBody').innerHTML = d.html || '';
+}
+const detTable = rows => `<table class="det-table"><tbody>${rows.map(([k, v]) => `<tr><th>${esc(k)}</th><td>${esc(String(v))}</td></tr>`).join('')}</tbody></table>`;
 function saveTargets() {
   try { localStorage.setItem(TARGETS_KEY, JSON.stringify(allTargets)); } catch (_) {}
 }
@@ -3672,15 +3683,38 @@ function channelAchievementTable(valueByCh, mt, elapsed, totalDays, commissionRa
 }
 
 function planCard(p, remaining) {
+  tgtDetail[`plan:${p.channel}`] = {
+    title: `${p.channel}: channel plan`,
+    subtitle: `${p.stance} · ${p.planning ? 'Projected' : 'Achieved'} AED ${money(p.achieved)} of AED ${money(p.target)} target`,
+    html: `<p class="muted small">Estimates only. Each promotion shows its own assumption.</p>`
+      + (p.guard ? `<div class="cp-guard">${esc(p.guard)}</div>` : '')
+      + detTable([
+        ['Target (AED)', money(p.target)], [p.planning ? 'Projected (AED)' : 'Achieved (AED)', money(p.achieved)],
+        ['Gap (AED)', money(p.gap)], ['Commission', p.commissionPct + '%'], ['Discount', p.discPct + '%'],
+        ['AOV (AED)', p.aov], ['Cancel rate', p.cancelRate + '%'], ['Budget cap (AED)', money(p.budget)],
+        ['Est. uplift (AED)', money(p.uplift)], ['Coverage', p.coverage == null ? '–' : p.coverage + '%'],
+        ['Stretch gap (AED)', money(p.stretch)]
+      ])
+  };
+  p.promos.forEach((x, i) => {
+    tgtDetail[`promo:${p.channel}:${i}`] = {
+      title: x.title, subtitle: `${p.channel} · ${p.stance}`,
+      html: detTable([
+        ['Mechanic', x.mechanic], ['When', x.when], ['Duration (days)', remaining], ['Effort', x.effort],
+        ['Budget cap (AED)', money(x.budget)], ['Est. uplift (AED)', money(x.uplift)],
+        ['Counted in coverage', x.counts ? 'Yes' : 'No'], ['Assumption', x.assumption]
+      ])
+    };
+  });
   const promos = p.promos.length
-    ? p.promos.map(x => `<li class="cp-promo${x.counts ? '' : ' cp-muted'}">
+    ? p.promos.map((x, i) => `<li class="cp-promo${x.counts ? '' : ' cp-muted'}" data-tgt="promo:${esc(p.channel)}:${i}" tabindex="0" role="button">
         <div class="cp-ptitle">${esc(x.title)}${x.counts ? '' : ' <span class="cp-tag">not counted in coverage</span>'}</div>
         <div class="cp-pmeta">When: ${esc(x.when)} · Duration: ${remaining} days · Effort: ${esc(x.effort)}</div>
         <div class="cp-pmeta">Budget cap AED ${money(x.budget)} · Est. uplift AED ${money(x.uplift)}</div>
         <div class="cp-assume">${esc(x.mechanic)}. ${esc(x.assumption)}</div>
       </li>`).join('')
     : '<li class="muted small">No promotion needed: the channel is on pace and no rule fired.</li>';
-  return `<div class="cp-card">
+  return `<div class="cp-card" data-tgt="plan:${esc(p.channel)}" tabindex="0" role="button">
     <div class="cp-head"><b>${esc(p.channel)}</b> <span class="stance ${STANCE_CLASS[p.stance] || 'st-bal'}">${esc(p.stance)}</span> ${ragChip(p.rag)}</div>
     <div class="cp-stats">Target AED ${money(p.target)} · ${p.planning ? 'Projected' : 'Achieved'} AED ${money(p.achieved)} (${p.pct == null ? '–' : pc(p.pct, 0)}) · Gap AED ${money(p.gap)}</div>
     <div class="cp-stats muted small">Commission ${p.commissionPct}% · Discount ${p.discPct}% · AOV AED ${p.aov} · Cancel rate ${p.cancelRate}%</div>
@@ -3695,7 +3729,14 @@ function calendarHtml(cal) {
   const head = `<tr><th>Channel</th>${cal.weeks.map(w => `<th>${esc(w)}</th>`).join('')}<th class="num">Budget</th></tr>`;
   const body = cal.rows.filter(r => r.budget > 0).map(r => `<tr>
       <td><b>${esc(r.channel)}</b><div class="muted small">${esc(r.stance)}</div></td>
-      ${r.cells.map(c => `<td>${c.map(x => `<div class="cal-chip">${esc(x.title)}<span>AED ${money(x.budget)}</span></div>`).join('')}</td>`).join('')}
+      ${r.cells.map((c, wi) => `<td>${c.map((x, ci) => {
+        const key = `cal:${r.channel}:${wi}:${ci}`;
+        tgtDetail[key] = {
+          title: x.title, subtitle: `${r.channel} · ${cal.weeks[wi]}`,
+          html: detTable([['Stance', r.stance], ['Budget this week (AED)', money(x.budget)], ['Channel budget, all weeks (AED)', money(r.budget)], ['Week', cal.weeks[wi]]])
+        };
+        return `<div class="cal-chip" data-tgt="${esc(key)}" tabindex="0" role="button">${esc(x.title)}<span>AED ${money(x.budget)}</span></div>`;
+      }).join('')}</td>`).join('')}
       <td class="num">AED ${money(r.budget)}</td>
     </tr>`).join('');
   const foot = `<tr class="cal-total"><td>Total</td>${cal.weekBudget.map(b => `<td class="num">AED ${money(b)}</td>`).join('')}<td class="num">AED ${money(cal.total)}</td></tr>`;
@@ -3703,7 +3744,11 @@ function calendarHtml(cal) {
 }
 
 function playbookCard(r) {
-  return `<div class="pb-card pb-${r.priority.toLowerCase()}">
+  tgtDetail[`pb:${r.id}`] = {
+    title: r.title, subtitle: `${r.type} · ${r.priority} priority`,
+    html: detTable([['Evidence', r.evidence], ['Est. impact (AED)', r.impact > 0 ? money(r.impact) : 'Not quantified'], ['Effort', r.effort], ['Assumption', r.assumption]])
+  };
+  return `<div class="pb-card pb-${r.priority.toLowerCase()}" data-tgt="pb:${esc(r.id)}" tabindex="0" role="button">
     <div class="pb-top"><span class="pb-type">${esc(r.type)}</span><span class="pb-prio">${esc(r.priority)} priority</span></div>
     <h4>${esc(r.title)}</h4>
     <p class="pb-ev">${esc(r.evidence)}</p>
@@ -3764,7 +3809,7 @@ function renderTargets() {
   const goSetup = () => { const el = document.getElementById('tgtSetup'); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' }); };
   const noop = () => {};
   const targetCell = ['Net Sales Target', hasTarget ? money(tgt.sales) : '–', false, goSetup, false, 'Monthly Net Sales target for the current selection. Click to edit targets in Target Setup.', 'nav'];
-  kpis('kpi-targets', planning ? [
+  const kpiList = planning ? [
     targetCell,
     ['Projected Net Sales', money(achievedSel), false, noop, false, 'Last 30 days of Net Sales per day, multiplied by the days in the month, for the current selection.', ''],
     ['Projected % of Target', pctTxt, false, noop, false, 'Projected Net Sales / Net Sales target.', ''],
@@ -3781,26 +3826,45 @@ function renderTargets() {
     ['Projected Month-End', money(ach.projected) + (hasTarget ? ` <span class="muted small">(${pc(ach.projected / tgt.sales, 0)} of target)</span>` : ''), false, noop, false, 'Current daily run-rate x days in month.', ''],
     ['Orders vs Target', ordAch.target ? `${cnt(live.length)} / ${cnt(ordAch.target)}` : cnt(live.length), false, noop, false, 'Non-cancelled orders this month against the orders target.', ''],
     ['Status', ragChip(rag), false, noop, false, 'On track: achieved is at least 98% of the pro-rated target for today. At risk: 90% to 98%. Off track: below 90%.', '']
+  ];
+  // kpis() stops propagation on tile clicks, so each tile opens its detail through its own handler.
+  kpiList.forEach(k => { k[3] = () => openTgtDetail('kpi:' + k[0]); });
+  kpis('kpi-targets', kpiList);
+  // Every KPI tile opens the same breakdown of the inputs behind the figures.
+  const kpiInputs = detTable([
+    ['Scope', tgt.scope],
+    ['Month', monthLabel(mKey)],
+    ['Days in month', totalDays],
+    ['Days with data', planning ? '0 (month not started)' : elapsed],
+    ['Target (AED)', hasTarget ? money(tgt.sales) : '–'],
+    [planning ? 'Projected (AED)' : 'Achieved (AED)', money(achievedSel)],
+    ['Gap (AED)', gapTxt],
+    ['Run-rate per day (AED)', money(planning ? achievedSel / totalDays : ach.currentDaily)],
+    ['Orders (projected or achieved / target)', `${cnt(ordersSel)} / ${cnt(ordAch.target)}`]
   ]);
+  kpiList.forEach(k => { tgtDetail['kpi:' + k[0]] = { title: k[0], subtitle: k[5] || '', html: kpiInputs }; });
 
   // Pace chart. Planning: target path vs run-rate projection. In progress: actual vs target vs projected.
   const dayKeys = Array.from({ length: totalDays }, (_, i) => mKey + '-' + pad(i + 1));
   const targetPath = dayKeys.map((_, i) => +(tgt.sales * (i + 1) / totalDays).toFixed(2));
+  const perDay = new Map();
+  live.forEach(o => { const k = dkey(o.receivedAt); perDay.set(k, (perDay.get(k) || 0) + o.netSales); });
+  let run = 0;
+  const actual = dayKeys.map((k, i) => { if (i + 1 > elapsed) return null; run += perDay.get(k) || 0; return +run.toFixed(2); });
+  const projected = dayKeys.map((_, i) => planning
+    ? +(achievedSel / totalDays * (i + 1)).toFixed(2)
+    : (i + 1 < elapsed ? null : +(ach.currentDaily * (i + 1)).toFixed(2)));
+  tgtChartDays = dayKeys.map((k, i) => ({ k, target: targetPath[i], actual: planning ? null : actual[i], projected: projected[i] }));
   if (planning) {
     lineChart('c-tgtpace', dayKeys.map(k => k.slice(8)), [
       { name: 'Target path', data: targetPath, color: BLUE },
-      { name: 'Projected (last-30-day run-rate)', data: dayKeys.map((_, i) => +(achievedSel / totalDays * (i + 1)).toFixed(2)), color: Y }
+      { name: 'Projected (last-30-day run-rate)', data: projected, color: Y }
     ], { fmt: money, smooth: false });
   } else {
-    const perDay = new Map();
-    live.forEach(o => { const k = dkey(o.receivedAt); perDay.set(k, (perDay.get(k) || 0) + o.netSales); });
-    let run = 0;
-    const actual = dayKeys.map((k, i) => { if (i + 1 > elapsed) return null; run += perDay.get(k) || 0; return +run.toFixed(2); });
-    const projPath = dayKeys.map((_, i) => (i + 1 < elapsed ? null : +(ach.currentDaily * (i + 1)).toFixed(2)));
     lineChart('c-tgtpace', dayKeys.map(k => k.slice(8)), [
       { name: 'Actual', data: actual, color: Y },
       { name: 'Target path', data: targetPath, color: BLUE },
-      { name: 'Projected', data: projPath, color: '#9a9a9a' }
+      { name: 'Projected', data: projected, color: '#9a9a9a' }
     ], { fmt: money, smooth: false });
   }
 
@@ -3895,12 +3959,42 @@ function wireTargetsPage() {
   const page = $('#page-targets');
   if (page) page.addEventListener('click', e => {
     const row = e.target.closest && e.target.closest('tr.tgt-row');
-    if (!row) return;
-    const key = row.dataset.key;
-    S.f.channel = S.f.channel === key ? 'All' : key;
-    syncFilterUI();
-    render();
+    if (row) {
+      const key = row.dataset.key;
+      S.f.channel = S.f.channel === key ? 'All' : key;
+      syncFilterUI();
+      render();
+      return;
+    }
+    const kpiTile = e.target.closest && e.target.closest('#kpi-targets .kpi');
+    if (kpiTile) { openTgtDetail('kpi:' + kpiTile.querySelector('.kh').textContent); return; }
+    const el = e.target.closest && e.target.closest('[data-tgt]');
+    if (el) openTgtDetail(el.dataset.tgt);
   });
+  if (page) page.addEventListener('keydown', e => {
+    if (e.key !== 'Enter') return;
+    const el = e.target.closest && e.target.closest('[data-tgt]');
+    if (el) openTgtDetail(el.dataset.tgt);
+  });
+  // Pace chart: clicking a point opens that day's figures.
+  const pace = document.getElementById('c-tgtpace');
+  if (pace) pace.onclick = evt => {
+    const chart = Chart.getChart('c-tgtpace');
+    if (!chart) return;
+    const hit = chart.getElementsAtEventForMode(evt, 'index', { intersect: false }, false)[0];
+    const d = hit && tgtChartDays[hit.index];
+    if (!d) return;
+    tgtDetail['chart:day'] = {
+      title: `Day ${d.k}`, subtitle: 'Cumulative Net Sales up to this day',
+      html: detTable([
+        ['Target path (AED)', money(d.target)],
+        ['Actual (AED)', d.actual == null ? '–' : money(d.actual)],
+        ['Projected (AED)', d.projected == null ? '–' : money(d.projected)],
+        ['Actual minus target (AED)', d.actual == null ? '–' : money(d.actual - d.target)]
+      ])
+    };
+    openTgtDetail('chart:day');
+  };
   const rs = $('#tgtResplit'); if (rs) rs.onclick = () => { recomputeSplit(tgtMonth, true); renderTargets(); };
   const csv = $('#tgtCsv'); if (csv) csv.onclick = downloadPlanCsv;
 }
