@@ -32,3 +32,12 @@ node server.js
 # Dashboard runs at:
 http://localhost:3000
 ```
+
+## Targets & Growth (`#targets`)
+- Monthly Net Sales and Orders targets for the company and for each channel. There are no brand targets.
+- Targets are entered per month in Target Setup and kept per browser (localStorage `fh_targets_v1`, keyed `YYYY-MM`). Editing the company target auto-splits it across channels by last-30-day sales share, adjusted for commission (`FHGrowth.splitTarget`). Editing a channel locks it as Manual; "Re-split automatically" clears the locks.
+- The page defaults to next month. Before a month starts, figures are projections from the last 30 days (Planning mode). Once it starts, they are achieved to date against a pro-rated target.
+- Status (RAG): On track at 98% or more of the pro-rated target (or projection), At risk 90% to 98%, Off track below 90%.
+- Channel promotion plans (`FHGrowth.channelPlans`): per-channel stance (Push volume, Protect margin, Fix first, Balanced), promotions with budget caps and estimated uplift. Estimates only, built from stated assumptions.
+- Promotion calendar (`FHGrowth.promoCalendar`): Monday-start weeks for the remaining days of the month.
+- Company-wide actions (`FHGrowth.playbook`): cancellations, rating risk, and menu items. Logic is in `public/growth.js`; thresholds are in `CONFIG`.

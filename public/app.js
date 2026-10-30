@@ -385,7 +385,8 @@ const FILTERS = {
   commission: [['dates', 'Received At'], ['channel', 'Channel'], ['brand', 'Brand'], ['location', 'Location']],
   ebitda: [['dates', 'Received At'], ['channel', 'Channel'], ['brand', 'Brand'], ['location', 'Location']],
   export: [['dates', 'Received At'], ['brand', 'Brand'], ['location', 'Location']],
-  comparison: [['location', 'Location']]
+  comparison: [['location', 'Location']],
+  targets: [['channel', 'Channel']]
 };
 
 function optionsFor(key) {
@@ -3517,8 +3518,396 @@ function renderAccounting() {
   }
 }
 
+// ================= PAGE: TARGETS & GROWTH =================
+// Company and channel monthly targets. There are no brand targets. Targets are
+// entered by the user and kept per browser, keyed by YYYY-MM. Channel targets
+// are auto-split from the company target by margin-weighted sales share; any
+// channel the user edits is locked as manual. Rules live in growth.js (FHGrowth).
+const TARGETS_KEY = 'fh_targets_v1';
+const EMPTY_MONTH_TARGETS = () => ({ company: { sales: 0, orders: 0 }, channels: {} });
+const RAG_LABEL = { on: 'On track', risk: 'At risk', off: 'Off track', none: 'No target' };
+const ragChip = r => `<span class="rag rag-${r}">${RAG_LABEL[r]}</span>`;
+const STANCE_CLASS = { 'Push volume': 'st-push', 'Protect margin': 'st-protect', 'Fix first': 'st-fix', 'Balanced': 'st-bal' };
+let allTargets = (() => { try { const raw = localStorage.getItem(TARGETS_KEY); return raw ? JSON.parse(raw) : {}; } catch (_) { return {}; } })();
+let tgtMonth = null;
+let tgtLast = null;
+function saveTargets() {
+  try { localStorage.setItem(TARGETS_KEY, JSON.stringify(allTargets)); } catch (_) {}
+}
+function monthTargetsOf(mKey) { return allTargets[mKey] || EMPTY_MONTH_TARGETS(); }
+function latestKey() { return S.orders.length ? dkey(Math.max(...S.orders.map(o => o.receivedAt))) : null; }
+
+// Targets are company-wide, so this page scopes only by the channel filter.
+// Brand and location filters set elsewhere are not applied here.
+function tgtOrders() { return S.orders.filter(o => eq(o.channel, S.f.channel)); }
+
+// Target for the current selection: the company target, or the sum of the
+// selected channels' targets when a channel filter is set.
+function targetForSelection(mt) {
+  const f = S.f;
+  if (f.channel === 'All') return { ...mt.company, scope: 'Company' };
+  const keys = Array.isArray(f.channel) ? f.channel : [f.channel];
+  const t = keys.reduce((a, k) => {
+    const r = mt.channels[k] || {};
+    a.sales += +r.sales || 0; a.orders += +r.orders || 0;
+    return a;
+  }, { sales: 0, orders: 0 });
+  return { ...t, scope: keys.join(', ') };
+}
+
+// Last day with data, clipped to the target month. Null if the month has not started.
+function tgtAsOf(mKey) {
+  const latest = latestKey();
+  if (!latest || latest < mKey + '-01') return null;
+  const monthEnd = mKey + '-' + pad(FHGrowth.daysInMonth(mKey));
+  return latest > monthEnd ? monthEnd : latest;
+}
+
+// Auto-split: recompute every channel that is not locked as manual. Sales
+// shares and commission come from the last 30 days of orders.
+function recomputeSplit(mKey, resetManual = false) {
+  const mt = allTargets[mKey] || (allTargets[mKey] = EMPTY_MONTH_TARGETS());
+  if (resetManual) Object.values(mt.channels).forEach(r => { r.manual = false; });
+  const latest = latestKey();
+  if (!latest) return;
+  const from = FHGrowth.addDaysKey(latest, -29);
+  const sales30 = {}, orders30 = {}, commissionRates = {};
+  S.orders.filter(o => !o.cancelled && dkey(o.receivedAt) >= from && dkey(o.receivedAt) <= latest).forEach(o => {
+    sales30[o.channel] = (sales30[o.channel] || 0) + o.netSales;
+    orders30[o.channel] = (orders30[o.channel] || 0) + 1;
+  });
+  const asOfMs = Math.max(...S.orders.map(o => o.receivedAt));
+  Object.keys(sales30).forEach(ch => { commissionRates[ch] = FHCommission.rateForChannel(ch, asOfMs); });
+  const split = FHGrowth.splitTarget({ total: mt.company.sales, orderTotal: mt.company.orders, sales30, orders30, commissionRates });
+  Object.keys(split).forEach(ch => {
+    const row = mt.channels[ch] || (mt.channels[ch] = { sales: 0, orders: 0, manual: false });
+    if (row.manual) return;
+    row.sales = split[ch].sales;
+    row.orders = split[ch].orders;
+    row.basis = { sharePct: split[ch].sharePct, commissionPct: split[ch].commissionPct };
+  });
+  saveTargets();
+}
+
+function setTarget(mKey, dim, key, metric, value) {
+  const mt = allTargets[mKey] || (allTargets[mKey] = EMPTY_MONTH_TARGETS());
+  const v = Math.max(0, +value || 0);
+  if (dim === 'company') {
+    mt.company[metric] = v;
+    recomputeSplit(mKey);
+    return;
+  }
+  const row = mt.channels[key] || (mt.channels[key] = { sales: 0, orders: 0, manual: false });
+  row[metric] = v;
+  row.manual = true;
+  saveTargets();
+}
+
+function renderTargetSetup(mKey, mt) {
+  const latest = latestKey();
+  const channels = uniq([...S.orders.map(o => o.channel), ...Object.keys(mt.channels)]).filter(Boolean).sort();
+  const cell = (dim, key, metric, val, step) =>
+    `<input class="tgt-in" type="number" min="0" step="${step}" data-dim="${dim}" data-key="${esc(key)}" data-metric="${metric}" value="${val || ''}" placeholder="0">`;
+  const row = (label, dim, key, t, extra = '') => `<tr>
+      <td>${esc(label)}</td>
+      <td class="num">${cell(dim, key, 'sales', t.sales, 100)}</td>
+      <td class="num">${cell(dim, key, 'orders', t.orders, 10)}</td>
+      <td class="num">${t.orders ? money(t.sales / t.orders) : '–'}</td>
+      ${extra}
+    </tr>`;
+  const chRows = channels.map(ch => {
+    const r = mt.channels[ch] || { sales: 0, orders: 0 };
+    const b = r.basis;
+    const basis = b ? `${b.sharePct}% sales · ${b.commissionPct}% comm.` : '–';
+    const mode = r.manual ? '<span class="mode mode-manual">Manual</span>' : '<span class="mode mode-auto">Auto</span>';
+    return row(ch, 'channel', ch, r, `<td class="muted small">${basis}</td><td>${mode}</td>`);
+  }).join('');
+  const sumCh = Object.values(mt.channels).reduce((s, r) => s + (+r.sales || 0), 0);
+  const diff = mt.company.sales - sumCh;
+  const footNote = !mt.company.sales ? 'Set a company target to split it across channels.'
+    : Math.abs(diff) < 5 ? `Channels add up to the company target.`
+    : diff > 0 ? `Channels total AED ${money(sumCh)}: AED ${money(diff)} of the company target is unallocated.`
+    : `Channels total AED ${money(sumCh)}: over-allocated by AED ${money(-diff)} against the company target.`;
+  $('#tgtSetupTable').innerHTML = `<thead><tr><th>Scope</th><th class="num">Net Sales target (AED)</th><th class="num">Orders target</th><th class="num">Implied AOV</th><th>Split basis</th><th>Mode</th></tr></thead><tbody>${
+    row('Company', 'company', '', mt.company, '<td></td><td></td>')
+  }${chRows}</tbody>`;
+  $('#tgtSetupNote').textContent = footNote + (latest ? '' : ' No order data loaded yet.');
+}
+
+function nextMonthKey(k) {
+  const [y, m] = k.split('-').map(Number);
+  return new Date(Date.UTC(y, m, 1)).toISOString().slice(0, 7);
+}
+function monthLabel(mKey) {
+  return new Date(mKey + '-01T00:00:00Z').toLocaleString('en', { month: 'long', year: 'numeric', timeZone: 'UTC' });
+}
+
+// Per-channel rows, worst first. In planning mode the figures are projections.
+// Row click filters the page to that channel.
+function channelAchievementTable(valueByCh, mt, elapsed, totalDays, commissionRates, planning) {
+  const keys = uniq([...S.orders.map(o => o.channel), ...Object.keys(mt.channels)]).filter(Boolean);
+  const active = S.f.channel;
+  const rows = keys.map(k => {
+    const achieved = valueByCh[k] || 0;
+    const t = mt.channels[k] || { sales: 0, orders: 0 };
+    const a = FHGrowth.achievement({ achieved, target: +t.sales || 0, elapsedDays: planning ? 0 : elapsed, totalDays });
+    const rag = t.sales > 0 ? (planning ? FHGrowth.projectedRag(achieved, +t.sales) : a.rag) : 'none';
+    return { k, t, a, achieved, rag, isActive: active === k };
+  }).filter(r => r.t.sales > 0 || r.achieved > 0);
+  rows.sort((x, y) => (x.a.pct ?? Infinity) - (y.a.pct ?? Infinity));
+  if (!rows.length) return '<tbody><tr><td class="muted small">No channel sales or targets for this month yet.</td></tr></tbody>';
+  const head = planning ? 'Projected' : 'Achieved';
+  return `<thead><tr><th>Channel</th><th class="num">Target</th><th class="num">${head}</th><th class="num">%</th><th class="num">Gap</th><th class="num">Need / day</th><th class="num">Commission</th><th>Status</th></tr></thead><tbody>${
+    rows.map(r => `<tr class="tgt-row${r.isActive ? ' on' : ''}" data-key="${esc(r.k)}">
+      <td><b>${esc(r.k)}</b></td>
+      <td class="num">${r.t.sales ? money(r.t.sales) : '–'}</td>
+      <td class="num">${money(r.achieved)}</td>
+      <td class="num">${r.a.pct == null ? '–' : pc(r.a.pct, 1)}</td>
+      <td class="num ${r.a.gap > 0 && r.t.sales ? 'neg' : 'pos'}">${r.t.sales ? (r.a.gap > 0 ? money(r.a.gap) : '+' + money(-r.a.gap)) : '–'}</td>
+      <td class="num">${r.t.sales && r.a.remainingDays ? money(r.a.requiredDaily) : '–'}</td>
+      <td class="num">${Math.round((commissionRates[r.k] || 0) * 100)}%</td>
+      <td>${ragChip(r.rag)}</td>
+    </tr>`).join('')
+  }</tbody>`;
+}
+
+function planCard(p, remaining) {
+  const promos = p.promos.length
+    ? p.promos.map(x => `<li class="cp-promo${x.counts ? '' : ' cp-muted'}">
+        <div class="cp-ptitle">${esc(x.title)}${x.counts ? '' : ' <span class="cp-tag">not counted in coverage</span>'}</div>
+        <div class="cp-pmeta">When: ${esc(x.when)} · Duration: ${remaining} days · Effort: ${esc(x.effort)}</div>
+        <div class="cp-pmeta">Budget cap AED ${money(x.budget)} · Est. uplift AED ${money(x.uplift)}</div>
+        <div class="cp-assume">${esc(x.mechanic)}. ${esc(x.assumption)}</div>
+      </li>`).join('')
+    : '<li class="muted small">No promotion needed: the channel is on pace and no rule fired.</li>';
+  return `<div class="cp-card">
+    <div class="cp-head"><b>${esc(p.channel)}</b> <span class="stance ${STANCE_CLASS[p.stance] || 'st-bal'}">${esc(p.stance)}</span> ${ragChip(p.rag)}</div>
+    <div class="cp-stats">Target AED ${money(p.target)} · ${p.planning ? 'Projected' : 'Achieved'} AED ${money(p.achieved)} (${p.pct == null ? '–' : pc(p.pct, 0)}) · Gap AED ${money(p.gap)}</div>
+    <div class="cp-stats muted small">Commission ${p.commissionPct}% · Discount ${p.discPct}% · AOV AED ${p.aov} · Cancel rate ${p.cancelRate}%</div>
+    ${p.guard ? `<div class="cp-guard">${esc(p.guard)}</div>` : ''}
+    <ol class="cp-promos">${promos}</ol>
+    <div class="cp-foot">Budget cap AED ${money(p.budget)} · Est. uplift AED ${money(p.uplift)}${p.coverage == null ? '' : ` · covers ${p.coverage}% of gap`}${p.stretch > 0 ? ` · stretch AED ${money(p.stretch)}` : ''}</div>
+  </div>`;
+}
+
+function calendarHtml(cal) {
+  if (!cal.weeks.length) return '<div class="muted small">No days left in this month.</div>';
+  const head = `<tr><th>Channel</th>${cal.weeks.map(w => `<th>${esc(w)}</th>`).join('')}<th class="num">Budget</th></tr>`;
+  const body = cal.rows.filter(r => r.budget > 0).map(r => `<tr>
+      <td><b>${esc(r.channel)}</b><div class="muted small">${esc(r.stance)}</div></td>
+      ${r.cells.map(c => `<td>${c.map(x => `<div class="cal-chip">${esc(x.title)}<span>AED ${money(x.budget)}</span></div>`).join('')}</td>`).join('')}
+      <td class="num">AED ${money(r.budget)}</td>
+    </tr>`).join('');
+  const foot = `<tr class="cal-total"><td>Total</td>${cal.weekBudget.map(b => `<td class="num">AED ${money(b)}</td>`).join('')}<td class="num">AED ${money(cal.total)}</td></tr>`;
+  return `<table class="cal-table"><thead>${head}</thead><tbody>${body || `<tr><td colspan="${cal.weeks.length + 2}" class="muted small">No promotions with a budget for the remaining days.</td></tr>`}${foot}</tbody></table>`;
+}
+
+function playbookCard(r) {
+  return `<div class="pb-card pb-${r.priority.toLowerCase()}">
+    <div class="pb-top"><span class="pb-type">${esc(r.type)}</span><span class="pb-prio">${esc(r.priority)} priority</span></div>
+    <h4>${esc(r.title)}</h4>
+    <p class="pb-ev">${esc(r.evidence)}</p>
+    <div class="pb-foot"><span class="pb-impact">${r.impact > 0 ? '≈ AED ' + money(r.impact) + ' (est.)' : 'Not quantified'}</span><span class="pb-eff">Effort: ${esc(r.effort)}</span></div>
+    <div class="pb-assume">Assumption: ${esc(r.assumption)}</div>
+  </div>`;
+}
+
+function renderTargets() {
+  const mon = $('#tgtMonth');
+  const latest = latestKey();
+  if (!tgtMonth) tgtMonth = latest ? nextMonthKey(latest.slice(0, 7)) : new Date().toISOString().slice(0, 7);
+  if (mon) mon.value = tgtMonth;
+  const mKey = tgtMonth;
+  const mt = monthTargetsOf(mKey);
+  const totalDays = FHGrowth.daysInMonth(mKey);
+  const asOf = tgtAsOf(mKey);
+  const planning = !asOf;                       // month not started: project from the last 30 days
+  const elapsed = asOf ? +asOf.slice(8) : 0;
+  const inThisMonth = o => dkey(o.receivedAt).slice(0, 7) === mKey;
+
+  // Last 30 days of orders: the run-rate that projects a month that has not started.
+  const from30 = latest ? FHGrowth.addDaysKey(latest, -29) : '';
+  const trailing = S.orders.filter(o => latest && dkey(o.receivedAt) >= from30 && dkey(o.receivedAt) <= latest);
+  const trailingLive = trailing.filter(o => !o.cancelled);
+  const forecastByCh = {}, ordersByCh = {};
+  trailingLive.forEach(o => {
+    forecastByCh[o.channel] = (forecastByCh[o.channel] || 0) + o.netSales / 30 * totalDays;
+    ordersByCh[o.channel] = (ordersByCh[o.channel] || 0) + totalDays / 30;
+  });
+  const dailyRunRate = sum(trailingLive, o => o.netSales) / 30;
+
+  const scoped = tgtOrders();
+  const inMonth = scoped.filter(inThisMonth);
+  const live = inMonth.filter(o => !o.cancelled);
+  const allMonth = S.orders.filter(inThisMonth);
+  const allLive = allMonth.filter(o => !o.cancelled);
+  const achievedByCh = {};
+  allLive.forEach(o => { achievedByCh[o.channel] = (achievedByCh[o.channel] || 0) + o.netSales; });
+
+  const tgt = targetForSelection(mt);
+  const selKeys = S.f.channel === 'All' ? Object.keys(forecastByCh) : [].concat(S.f.channel);
+  const selSum = map => sum(selKeys, k => map[k] || 0);
+  const achievedSel = planning ? selSum(forecastByCh) : sum(live, o => o.netSales);
+  const ordersSel = planning ? selSum(ordersByCh) : live.length;
+  const ach = FHGrowth.achievement({ achieved: achievedSel, target: tgt.sales, elapsedDays: planning ? 0 : elapsed, totalDays });
+  const ordAch = FHGrowth.achievement({ achieved: ordersSel, target: tgt.orders, elapsedDays: planning ? 0 : elapsed, totalDays });
+  const hasTarget = tgt.sales > 0;
+  const rag = hasTarget ? (planning ? FHGrowth.projectedRag(achievedSel, tgt.sales) : ach.rag) : 'none';
+  const gapTxt = hasTarget ? (ach.gap > 0 ? money(ach.gap) : 'Ahead by ' + money(-ach.gap)) : '–';
+  const pctTxt = hasTarget && ach.pct != null ? pc(ach.pct, 1) : '–';
+
+  const scopeNote = $('#tgtScopeNote');
+  if (scopeNote) scopeNote.textContent = planning
+    ? `Planning ${monthLabel(mKey)}: the month has not started, so figures are projected from the last 30 days. Brand and location filters do not change targets.`
+    : `Showing ${tgt.scope === 'Company' ? 'company' : 'channel'} target: ${tgt.scope}. Brand and location filters do not change targets.` + (!asOf ? ' No orders yet for this month.' : '');
+
+  const goSetup = () => { const el = document.getElementById('tgtSetup'); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' }); };
+  const noop = () => {};
+  const targetCell = ['Net Sales Target', hasTarget ? money(tgt.sales) : '–', false, goSetup, false, 'Monthly Net Sales target for the current selection. Click to edit targets in Target Setup.', 'nav'];
+  kpis('kpi-targets', planning ? [
+    targetCell,
+    ['Projected Net Sales', money(achievedSel), false, noop, false, 'Last 30 days of Net Sales per day, multiplied by the days in the month, for the current selection.', ''],
+    ['Projected % of Target', pctTxt, false, noop, false, 'Projected Net Sales / Net Sales target.', ''],
+    ['Gap to Target', gapTxt, false, noop, false, 'Target minus projected Net Sales. Negative means the projection already beats target.', ''],
+    ['Target / Day vs Run-rate / Day', hasTarget ? `${money(tgt.sales / totalDays)} / ${money(achievedSel / totalDays)}` : money(achievedSel / totalDays), true, noop, false, 'Net Sales per day the target needs, against the last-30-day run-rate per day.', ''],
+    ['Projected Orders', `${cnt(ordersSel)} / ${cnt(ordAch.target)}`, false, noop, false, 'Projected non-cancelled orders for the month against the orders target.', ''],
+    ['Status', ragChip(rag), false, noop, false, 'Projection vs target: On track at 98% or more, At risk 90% to 98%, Off track below 90%.', '']
+  ] : [
+    targetCell,
+    ['Achieved MTD', money(achievedSel), false, noop, false, 'Net Sales for the selected month to date, excluding cancelled orders.', ''],
+    ['Achievement %', pctTxt, false, noop, false, 'Achieved Net Sales / Net Sales target.', ''],
+    ['Gap to Target', gapTxt, false, noop, false, 'Target minus achieved. Negative means the target is already beaten.', ''],
+    ['Need / Day vs Current / Day', hasTarget && ach.remainingDays ? `${money(ach.requiredDaily)} / ${money(ach.currentDaily)}` : money(ach.currentDaily), true, noop, false, 'Net Sales per day still needed to hit target, against the current daily run-rate.', ''],
+    ['Projected Month-End', money(ach.projected) + (hasTarget ? ` <span class="muted small">(${pc(ach.projected / tgt.sales, 0)} of target)</span>` : ''), false, noop, false, 'Current daily run-rate x days in month.', ''],
+    ['Orders vs Target', ordAch.target ? `${cnt(live.length)} / ${cnt(ordAch.target)}` : cnt(live.length), false, noop, false, 'Non-cancelled orders this month against the orders target.', ''],
+    ['Status', ragChip(rag), false, noop, false, 'On track: achieved is at least 98% of the pro-rated target for today. At risk: 90% to 98%. Off track: below 90%.', '']
+  ]);
+
+  // Pace chart. Planning: target path vs run-rate projection. In progress: actual vs target vs projected.
+  const dayKeys = Array.from({ length: totalDays }, (_, i) => mKey + '-' + pad(i + 1));
+  const targetPath = dayKeys.map((_, i) => +(tgt.sales * (i + 1) / totalDays).toFixed(2));
+  if (planning) {
+    lineChart('c-tgtpace', dayKeys.map(k => k.slice(8)), [
+      { name: 'Target path', data: targetPath, color: BLUE },
+      { name: 'Projected (last-30-day run-rate)', data: dayKeys.map((_, i) => +(achievedSel / totalDays * (i + 1)).toFixed(2)), color: Y }
+    ], { fmt: money, smooth: false });
+  } else {
+    const perDay = new Map();
+    live.forEach(o => { const k = dkey(o.receivedAt); perDay.set(k, (perDay.get(k) || 0) + o.netSales); });
+    let run = 0;
+    const actual = dayKeys.map((k, i) => { if (i + 1 > elapsed) return null; run += perDay.get(k) || 0; return +run.toFixed(2); });
+    const projPath = dayKeys.map((_, i) => (i + 1 < elapsed ? null : +(ach.currentDaily * (i + 1)).toFixed(2)));
+    lineChart('c-tgtpace', dayKeys.map(k => k.slice(8)), [
+      { name: 'Actual', data: actual, color: Y },
+      { name: 'Target path', data: targetPath, color: BLUE },
+      { name: 'Projected', data: projPath, color: '#9a9a9a' }
+    ], { fmt: money, smooth: false });
+  }
+
+  const commissionRates = {};
+  const asOfMs = S.orders.length ? Math.max(...S.orders.map(o => o.receivedAt)) : Date.now();
+  uniq([...S.orders.map(o => o.channel), ...Object.keys(mt.channels)]).filter(Boolean).forEach(ch => { commissionRates[ch] = FHCommission.rateForChannel(ch, asOfMs); });
+
+  renderTargetSetup(mKey, mt);
+  $('#tgtChannelTable').innerHTML = channelAchievementTable(planning ? forecastByCh : achievedByCh, mt, elapsed, totalDays, commissionRates, planning);
+
+  // Channel promotion plans. History is the last 30 days, cancelled orders included.
+  const history = trailing.map(o => ({
+    key: dkey(o.receivedAt), channel: o.channel, netSales: o.netSales, receiptTotal: o.receiptTotal,
+    discount: o.discount, cancelled: o.cancelled, hour: dubaiHour(o.receivedAt)
+  }));
+  const monthRows = planning ? [] : allMonth.map(o => ({ channel: o.channel, cancelled: o.cancelled, netSales: o.netSales }));
+  const targets = {};
+  Object.keys(mt.channels).forEach(ch => { targets[ch] = { sales: +mt.channels[ch].sales || 0, orders: +mt.channels[ch].orders || 0 }; });
+  const { plans, baseline } = FHGrowth.channelPlans({
+    history, monthRows, targets, commissionRates,
+    forecast: planning ? forecastByCh : undefined,
+    elapsedDays: elapsed, totalDays, remainingDays: ach.remainingDays, monthKey: mKey, asOfDay: elapsed
+  });
+  const cal = FHGrowth.promoCalendar(plans, { monthKey: mKey, totalDays, asOfDay: elapsed });
+
+  const totalGap = sum(plans, p => p.gap);
+  const totalUplift = sum(plans, p => p.uplift);
+  const totalBudget = sum(plans, p => p.budget);
+  const coverTxt = totalGap > 0 ? ` (covers ${pc(Math.min(totalUplift, totalGap) / totalGap, 0)} of the gap)` : '';
+  const planSummary = $('#tgtPlanSummary');
+  if (planning) {
+    const projAll = sum(Object.values(forecastByCh), v => v);
+    planSummary.innerHTML = `Plan for <b>${monthLabel(mKey)}</b>: projected Net Sales <b>AED ${money(projAll)}</b> from the last 30 days. Channel gap <b>AED ${money(totalGap)}</b> · Plan budget cap <b>AED ${money(totalBudget)}</b> · Est. uplift <b>AED ${money(totalUplift)}</b>${coverTxt}. Company-wide baseline: discount ${baseline.discPct}%, cancel rate ${baseline.cancelRate}%.`;
+  } else if (!asOf) planSummary.innerHTML = 'No orders for this month yet, so there is nothing to plan.';
+  else if (!plans.length) planSummary.innerHTML = 'No channel has enough orders (20 in 30 days) or a target yet.';
+  else planSummary.innerHTML = `Channel gap: <b>AED ${money(totalGap)}</b> · Plan budget cap: <b>AED ${money(totalBudget)}</b> · Est. uplift: <b>AED ${money(totalUplift)}</b>${coverTxt}. Company-wide baseline: discount ${baseline.discPct}%, cancel rate ${baseline.cancelRate}%.`;
+  $('#tgtPlans').innerHTML = plans.map(p => planCard(p, ach.remainingDays)).join('');
+  $('#tgtCalendar').innerHTML = calendarHtml(cal);
+
+  // Company-wide actions. Planning uses the last 30 days; otherwise the selected month.
+  const actionOrders = planning ? trailing : allMonth;
+  const liveIds = new Set((planning ? trailingLive : allLive).map(o => o.id));
+  const menuLines = S.lineItems.filter(x => x.type === 'Menu Item' && liveIds.has(x.orderId));
+  const eventRows = S.items.filter(x => planning ? (latest && dkey(x.at) >= from30 && dkey(x.at) <= latest) : inThisMonth(x));
+  const events = eventRows.map(x => ({ item: x.item, dayKey: dkey(x.at) }));
+  const pb = (planning || elapsed > 0)
+    ? FHGrowth.playbook({ orders: actionOrders, target: tgt.sales, achieved: achievedSel, elapsedDays: planning ? 30 : elapsed, lineItems: menuLines, events })
+    : { recs: [], gap: 0, estimated: 0, covered: 0 };
+  tgtLast = { plans, cal, pb, remaining: ach.remainingDays };
+
+  const summary = $('#tgtPlaybookSummary');
+  summary.innerHTML = asOf || planning
+    ? 'Company-wide actions that apply across every channel: cancellations, service quality, and menu. Estimates only.'
+    : '';
+  const group = g => {
+    const list = pb.recs.filter(r => r.group === g).slice(0, 8);
+    const empty = g === 'Menu' && !menuLines.length
+      ? 'Menu actions need line-item data, which is not loaded for this selection.'
+      : `No ${g.toLowerCase()} actions for this period. More data may be needed.`;
+    return `<div class="pb-group">${g}</div>` + (list.length ? list.map(playbookCard).join('') : `<div class="muted small pb-empty">${empty}</div>`);
+  };
+  $('#tgtPlaybook').innerHTML = group('Operations') + group('Menu');
+}
+
+function downloadPlanCsv() {
+  if (!tgtLast) return;
+  const headers = ['Section', 'Channel / Group', 'Stance / Priority', 'Action', 'Detail', 'When', 'Duration (days)', 'Effort', 'Budget cap (AED)', 'Est. impact (AED)', 'Assumption'];
+  const rows = [];
+  tgtLast.plans.forEach(p => p.promos.forEach(x => rows.push({
+    Section: 'Channel promotion', 'Channel / Group': p.channel, 'Stance / Priority': p.stance, Action: x.title,
+    Detail: x.mechanic + (x.counts ? '' : ' (not counted in coverage)'), When: x.when, 'Duration (days)': tgtLast.remaining,
+    Effort: x.effort, 'Budget cap (AED)': x.budget, 'Est. impact (AED)': x.uplift, Assumption: x.assumption
+  })));
+  tgtLast.pb.recs.forEach(r => rows.push({
+    Section: 'Company action', 'Channel / Group': r.group, 'Stance / Priority': r.priority, Action: r.title,
+    Detail: r.evidence, When: 'Ongoing', 'Duration (days)': '', Effort: r.effort,
+    'Budget cap (AED)': '', 'Est. impact (AED)': r.impact, Assumption: r.assumption
+  }));
+  downloadCSV(`FoodHive_targets_plan_${tgtMonth}.csv`, headers, rows);
+}
+
+function wireTargetsPage() {
+  const mon = $('#tgtMonth');
+  if (mon) mon.onchange = e => { if (e.target.value) { tgtMonth = e.target.value; renderTargets(); } };
+  const setup = $('#tgtSetupTable');
+  if (setup) setup.onchange = e => {
+    const t = e.target;
+    if (!t.matches || !t.matches('.tgt-in')) return;
+    setTarget(tgtMonth, t.dataset.dim, t.dataset.key, t.dataset.metric, t.value);
+    renderTargets();
+  };
+  const page = $('#page-targets');
+  if (page) page.addEventListener('click', e => {
+    const row = e.target.closest && e.target.closest('tr.tgt-row');
+    if (!row) return;
+    const key = row.dataset.key;
+    S.f.channel = S.f.channel === key ? 'All' : key;
+    syncFilterUI();
+    render();
+  });
+  const rs = $('#tgtResplit'); if (rs) rs.onclick = () => { recomputeSplit(tgtMonth, true); renderTargets(); };
+  const csv = $('#tgtCsv'); if (csv) csv.onclick = downloadPlanCsv;
+}
+wireTargetsPage();
+
 // ---------------- render & navigation ----------------
-const RENDER = { sales: renderSales, cancel: renderCancel, prep: renderPrep, ratings: renderRatings, items: renderItemsPage, delayed: renderDelayed, commission: renderCommission, ebitda: renderEbitda, comparison: renderComparison, accounting: renderAccounting, export: renderExport };
+const RENDER = { sales: renderSales, cancel: renderCancel, prep: renderPrep, ratings: renderRatings, items: renderItemsPage, delayed: renderDelayed, commission: renderCommission, ebitda: renderEbitda, targets: renderTargets, comparison: renderComparison, accounting: renderAccounting, export: renderExport };
 function render() { RENDER[S.page](); }
 
 function show(page) {
