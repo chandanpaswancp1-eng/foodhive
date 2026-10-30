@@ -41,3 +41,6 @@ http://localhost:3000
 - Channel promotion plans (`FHGrowth.channelPlans`): per-channel stance (Push volume, Protect margin, Fix first, Balanced), promotions with budget caps and estimated uplift. Estimates only, built from stated assumptions.
 - Promotion calendar (`FHGrowth.promoCalendar`): Monday-start weeks for the remaining days of the month.
 - Company-wide actions (`FHGrowth.playbook`): cancellations, rating risk, and menu items. Logic is in `public/growth.js`; thresholds are in `CONFIG`.
+- Channel requirements (`FHGrowth.channelRequirements`, contract facts in `CHANNEL_REQUIREMENTS`): commission, per-order floors, orders below the floor, discount vs company, AOV, p75 basket, brand coverage, peak hours. Facts that cannot be tracked per order are listed as not applied.
+- Recommended campaign per channel (`FHGrowth.campaignBrief`): one headline campaign chosen by rule (Fix First, Direct Channel Upgrade, Volume Build, Discount Reset, Assortment Expansion, Funded Visibility, Peak-Hour Bundle). Briefs open in the detail modal and go into the CSV.
+- Marketing budget per channel is an optional override in Target Setup. Below the auto cap it scales uplift and budget down proportionally; above the cap it is flagged and uplift is not increased. Entering a budget does not lock the sales split. Counted uplift is capped at the channel gap.

@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>FOOD HIVE · Operations &amp; Sales Dashboard</title>
 <link rel="icon" href="assets/favicon.png">
-<link rel="stylesheet" href="style.css?v=3.18">
+<link rel="stylesheet" href="style.css?v=3.19">
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.2.0/dist/chartjs-plugin-datalabels.min.js"></script>
 <!-- xlsx-js-style: a drop-in SheetJS fork (same XLSX.* API used for CSV/XLSX import)
@@ -369,6 +369,10 @@
           <div class="ph">Channel Targets vs Achievement <span class="muted small">(click a row to filter the page)</span></div>
           <div class="tbl-wrap"><table id="tgtChannelTable"></table></div>
         </div>
+        <div class="panel a-reqs">
+          <div class="ph">Channel Requirements <span class="muted small">(commission, floors, discount, basket and peak hours; click a row for contract facts)</span></div>
+          <div class="tbl-wrap"><table id="tgtReqTable"></table></div>
+        </div>
         <div class="panel a-plans">
           <div class="ph">Channel Promotion Plans <span class="muted small">(what to run on each channel to close its gap; estimates)</span>
             <button type="button" class="pp-btn tgt-csv" id="tgtCsv">Download CSV</button>
@@ -559,7 +563,7 @@
 
 <script src="normalize.js?v=3.11"></script>
 <script src="commission.js?v=3.11"></script>
-<script src="growth.js?v=1.4"></script>
-<script src="app.js?v=3.34"></script>
+<script src="growth.js?v=1.5"></script>
+<script src="app.js?v=3.35"></script>
 </body>
 </html>
