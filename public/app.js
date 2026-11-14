@@ -4883,6 +4883,38 @@ async function waitForBackgroundSync(since, opts = {}) {
     } catch (_) {}
   }, 2 * 60 * 1000);
 
+  // 4. Live view: every 5 s pull today's orders straight from GrubCENTER via
+  // /api/live (shared and cached server-side for 5 s, never written to
+  // storage) and merge them in. Fields the live feed lacks, such as prep
+  // timings from the full sync, are kept. Repaints only when something
+  // actually changed, so an idle dashboard does not redraw its charts.
+  // Compared against the current S.orders every time (not the previous live
+  // response): the 2-minute refresh can swap in an older stored copy, and
+  // the next live poll must restore today's newer orders.
+  let liveBusy = false;
+  setInterval(async () => {
+    if (liveBusy || document.visibilityState === 'hidden' || S.source !== 'live') return;
+    liveBusy = true;
+    try {
+      const d = await fetch('/api/live').then(r => r.json());
+      if (!d || !d.ok || !Array.isArray(d.orders) || !d.orders.length) return;
+      const byId = new Map(S.orders.map(o => [String(o.id), o]));
+      let changed = false;
+      for (const o of d.orders) {
+        const id = String(o.id), prev = byId.get(id);
+        if (!prev) { byId.set(id, o); changed = true; continue; }
+        const next = { ...prev };
+        for (const k in o) if (o[k] != null && o[k] !== '') next[k] = o[k];
+        if (next.netSales !== prev.netSales || next.cancelled !== prev.cancelled || next.reason !== prev.reason) changed = true;
+        byId.set(id, next);
+      }
+      if (!changed) return;
+      const orders = [...byId.values()];
+      setData(orders, null, null, 'live', `● Live · GrubCENTER (${orders.length})`, { preserveFilters: true });
+    } catch (_) {
+    } finally { liveBusy = false; }
+  }, 5000);
+
   window.S = S;
   window.show = show;
   window.render = render;

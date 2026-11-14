@@ -13,7 +13,8 @@ FoodHive Operations & Sales Analytics Dashboard — an exact visual and function
     - `/api/refresh`: Manually triggers background sync.
 - **Frontend**: Vanilla JavaScript (`public/app.js`), Chart.js 4.4.1 + ChartDataLabels plugin, CSS (`public/style.css`), HTML (`public/index.html`).
   - Pre-rendered HTML for instant (<15ms) first contentful paint.
-  - Client auto-refresh polling every 10 minutes.
+  - Client auto-refresh polling every 2 minutes; the server's full GrubCENTER sync runs every 10 minutes.
+  - Live view: every 5 seconds the client polls `/api/live`, which returns today's orders and cancellations straight from GrubCENTER. The server shares one result for 5 seconds across all viewers and never writes it to storage. Prep timings and older days still come from the full sync.
   - Color palette: Primary Yellow (`#FDCB3C`), Dark Charcoal (`#1d1d1d`), Slate Line (`#d9dfe1`), Accent Blue (`#1b2a9b`).
 
 ## 6 Analytics Pages

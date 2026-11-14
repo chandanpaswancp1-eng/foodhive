@@ -25,3 +25,4 @@ shots/
 data/all_orders.json
 data/order_items.json
 data/zoho_cache.json
+data/items_snapshot_events.json
