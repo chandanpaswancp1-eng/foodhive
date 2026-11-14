@@ -194,7 +194,8 @@
     type: ['type', 'itemtype'],
     source: ['source', 'itemsource', 'updatedby', 'origin'],
     at: ['unavailableat', 'date', 'datetime', 'timestamp', 'occurredon', 'changedat', 'updatedat', 'createdat', 'time'],
-    cuisine: ALIASES.cuisine
+    cuisine: ALIASES.cuisine,
+    action: ['actiontype', 'action', 'status']
   };
   function isItemDataset(rows) {
     if (!rows.length) return false;
@@ -207,7 +208,10 @@
     Object.keys(rows[0]).forEach(k => (lookup[key(k)] = k));
     const map = {};
     for (const f in ITEM_ALIASES) for (const a of ITEM_ALIASES[f]) if (lookup[a]) { map[f] = lookup[a]; break; }
-    return rows.map(r => ({
+    // The GrubCENTER availability export logs both directions. Only
+    // "Unavailable" rows are 86 events; "Available" means back in stock.
+    const live = map.action ? rows.filter(r => !/^\s*available\s*$/i.test(str(r[map.action]))) : rows;
+    return live.map(r => ({
       item: str(r[map.item]) || '(Blank)',
       brand: str(r[map.brand]) || '(Blank)',
       cuisine: str(r[map.cuisine]) || 'No Cluster',
@@ -216,6 +220,41 @@
       source: str(r[map.source]) || 'Master',
       at: toDate(r[map.at])
     })).filter(x => x.at);
+  }
+
+  // GrubCENTER /operations-data/item-availability/snapshot/ returns every
+  // menu item and modifier with its CURRENT status. Each "Unavailable" row
+  // becomes one 86 event dated when it went unavailable. Times come back
+  // zone-less for the Asia/Dubai timezone the request asks for, so they are
+  // read as +04:00. Items that went 86 and came back between two syncs are
+  // not in a snapshot and cannot be recovered from it.
+  const SNAPSHOT_SOURCE = 'GrubCENTER Snapshot';
+  function snapshotToItemEvents(rows) {
+    return (rows || []).filter(r => r && /^\s*unavailable\s*$/i.test(str(r.status))).map(r => {
+      const raw = str(r.lastItemAvailabilityUpdated);
+      const m = raw.match(/^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}(?::\d{2})?)$/);
+      const isMod = /modif/i.test(str(r.itemType));
+      const name = isMod ? str(r.modifier) : str(r.menuItem);
+      return {
+        item: (name && name !== '-' ? name : str(r.menuItem) || str(r.modifier)) || '(Blank)',
+        brand: str(r.brand) || '(Blank)',
+        cuisine: 'No Cluster',
+        location: str(r.location) || '(Blank)',
+        type: isMod ? 'Modifier' : 'Menu Item',
+        source: SNAPSHOT_SOURCE,
+        at: m ? Date.parse(`${m[1]}T${m[2].length === 5 ? m[2] + ':00' : m[2]}+04:00`) : null
+      };
+    }).filter(x => x.at);
+  }
+  // Union of 86 event lists, deduped on item + brand + location + time.
+  function mergeItemEvents(...lists) {
+    const seen = new Map();
+    for (const list of lists) for (const x of list || []) {
+      if (!x || !x.at) continue;
+      const k = [x.item, x.brand, x.location, x.at].join('|').toLowerCase();
+      if (!seen.has(k)) seen.set(k, x);
+    }
+    return [...seen.values()].sort((a, b) => a.at - b.at);
   }
 
   // per-order line-item sales ("menu item sold" rows, incl. modifier sub-rows)
@@ -261,5 +300,5 @@
     }).filter(x => x.orderId && x.at);
   }
 
-  return { normalizeOrders, normalizeItems, normalizeOrderItems, isItemDataset, toDate, key };
+  return { normalizeOrders, normalizeItems, normalizeOrderItems, snapshotToItemEvents, mergeItemEvents, SNAPSHOT_SOURCE, isItemDataset, toDate, key };
 });

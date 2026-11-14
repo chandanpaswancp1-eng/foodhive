@@ -4,7 +4,10 @@
  * module-level variable, since nothing here can rely on surviving between
  * invocations other than what's written to the Blob store. */
 const N = require('../../public/normalize.js');
-const { readOrders, writeOrders, readItems, readOrderItems, writeOrderItems, readMeta, writeMeta, readBlobJson } = require('./store');
+const { readOrders, writeOrders, readItems, writeItems, readOrderItems, writeOrderItems, readMeta, writeMeta, readBlobJson } = require('./store');
+// Historical 86 events from the original GrubCENTER export (raw rows,
+// including "Available" back-in-stock rows that normalizeItems drops).
+const SEED_ITEMS = require('../../data/cached_items.json');
 
 const E = process.env;
 const CFG = {
@@ -223,6 +226,28 @@ async function fetchDayWithRetry(pathPart, day, maxPages, session, pid) {
   }
 }
 
+// Item availability snapshot: every item and modifier with its current
+// status, about 24,000 rows, because each modifier is listed once per item
+// that uses it, so identical rows are real and must not end paging early.
+// Large pages keep it to about 5 requests (~7 s). Stops on the first empty page.
+async function fetchItemsSnapshot(session) {
+  const pid = findPartnerId(session.claims);
+  const day = today(), LIMIT = 5000, MAX_PAGES = 20;
+  let lastErr;
+  for (const base of CFG.apiBases) {
+    try {
+      const all = [];
+      for (let page = 0; page < MAX_PAGES; page++) {
+        const rows = await fetchOnePage(base, CFG.itemsPath, pid, { ...bounds(day, day), limit: LIMIT, offset: page * LIMIT }, session);
+        if (!rows.length) return all;
+        all.push(...rows);
+      }
+      throw new Error(`item snapshot exceeded ${MAX_PAGES * LIMIT} rows`);
+    } catch (e) { lastErr = e; }
+  }
+  throw lastErr;
+}
+
 async function fetchPaged(pathPart, from, to, maxPages, session) {
   const pid = findPartnerId(session.claims);
   const days = dayChunks(from, to);
@@ -299,6 +324,8 @@ async function syncOnce(from, to, itemsFrom) {
   const rawOps = await fetchPaged(CFG.opsPath, f, t, 20, session).catch(() => []);
   const rawCancels = await fetchPaged(CFG.cancelPath, f, t, 10, session).catch(() => []);
   const rawOrderItems = await fetchPaged(CFG.orderItemsPath, orderItemsFrom, t, 25, session).catch(() => []);
+  // Current item availability (one snapshot, not a date range).
+  const rawItemsSnapshot = await fetchItemsSnapshot(session).catch(e => { console.warn('[sync] item availability:', e.message); return []; });
   const failedDays = {
     orders: rawSales.failedDays || [],
     ops: rawOps.failedDays || [],
@@ -413,6 +440,18 @@ async function syncOnce(from, to, itemsFrom) {
     .concat(normOrderItems.filter(hasValidDate));
   await writeOrderItems(orderItemsArray);
 
+  // 86 items: rebuild the log from the seed export (re-normalized, which
+  // drops its "Available" rows), every snapshot event kept by earlier
+  // syncs, and the items currently Unavailable. Skipped when the snapshot
+  // fetch failed (empty), so a bad pull never wipes the stored log.
+  let itemsCount = null;
+  if (rawItemsSnapshot.length) {
+    const kept = (await readItems()).filter(x => x && x.source === N.SNAPSHOT_SOURCE);
+    const items = N.mergeItemEvents(N.normalizeItems(SEED_ITEMS), kept, N.snapshotToItemEvents(rawItemsSnapshot));
+    await writeItems(items);
+    itemsCount = items.length;
+  }
+
   await writeMeta({
     lastSync: allDaysFailed ? (meta.lastSync || 0) : Date.now(),
     session,
@@ -427,6 +466,7 @@ async function syncOnce(from, to, itemsFrom) {
     opsCount: rawOps.length,
     cancelCount: rawCancels.length,
     orderItemsCount: orderItemsArray.length,
+    itemsCount,
     failedDays
   };
 }
@@ -435,4 +475,74 @@ async function syncOnce(from, to, itemsFrom) {
 // seeded into the Blob store once (see scripts/seed-blob.js) rather than read off local disk.
 const readBlobOfficialBrands = () => readBlobJson('official_foodhive_brands.json', null);
 
-module.exports = { CFG, configured, ensureSession, findPartnerId, syncOnce, readOrders, writeOrders, readItems, readOrderItems, writeOrderItems, readMeta, dubaiDateKey };
+// ---------- Live view (polled every 5 s by the dashboard) ----------
+// Pulls only TODAY's orders and cancellations straight from GrubCENTER and
+// returns them without writing to the Blob store, so a 5-second poll costs
+// two small API calls and no storage writes. Results are shared for
+// LIVE_TTL_MS across every viewer on a warm instance, and concurrent calls
+// share one in-flight request, so more open tabs do not mean more
+// GrubCENTER traffic. Prep timings, line items and older days still come
+// from the regular sync.
+const LIVE_TTL_MS = 5000;
+const live = { at: 0, data: null, promise: null, session: null, official: null, officialAt: 0 };
+
+async function liveSession() {
+  if (live.session && live.session.exp > Date.now()) return live.session;
+  const meta = await readMeta();
+  const s = await ensureSession(meta.session);
+  // Persist a freshly logged-in session so neither the next cold instance
+  // nor the sync has to log in again.
+  if (s !== meta.session) await writeMeta({ ...(await readMeta()), session: s }).catch(() => {});
+  return (live.session = s);
+}
+
+async function liveOfficialBrands() {
+  if (live.officialAt && Date.now() - live.officialAt < 10 * 60 * 1000) return live.official;
+  const list = await readBlobOfficialBrands().catch(() => null);
+  live.official = list ? new Set(list.map(b => b.toLowerCase().trim())) : null;
+  live.officialAt = Date.now();
+  return live.official;
+}
+
+async function liveToday() {
+  if (live.data && Date.now() - live.at < LIVE_TTL_MS) return live.data;
+  if (live.promise) return live.promise;
+  live.promise = (async () => {
+    const session = await liveSession();
+    const pid = findPartnerId(session.claims);
+    const day = today();
+    const [rawSales, rawCancels] = await Promise.all([
+      fetchPagedOneRange(CFG.ordersPath, day, day, 5, session, pid),
+      fetchPagedOneRange(CFG.cancelPath, day, day, 2, session, pid).catch(() => [])
+    ]);
+    const data = { day, at: Date.now(), orders: liveNormalize(rawSales, rawCancels, await liveOfficialBrands()) };
+    live.data = data; live.at = data.at;
+    return data;
+  })().finally(() => { live.promise = null; });
+  return live.promise;
+}
+
+// Same cancellation, reopen, official-brand and test-fixture rules as
+// syncOnce, applied to one day's rows.
+function liveNormalize(rawSales, rawCancels, official) {
+  const cancelMap = new Map();
+  rawCancels.forEach(c => {
+    if (c.uniqueOrderId) cancelMap.set(String(c.uniqueOrderId), c);
+    if (c.orderId) cancelMap.set(String(c.orderId), c);
+  });
+  const merged = rawSales.map(s => {
+    const cl = cancelMap.get(String(s.orderId || s.id || '')) || cancelMap.get(String(s.externalId || '')) || {};
+    const reopened = REOPENED_RE.test(cl.reason || '');
+    return {
+      ...s,
+      cancelled: (cl.reason && !reopened) ? true : (s.cancelled || false),
+      postCancelled: cl.postCancelled === 'Yes' || cl.postCancelled === true,
+      reason: reopened ? (s.cancellationReason || s.reason || '') : (cl.reason || s.cancellationReason || s.reason || '')
+    };
+  });
+  return N.normalizeOrders(merged).filter(o =>
+    o.brand !== 'TEST BRAND' && o.channel !== 'Grubtech Test' &&
+    (!official || (o.brand && official.has(String(o.brand).toLowerCase().trim()))));
+}
+
+module.exports = { CFG, configured, ensureSession, findPartnerId, syncOnce, liveToday, liveNormalize, readOrders, writeOrders, readItems, readOrderItems, writeOrderItems, readMeta, dubaiDateKey };

@@ -12,6 +12,7 @@
     "api/orders.js": { "maxDuration": 60 },
     "api/order-items.js": { "maxDuration": 60 },
     "api/refresh.js": { "maxDuration": 60 },
+    "api/live.js": { "maxDuration": 20 },
     "api/accounting.js": { "maxDuration": 60 },
     "api/accounting/refresh.js": { "maxDuration": 60 }
   }

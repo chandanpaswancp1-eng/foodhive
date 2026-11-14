@@ -259,6 +259,29 @@ async function fetchDayWithRetry(pathPart, day, maxPages, s, pid) {
   return null; // distinguish "failed" from "legitimately 0 orders that day"
 }
 
+// Item availability snapshot: every item and modifier with its current
+// status, about 24,000 rows, because each modifier is listed once per item
+// that uses it, so identical rows are real and must not end paging early.
+// Large pages keep it to about 5 requests. Stops on the first empty page.
+async function fetchItemsSnapshot() {
+  const s = await ensureSession();
+  const pid = findPartnerId(s.claims);
+  const day = today(), LIMIT = 5000, MAX_PAGES = 20;
+  let lastErr;
+  for (const base of CFG.apiBases) {
+    try {
+      const all = [];
+      for (let page = 0; page < MAX_PAGES; page++) {
+        const rows = await fetchOnePage(base, CFG.itemsPath, pid, { ...bounds(day, day), limit: LIMIT, offset: page * LIMIT });
+        if (!rows.length) return all;
+        all.push(...rows);
+      }
+      throw new Error(`item snapshot exceeded ${MAX_PAGES * LIMIT} rows`);
+    } catch (e) { lastErr = e; }
+  }
+  throw lastErr;
+}
+
 async function fetchPaged(pathPart, from, to, maxPages = 20) {
   const s = await ensureSession();
   const pid = findPartnerId(s.claims);
@@ -352,6 +375,11 @@ function preloadData() {
   if (fs.existsSync(itemsFile)) {
     try { STORE.itemsArray = N.normalizeItems(JSON.parse(fs.readFileSync(itemsFile, 'utf8'))); } catch (_) {}
   }
+  // 86 events captured from live GrubCENTER snapshots by earlier syncs.
+  const snapFile = path.join(__dirname, 'data', 'items_snapshot_events.json');
+  if (fs.existsSync(snapFile)) {
+    try { STORE.itemsArray = N.mergeItemEvents(STORE.itemsArray, JSON.parse(fs.readFileSync(snapFile, 'utf8'))); } catch (_) {}
+  }
 
   if (fs.existsSync(orderItemsFile)) {
     try { STORE.orderItemsArray = JSON.parse(fs.readFileSync(orderItemsFile, 'utf8')); } catch (_) {}
@@ -427,6 +455,8 @@ async function runSync(from, to, itemsFrom) {
     const rawOps = await fetchPaged(CFG.opsPath, f, t, 20).catch(err => { console.warn('Ops warning:', err.message); return []; });
     const rawCancels = await fetchPaged(CFG.cancelPath, f, t, 10).catch(err => { console.warn('Cancel warning:', err.message); return []; });
     const rawOrderItems = await fetchPaged(CFG.orderItemsPath, oiFrom, t, 25).catch(err => { console.warn('Order-items warning:', err.message); return []; });
+    // Current item availability (one snapshot, not a date range).
+    const rawItemsSnapshot = await fetchItemsSnapshot().catch(err => { console.warn('Item availability warning:', err.message); return []; });
 
     const opsMap = new Map();
     rawOps.forEach(o => {
@@ -541,9 +571,64 @@ async function runSync(from, to, itemsFrom) {
     // "losing" thousands of orders. rename() is atomic on one filesystem.
     persistJson('all_orders.json', STORE.ordersArray);
     persistJson('order_items.json', STORE.orderItemsArray);
+
+    // 86 items: add the items currently Unavailable in GrubCENTER to the
+    // event log. Skipped when the snapshot fetch failed (empty), so a bad
+    // pull never wipes anything.
+    if (rawItemsSnapshot.length) {
+      const fresh = N.mergeItemEvents(N.snapshotToItemEvents(rawItemsSnapshot));
+      STORE.itemsArray = N.mergeItemEvents(STORE.itemsArray, fresh);
+      persistJson('items_snapshot_events.json', STORE.itemsArray.filter(x => x.source === N.SNAPSHOT_SOURCE));
+      console.log(`[GrubCENTER Sync Complete] ${fresh.length} items currently 86'd, ${STORE.itemsArray.length} 86 events in store`);
+    }
   } catch (err) {
     console.error('[GrubCENTER Sync Error]', err.message);
   }
+}
+
+// ---------- Live view (polled every 5 s by the dashboard) ----------
+// Today's orders and cancellations straight from GrubCENTER, shared for 5 s
+// across all viewers and never written to the cache files. Same rules as
+// runSync for cancellations, reopened orders, official brands and the test
+// fixture. Prep timings and older days still come from the regular sync.
+const LIVE_TTL_MS = 5000;
+const live = { at: 0, data: null, promise: null };
+async function liveToday() {
+  if (live.data && Date.now() - live.at < LIVE_TTL_MS) return live.data;
+  if (live.promise) return live.promise;
+  live.promise = (async () => {
+    const s = await ensureSession();
+    const pid = findPartnerId(s.claims);
+    const day = today();
+    const [rawSales, rawCancels] = await Promise.all([
+      fetchPagedOneRange(CFG.ordersPath, day, day, 5, s, pid),
+      fetchPagedOneRange(CFG.cancelPath, day, day, 2, s, pid).catch(() => [])
+    ]);
+    const cancelMap = new Map();
+    rawCancels.forEach(c => {
+      if (c.uniqueOrderId) cancelMap.set(String(c.uniqueOrderId), c);
+      if (c.orderId) cancelMap.set(String(c.orderId), c);
+    });
+    const merged = rawSales.map(o => {
+      const cl = cancelMap.get(String(o.orderId || o.id || '')) || cancelMap.get(String(o.externalId || '')) || {};
+      const reopened = REOPENED_RE.test(cl.reason || '');
+      return {
+        ...o,
+        cancelled: (cl.reason && !reopened) ? true : (o.cancelled || false),
+        postCancelled: cl.postCancelled === 'Yes' || cl.postCancelled === true,
+        reason: reopened ? (o.cancellationReason || o.reason || '') : (cl.reason || o.cancellationReason || o.reason || '')
+      };
+    });
+    let official = null;
+    try { official = new Set(JSON.parse(fs.readFileSync(path.join(__dirname, 'data', 'official_foodhive_brands.json'), 'utf8')).map(b => b.toLowerCase().trim())); } catch (_) {}
+    const orders = N.normalizeOrders(merged).filter(o =>
+      o.brand !== 'TEST BRAND' && o.channel !== 'Grubtech Test' &&
+      (!official || (o.brand && official.has(String(o.brand).toLowerCase().trim()))));
+    live.data = { day, at: Date.now(), orders };
+    live.at = live.data.at;
+    return live.data;
+  })().finally(() => { live.promise = null; });
+  return live.promise;
 }
 
 let bgSyncPromise = null;
@@ -1040,6 +1125,16 @@ http.createServer(async (req, res) => {
         count: STORE.ordersArray.length,
         itemsCount: STORE.itemsArray.length
       });
+    }
+
+    if (u.pathname === '/api/live') {
+      if (!CFG.email || !CFG.password) return sendGzip(req, res, 200, { ok: false, configured: false, orders: [] });
+      try {
+        const d = await liveToday();
+        return sendGzip(req, res, 200, { ok: true, day: d.day, at: d.at, orders: d.orders });
+      } catch (e) {
+        return sendGzip(req, res, 200, { ok: false, error: String(e.message || e).slice(0, 200), orders: [] });
+      }
     }
 
     if (u.pathname === '/api/availability') {
