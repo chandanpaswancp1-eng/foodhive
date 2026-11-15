@@ -4,7 +4,7 @@
  * module-level variable, since nothing here can rely on surviving between
  * invocations other than what's written to the Blob store. */
 const N = require('../../public/normalize.js');
-const { readOrders, writeOrders, readItems, writeItems, readOrderItems, writeOrderItems, readMeta, writeMeta, readBlobJson } = require('./store');
+const { readOrders, writeOrders, readItems, writeItems, readOrderItems, writeOrderItems, readMeta, writeMeta, readBlobJson, writeBlobJson } = require("./store");
 // Historical 86 events from the original GrubCENTER export (raw rows,
 // including "Available" back-in-stock rows that normalizeItems drops).
 const SEED_ITEMS = require('../../data/cached_items.json');
@@ -324,8 +324,6 @@ async function syncOnce(from, to, itemsFrom) {
   const rawOps = await fetchPaged(CFG.opsPath, f, t, 20, session).catch(() => []);
   const rawCancels = await fetchPaged(CFG.cancelPath, f, t, 10, session).catch(() => []);
   const rawOrderItems = await fetchPaged(CFG.orderItemsPath, orderItemsFrom, t, 25, session).catch(() => []);
-  // Current item availability (one snapshot, not a date range).
-  const rawItemsSnapshot = await fetchItemsSnapshot(session).catch(e => { console.warn('[sync] item availability:', e.message); return []; });
   const failedDays = {
     orders: rawSales.failedDays || [],
     ops: rawOps.failedDays || [],
@@ -440,18 +438,6 @@ async function syncOnce(from, to, itemsFrom) {
     .concat(normOrderItems.filter(hasValidDate));
   await writeOrderItems(orderItemsArray);
 
-  // 86 items: rebuild the log from the seed export (re-normalized, which
-  // drops its "Available" rows), every snapshot event kept by earlier
-  // syncs, and the items currently Unavailable. Skipped when the snapshot
-  // fetch failed (empty), so a bad pull never wipes the stored log.
-  let itemsCount = null;
-  if (rawItemsSnapshot.length) {
-    const kept = (await readItems()).filter(x => x && x.source === N.SNAPSHOT_SOURCE);
-    const items = N.mergeItemEvents(N.normalizeItems(SEED_ITEMS), kept, N.snapshotToItemEvents(rawItemsSnapshot));
-    await writeItems(items);
-    itemsCount = items.length;
-  }
-
   await writeMeta({
     lastSync: allDaysFailed ? (meta.lastSync || 0) : Date.now(),
     session,
@@ -466,9 +452,31 @@ async function syncOnce(from, to, itemsFrom) {
     opsCount: rawOps.length,
     cancelCount: rawCancels.length,
     orderItemsCount: orderItemsArray.length,
-    itemsCount,
     failedDays
   };
+}
+
+// 86 items, run in its OWN function invocation (see api/availability.js),
+// not inside syncOnce: the snapshot takes 7-15 s and order line items alone
+// can take 20+ s, so together they pushed syncOnce past Vercel's 60 s limit
+// and the sync was killed before saving lastSync (seen in production logs
+// on 2026-11-15). Rebuilds the log from the seed export (re-normalized,
+// which drops its "Available" rows), every snapshot event kept by earlier
+// runs, and the items currently Unavailable. Skipped when the snapshot
+// fetch fails or comes back empty, so a bad pull never wipes the log.
+const ITEMS_META_KEY = 'items_meta.json';
+const readItemsMeta = () => readBlobJson(ITEMS_META_KEY, { lastSync: 0 });
+async function syncItems() {
+  if (!configured()) return { skipped: true, reason: 'not configured' };
+  const meta = await readMeta();
+  const session = await ensureSession(meta.session);
+  const raw = await fetchItemsSnapshot(session);
+  if (!raw.length) return { ok: false, reason: 'empty snapshot' };
+  const kept = (await readItems()).filter(x => x && x.source === N.SNAPSHOT_SOURCE);
+  const items = N.mergeItemEvents(N.normalizeItems(SEED_ITEMS), kept, N.snapshotToItemEvents(raw));
+  await writeItems(items);
+  await writeBlobJson(ITEMS_META_KEY, { lastSync: Date.now(), rows: raw.length, events: items.length });
+  return { ok: true, rows: raw.length, events: items.length };
 }
 
 // Optional brand allow-list, same convention as server.js's data/official_foodhive_brands.json,
@@ -504,6 +512,21 @@ async function liveOfficialBrands() {
   return live.official;
 }
 
+// One day's rows in as few requests as possible. GrubCENTER returns a
+// little under `limit` rows even when more exist, so a page that comes back
+// close to full means "keep going"; a normal day (under ~400 rows) is then
+// a single request instead of the sync's page-until-empty two.
+async function liveFetchDay(pathPart, day, session, pid) {
+  const LIMIT = 500, all = [], seen = new Set();
+  for (let offset = 0; offset < 5 * LIMIT; offset += LIMIT) {
+    const rows = await fetchOnePage(CFG.apiBases[0], pathPart, pid, { ...bounds(day, day), limit: LIMIT, offset }, session);
+    let added = 0;
+    for (const r of rows) { const k = pagedRowKey(pathPart, r); if (!seen.has(k)) { seen.add(k); all.push(r); added++; } }
+    if (rows.length < LIMIT * 0.8 || !added) break;
+  }
+  return all;
+}
+
 async function liveToday() {
   if (live.data && Date.now() - live.at < LIVE_TTL_MS) return live.data;
   if (live.promise) return live.promise;
@@ -512,8 +535,8 @@ async function liveToday() {
     const pid = findPartnerId(session.claims);
     const day = today();
     const [rawSales, rawCancels] = await Promise.all([
-      fetchPagedOneRange(CFG.ordersPath, day, day, 5, session, pid),
-      fetchPagedOneRange(CFG.cancelPath, day, day, 2, session, pid).catch(() => [])
+      liveFetchDay(CFG.ordersPath, day, session, pid),
+      liveFetchDay(CFG.cancelPath, day, session, pid).catch(() => [])
     ]);
     const data = { day, at: Date.now(), orders: liveNormalize(rawSales, rawCancels, await liveOfficialBrands()) };
     live.data = data; live.at = data.at;
@@ -545,4 +568,4 @@ function liveNormalize(rawSales, rawCancels, official) {
     (!official || (o.brand && official.has(String(o.brand).toLowerCase().trim()))));
 }
 
-module.exports = { CFG, configured, ensureSession, findPartnerId, syncOnce, liveToday, liveNormalize, readOrders, writeOrders, readItems, readOrderItems, writeOrderItems, readMeta, dubaiDateKey };
+module.exports = { CFG, configured, ensureSession, findPartnerId, syncOnce, syncItems, readItemsMeta, liveToday, liveNormalize, readOrders, writeOrders, readItems, readOrderItems, writeOrderItems, readMeta, dubaiDateKey };

@@ -1,19 +1,45 @@
 {
   "framework": null,
   "rewrites": [
-    { "source": "/", "destination": "/public/index.html" },
-    { "source": "/((?!api/).*)", "destination": "/public/$1" }
+    {
+      "source": "/",
+      "destination": "/public/index.html"
+    },
+    {
+      "source": "/((?!api/).*)",
+      "destination": "/public/$1"
+    }
   ],
   "crons": [
-    { "path": "/api/sync-cron", "schedule": "0 23 * * *" }
+    {
+      "path": "/api/sync-cron",
+      "schedule": "0 23 * * *"
+    }
   ],
   "functions": {
-    "api/sync-cron.js": { "maxDuration": 60 },
-    "api/orders.js": { "maxDuration": 60 },
-    "api/order-items.js": { "maxDuration": 60 },
-    "api/refresh.js": { "maxDuration": 60 },
-    "api/live.js": { "maxDuration": 20 },
-    "api/accounting.js": { "maxDuration": 60 },
-    "api/accounting/refresh.js": { "maxDuration": 60 }
+    "api/sync-cron.js": {
+      "maxDuration": 60
+    },
+    "api/orders.js": {
+      "maxDuration": 60
+    },
+    "api/order-items.js": {
+      "maxDuration": 60
+    },
+    "api/refresh.js": {
+      "maxDuration": 60
+    },
+    "api/live.js": {
+      "maxDuration": 30
+    },
+    "api/accounting.js": {
+      "maxDuration": 60
+    },
+    "api/accounting/refresh.js": {
+      "maxDuration": 60
+    },
+    "api/availability.js": {
+      "maxDuration": 60
+    }
   }
 }
