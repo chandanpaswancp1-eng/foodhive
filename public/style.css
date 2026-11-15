@@ -1134,11 +1134,20 @@ tbody tr[onclick]:hover, tr.daily-row:hover { filter: brightness(0.95); }
 .src-help-body p { margin: 8px 0; }
 
 /* ---------- v2: KPI layout for two kitchens ---------- */
-/* At most 8 tiles per row: every tile is at least 1/8 of the row. */
-.kpis > .kpi { flex: 1 1 calc((100% - 56px) / 8); }
-.kpis > .kpi.wide { flex: 2.2 1 calc((100% - 56px) / 8); }
-.kpi-group { flex: 0 0 100%; font: 800 10.5px/1 inherit; letter-spacing: .08em; text-transform: uppercase; color: #5f5f5f; padding: 8px 2px 0; }
-.kpi-group:first-child { padding-top: 0; }
+/* KPI clusters: each page's tiles sit in labelled groups side by side in one
+   band, separated by a thin divider. A cluster grows with its tile count. */
+.kpis.kpis--clustered { gap: 10px 0; align-items: stretch; }
+/* min-width stays auto (= its tiles' minimum): a cluster never squeezes
+   narrower than its tiles; the band wraps to a new line instead. */
+.kpi-cluster { display: flex; flex-direction: column; gap: 5px; flex: 1 1 auto; padding: 0 10px; border-left: 1px solid #d9dfe1; }
+.kpi-cluster:first-child { padding-left: 0; border-left: 0; }
+.kpi-cluster:last-child { padding-right: 0; }
+.kpi-cluster-h { font: 800 10px/1.2 inherit; letter-spacing: .09em; text-transform: uppercase; color: #5f5f5f; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.kpi-cluster-row { display: flex; gap: 6px; flex: 1; }
+.kpi-cluster-row > .kpi { flex: 1 1 0; min-width: 124px; }
+.kpi-cluster-row > .kpi.wide { flex: 2.2 1 0; min-width: 190px; }
+.kpi-cluster-row > .kpi .kv { white-space: nowrap; font-size: clamp(20px, 1.9vw, 28px); }
+.kpi-cluster-row > .kpi.wide .kv { white-space: normal; font-size: 17px; }
 .kpi .ks { display: flex; justify-content: center; gap: 6px; flex-wrap: wrap; font-size: 10.5px; font-weight: 600; color: #555; border-top: 1px dashed #e3e7e8; padding: 4px 6px 5px; font-variant-numeric: tabular-nums; }
 .kpi .ks i { font-style: normal; color: #c3c9cb; }
 .kc-wrap { max-height: none; overflow: auto; padding: 0 6px 6px; }
@@ -1149,7 +1158,7 @@ tbody tr[onclick]:hover, tr.daily-row:hover { filter: brightness(0.95); }
 .kc-table th.kc-h:hover { text-decoration: underline; }
 .kc-table th.kc-h.on { background: var(--y); }
 .kc-table .num { text-align: right; font-variant-numeric: tabular-nums; }
-@media (max-width: 700px) { .kpis > .kpi, .kpis > .kpi.wide { flex: 1 1 calc((100% - 8px) / 2); } }
+@media (max-width: 900px) { .kpi-cluster { flex-basis: 100%; padding: 0; border-left: 0; } .kpi-cluster-row { flex-wrap: wrap; } .kpi-cluster-row > .kpi, .kpi-cluster-row > .kpi.wide { flex: 1 1 calc(50% - 6px); min-width: 0; } }
 
 /* ---------- Discount by Aggregator (Order Details) ---------- */
 .a-discagg { grid-column: span 12; }
@@ -1166,3 +1175,7 @@ tbody tr[onclick]:hover, tr.daily-row:hover { filter: brightness(0.95); }
 .disc-agg tr.on td { background: #fff4c7; }
 .disc-agg td.hi { color: #b3261e; font-weight: 700; }
 .a-discagg .tbl-wrap { max-height: none; overflow-x: auto; overflow-y: visible; }
+/* Beside the filters (Cancellations, Ratings, Items, Delayed) the band keeps its natural width. */
+.top-row-flex .kpi-cluster { flex-grow: 0 !important; }
+.top-row-flex .kpi-cluster-row > .kpi { min-width: 118px; }
+.kpi-cluster-row > .kpi .kv > div { white-space: normal; }

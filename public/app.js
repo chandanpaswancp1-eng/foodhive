@@ -904,8 +904,23 @@ const ACCOUNTING_GROUPS = [
   ['Receivables & Payables', ['A/R Outstanding', 'Overdue Invoices', 'Total Invoices', 'A/P Outstanding', 'Overdue Bills', 'Total Bills', 'Total Procurement Amount', 'Top Vendor Owed']],
   ['Balance Sheet', ['Total Assets', 'Total Liabilities', 'Total Equity']]
 ];
-KPI_ORDER.accounting = ACCOUNTING_GROUPS.flatMap(([, t]) => t);
-const KPI_GROUPS = { accounting: Object.fromEntries(ACCOUNTING_GROUPS.flatMap(([g, t]) => t.map(x => [x, g]))) };
+// Every page's tiles sit in small labelled clusters (one band, side by
+// side): what kind of number each one is, at a glance. The cluster lists also
+// set the tile order within the page.
+const KPI_CLUSTERS = {
+  sales: [['Revenue', ['Net Sales', 'Gross Sales', 'AOV']], ['Volume', ['Total Orders']], ['Discounts', ['Total Discount', 'Discount %']], ['Outlook', ['Projected Month-End', 'Month-End Total', 'Top Performing Brand']]],
+  cancel: [['Cancellations', ['Cancelled Orders Amount', 'Total Cancelled Orders', 'Cancel Rate %', 'Cancelled AOV']], ['Money returned', ['Refund Amount', 'Reverted by Aggregator']]],
+  prep: [['End to end (min)', ['Receiving → Dispatched', 'Received → Delivered']], ['Kitchen stages (min)', ['Acc → Started', 'Started → Prepared', 'Prepared → STD', 'STD → Dispatched']], ['Outlets', ['Best vs Worst Brand Location']]],
+  ratings: [['Ratings', ['Total Ratings', 'Positive Ratings', 'Negative Ratings']], ['Rates', ['Negative Ratings %', 'Polarity rate']]],
+  items: [['Stock-outs', ['86 Items', '86 per 100 Orders']], ['Hotspots', ['Brand with Most 86 Items', 'Location with Most 86 Items']]],
+  delayed: [['Delays', ['Delayed Orders', 'Total Orders']], ['Rates', ['Delayed %', 'Avg Delay (min)']]],
+  commission: [['Commission', ['Total Commission', 'Net after Commission']], ['Rates', ['Blended Commission %', 'Commission % of Gross Sales']], ['Top channel', ['Highest-Commission Channel']]],
+  ebitda: [['Profit', ['Net Sales', 'EBITDA', 'EBITDA Margin %']], ['Cost ratios', ['Food Cost %', 'Prime Cost %', 'Portal Commission %', 'Controllable Profit %']], ['Report', ['Download P&L (PDF)']]],
+  comparison: [['Sales', ['Net Sales Today', 'Net Sales Yesterday']], ['Change', ['Day-over-Day', 'Week-over-Week']], ['Brands', ['Top Gaining Brand', 'Top Declining Brand']]],
+  accounting: ACCOUNTING_GROUPS
+};
+Object.entries(KPI_CLUSTERS).forEach(([pg, groups]) => { KPI_ORDER[pg] = groups.flatMap(([, t]) => t); });
+const KPI_GROUPS = Object.fromEntries(Object.entries(KPI_CLUSTERS).map(([pg, groups]) => [pg, Object.fromEntries(groups.flatMap(([g, t]) => t.map(x => [x, g])))]));
 
 // Stable sort by the page's order; tiles not listed keep their relative
 // position after the listed ones.
@@ -1031,20 +1046,32 @@ function kpis(id, list) {
   const page = id.replace(/^kpi-/, '');
   list = orderKpis(page, list);
   const split = kpiSplitLines(page);
-  let lastGroup = null;
-  container.innerHTML = list.map(([h, v, wide, , isActive, tooltip, kind], idx) => {
+  const groupOf = KPI_GROUPS[page] || {};
+  const tileHtml = ([h, v, wide, , isActive, tooltip, kind], idx) => {
     const act = isActive ? ' active' : '';
     const kindCls = kind && kind !== 'filter' ? ` kpi--${kind}` : '';
     const tip = tooltip ? ` title="${esc(tooltip)}"` : ' title="Click to filter/reflect data"';
-    const grp = (KPI_GROUPS[page] || {})[h];
-    const head = grp && grp !== lastGroup ? `<div class="kpi-group">${esc(grp)}</div>` : '';
-    if (grp) lastGroup = grp;
     const sub = split && split[h] ? `<div class="ks">${split[h]}</div>` : '';
-    return `${head}<div class="kpi${wide ? ' wide' : ''}${act}${kindCls}" data-idx="${idx}"${tip} role="button" tabindex="0">
+    return `<div class="kpi${wide ? ' wide' : ''}${act}${kindCls}" data-idx="${idx}"${tip} role="button" tabindex="0">
       <div class="kh">${h}</div>
       <div class="kv">${v}</div>${sub}
     </div>`;
-  }).join('');
+  };
+  // Consecutive tiles of the same group form one labelled cluster; tiles
+  // without a group (new or page-specific) get a cluster of their own.
+  const clusters = [];
+  list.forEach((t, idx) => {
+    const g = groupOf[t[0]] || '';
+    const last = clusters[clusters.length - 1];
+    if (last && last.g === g && g) last.items.push([t, idx]);
+    else clusters.push({ g, items: [[t, idx]] });
+  });
+  const weight = c => c.items.reduce((w, [t]) => w + (t[2] ? 2.2 : 1), 0);
+  container.classList.add('kpis--clustered');
+  container.innerHTML = clusters.map(c => `<section class="kpi-cluster" style="flex-grow:${weight(c)}"${c.g ? ` aria-label="${esc(c.g)}"` : ''}>
+      ${c.g ? `<div class="kpi-cluster-h">${esc(c.g)}</div>` : ''}
+      <div class="kpi-cluster-row">${c.items.map(([t, idx]) => tileHtml(t, idx)).join('')}</div>
+    </section>`).join('');
 
   container.querySelectorAll('.kpi').forEach(el => {
     const idx = +el.dataset.idx;
@@ -3717,7 +3744,7 @@ function renderAccounting() {
     ['Top Vendor Owed', has ? topVendorOwedLabel(z) : '–', true, drill(() => openAccountingAgingDrillModal('ap')), false, 'The vendor with the highest total outstanding balance across all their bills. Click for the full A/P breakdown.', 'drill'],
     ['Sales Net (orders)', money(grub.netSales), false, () => show('ebitda'), false, 'Net Sales for the current month, from GrubCENTER order data (the real revenue source -- Zoho Books never records sales invoices for this business). Click to see the full P&L on the EBITDA page.', 'nav'],
     ['Portal Commission', money(grub.commission), false, () => show('commission'), false, 'Portal/aggregator commission for the current month, computed from order data. Click to see the full channel breakdown on the Commission page.', 'nav'],
-    ['True Net Profit', has ? money(trueNetProfit) : '–', true, drill(openTrueProfitDrillModal), false, 'GrubCENTER Net Sales − GrubCENTER Commission − Zoho Operating Expenses, for the current month. Click for the full breakdown.', 'drill'],
+    ['True Net Profit', has ? money(trueNetProfit) : '–', false, drill(openTrueProfitDrillModal), false, 'Order Net Sales (both kitchens) − Portal Commission − Zoho Operating Expenses, for the current month. Click for the full breakdown.', 'drill'],
     ['Total Assets', has && z.balanceSheet ? money(z.balanceSheet.totalAssets) : '–', false, (has && z.balanceSheet) ? openBalanceSheetDrillModal : null, false, 'Total assets on the balance sheet, as of today (Zoho Books). Click for the full breakdown.', 'drill'],
     ['Total Liabilities', has && z.balanceSheet ? money(z.balanceSheet.totalLiabilities) : '–', false, (has && z.balanceSheet) ? openBalanceSheetDrillModal : null, false, 'Total liabilities on the balance sheet, as of today (Zoho Books). Click for the full breakdown.', 'drill'],
     ['Total Equity', has && z.balanceSheet ? money(z.balanceSheet.totalEquity) : '–', false, (has && z.balanceSheet) ? openBalanceSheetDrillModal : null, false, "Total equity on the balance sheet, as of today (Zoho Books' own Total Equities figure, cross-checked against Assets − Liabilities). Click for the full breakdown.", 'drill']

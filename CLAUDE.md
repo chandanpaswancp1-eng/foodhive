@@ -44,8 +44,8 @@ http://localhost:3000
 - `mk()` in `public/app.js` unregisters a destroyed chart (`delete charts[id]`); without that, any empty-data redraw left a destroyed chart in `charts` and `patchPct()` crashed Chart.js.
 
 ## KPI layout (two kitchens)
-- Tile order on every page is set in `KPI_ORDER` (`public/app.js`): money, then volume, unit economics, rate or quality, top performer. `kpis()` sorts by title, so a new tile goes into `KPI_ORDER` or lands at the end of the row. At most 8 tiles per row (CSS).
-- Accounting tiles are grouped by `ACCOUNTING_GROUPS` (Profit & Loss, Cash, Receivables & Payables, Balance Sheet).
+- Every page's tiles sit in labelled clusters side by side (`KPI_CLUSTERS` in `public/app.js`; e.g. Order Details: Revenue · Volume · Discounts · Outlook; Accounting: Profit & Loss · Cash · Receivables & Payables · Balance Sheet). The cluster lists also set the tile order. A new tile goes into a cluster; otherwise it gets an unlabelled cluster at the end.
+- Clusters never shrink below their tiles (CSS min-width auto); the band wraps instead. KPI values do not wrap; a value with a note inside (Projected Month-End) wraps its note only.
 - `KITCHEN_CALC[page](kitchen)` computes a page's order-based figures for one kitchen through `base(page, false, kitchen)`. It drives the `MC … | JD …` split line on tiles when the switcher is on All, and the Motor City vs Jaddaf table (`kitchenCompareTable`) that replaced the single-location charts on Order Details, Cancellations, Prep Time and Items. Zoho and Targets tiles are group-level and have no split.
 
 ## Discount by Aggregator (Order Details)
