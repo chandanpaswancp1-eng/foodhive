@@ -139,7 +139,12 @@ function destroyAllCharts() {
 // above). All chart-adjacent motion was removed for that reason; KPI tiles
 // (plain DOM, never touched by Chart.js) are the safe place for motion.
 function mk(id, cfg) {
-  if (charts[id]) charts[id].destroy();
+  // Unregister as well as destroy: with no data (cfg.__empty) no new chart
+  // replaces it, and callers like patchPct() that look a chart up in
+  // charts[id] would otherwise call update() on a destroyed chart, which
+  // throws inside Chart.js ("addEventListener of null"). Reached whenever a
+  // filter leaves a chart empty, e.g. the Jaddaf kitchen before go-live.
+  if (charts[id]) { charts[id].destroy(); delete charts[id]; }
   const el = document.getElementById(id); if (!el) return;
   const p = el.parentElement; $$('.empty', p).forEach(e => e.remove());
   if (cfg.__empty) {
@@ -375,17 +380,19 @@ function base(page, skipDate) {
 }
 
 // ---------------- filter bar configuration ----------------
+// Location is not a per-page filter: the global kitchen switcher in the
+// sidebar sets S.f.location for every page.
 const FILTERS = {
-  sales: [['dates', 'Received At'], ['channel', 'Channel'], ['brand', 'Brand'], ['location', 'Location'], ['payment', 'Payment Method'], ['day', 'Day Name'], ['partner', 'Delivery Partner']],
-  cancel: [['location', 'Location'], ['brand', 'Brand'], ['reason', 'Reason'], ['channel', 'Channel'], ['post', 'Post Cancelled'], ['dates', 'Received At']],
-  prep: [['location', 'Location'], ['brand', 'Brand']],
+  sales: [['dates', 'Received At'], ['channel', 'Channel'], ['brand', 'Brand'], ['payment', 'Payment Method'], ['day', 'Day Name'], ['partner', 'Delivery Partner']],
+  cancel: [['brand', 'Brand'], ['reason', 'Reason'], ['channel', 'Channel'], ['post', 'Post Cancelled'], ['dates', 'Received At']],
+  prep: [['brand', 'Brand']],
   ratings: [['dates', 'Received At']],
-  items: [['location', 'Location'], ['brand', 'Brand'], ['dates', 'Received At']],
-  delayed: [['brand', 'Brand'], ['location', 'Branch'], ['dates', 'Received At']],
-  commission: [['dates', 'Received At'], ['channel', 'Channel'], ['brand', 'Brand'], ['location', 'Location']],
-  ebitda: [['dates', 'Received At'], ['channel', 'Channel'], ['brand', 'Brand'], ['location', 'Location']],
-  export: [['dates', 'Received At'], ['brand', 'Brand'], ['location', 'Location']],
-  comparison: [['location', 'Location']],
+  items: [['brand', 'Brand'], ['dates', 'Received At']],
+  delayed: [['brand', 'Brand'], ['dates', 'Received At']],
+  commission: [['dates', 'Received At'], ['channel', 'Channel'], ['brand', 'Brand']],
+  ebitda: [['dates', 'Received At'], ['channel', 'Channel'], ['brand', 'Brand']],
+  export: [['dates', 'Received At'], ['brand', 'Brand']],
+  comparison: [],
   targets: [['channel', 'Channel']]
 };
 
@@ -4084,8 +4091,129 @@ function wireTargetsPage() {
 wireTargetsPage();
 
 // ---------------- render & navigation ----------------
-const RENDER = { sales: renderSales, cancel: renderCancel, prep: renderPrep, ratings: renderRatings, items: renderItemsPage, delayed: renderDelayed, commission: renderCommission, ebitda: renderEbitda, targets: renderTargets, comparison: renderComparison, accounting: renderAccounting, export: renderExport };
-function render() { RENDER[S.page](); }
+// ================= KITCHEN SWITCHER (global) =================
+// One dashboard, two kitchens: Motor City (GrubCENTER) and Jaddaf
+// (UrbanPiper). The switch sets S.f.location for every page, replacing the
+// old per-page Location dropdowns, and is remembered per browser.
+const KITCHEN_KEY = 'fh_kitchen_v1';
+function lsGet(k) { try { return localStorage.getItem(k); } catch (_) { return null; } }
+function lsSet(k, v) { try { localStorage.setItem(k, v); } catch (_) {} }
+// Runs after every render, so it only writes to the DOM when something
+// changed. Chart.js watches the whole document for DOM mutations to bind
+// charts to their canvases; rewriting these buttons on every redraw fired
+// that watcher mid-redraw and threw "addEventListener of null".
+function syncKitchenUI() {
+  let has = null;
+  $$('#kitchenSwitch button').forEach(b => {
+    const k = b.dataset.k, on = (S.f.location || 'All') === k;
+    if (b.classList.contains('on') !== on) b.classList.toggle('on', on);
+    if (b.getAttribute('aria-pressed') !== String(on)) b.setAttribute('aria-pressed', String(on));
+    if (!has) has = new Set(S.orders.map(o => o.location));
+    const idle = k !== 'All' && !has.has(k);
+    if (b.dataset.idle !== String(idle)) {
+      b.dataset.idle = String(idle);
+      b.innerHTML = esc(k) + (idle ? '<span class="badge">Not live</span>' : '');
+      b.title = idle ? `${k}: no orders yet` : `Show ${k === 'All' ? 'both kitchens' : k}`;
+    }
+  });
+}
+function setKitchen(k) {
+  S.f.location = k;
+  lsSet(KITCHEN_KEY, k);
+  S.selLocs.clear();
+  syncKitchenUI();
+  // Redraw only, like the existing filter dropdowns do. Dropdown options do
+  // not depend on the kitchen, and rebuilding the filter bar here as well
+  // raced Chart.js redraws ("addEventListener of null").
+  render();
+}
+(function initKitchen() {
+  const saved = lsGet(KITCHEN_KEY);
+  if (saved && ['All', 'Motor City', 'Jaddaf'].includes(saved)) S.f.location = saved;
+  $$('#kitchenSwitch button').forEach(b => { b.onclick = () => setKitchen(b.dataset.k); });
+  syncKitchenUI();
+})();
+
+// ================= NAV SECTIONS =================
+// Collapsible groups; the open/closed state is remembered per browser. The
+// active page stays visible even inside a closed group.
+(function initNavSections() {
+  const KEY = 'fh_nav_closed_v1';
+  let closed = [];
+  try { closed = JSON.parse(lsGet(KEY) || '[]'); } catch (_) {}
+  $$('#nav .nav-sec').forEach(sec => {
+    if (closed.includes(sec.dataset.sec)) sec.classList.add('closed');
+    const h = $('.nav-sec-h', sec);
+    h.setAttribute('aria-expanded', String(!sec.classList.contains('closed')));
+    h.onclick = () => {
+      sec.classList.toggle('closed');
+      h.setAttribute('aria-expanded', String(!sec.classList.contains('closed')));
+      lsSet(KEY, JSON.stringify($$('#nav .nav-sec.closed').map(x => x.dataset.sec)));
+    };
+  });
+})();
+
+// ================= DATA SOURCES =================
+// Health of every source behind the dashboard (/api/sources), shown as the
+// sidebar pill and on the Data Sources page.
+S.sources = null;
+function agoText(ms) {
+  if (ms == null) return 'never';
+  const m = Math.round(ms / 60000);
+  if (m < 1) return 'just now';
+  if (m < 60) return m + ' min ago';
+  const h = Math.round(m / 60);
+  return h < 48 ? h + ' h ago' : Math.round(h / 24) + ' days ago';
+}
+async function refreshSources() {
+  try {
+    const j = await fetch('/api/sources').then(r => r.json());
+    if (!j || !Array.isArray(j.sources)) return;
+    S.sources = j;
+    const pill = $('#sourcesPill');
+    if (pill) {
+      const st = j.summary.status;
+      pill.className = 'sources-pill ' + (st === 'ok' ? '' : st);
+      pill.textContent = st === 'ok' ? '● Sources: all fresh' : `● ${j.summary.problems.length} source${j.summary.problems.length > 1 ? 's' : ''} need attention`;
+      pill.title = st === 'ok' ? 'All data sources are fresh' : 'Needs attention: ' + j.summary.problems.join(', ');
+    }
+    if (S.page === 'sources') render();
+  } catch (_) {}
+}
+function renderSources() {
+  const j = S.sources;
+  if (!j) { refreshSources(); kpis('kpi-sources', [['Data Sources', 'Loading…', true, null, false, '', '']]); return; }
+  const list = j.sources;
+  const n = st => list.filter(s => s.status === st).length;
+  kpis('kpi-sources', [
+    ['Sources', String(list.length), false, null, false, 'Data sources feeding the dashboard.', ''],
+    ['Fresh', String(n('ok')), false, null, false, 'Sources whose latest data is within their freshness limit.', ''],
+    ['Need Attention', String(n('stale') + n('error')), false, null, false, 'Sources that are stale or whose last attempt failed.', ''],
+    ['Waiting', String(n('waiting')), false, null, false, 'Set up, but no data has arrived yet (for example Jaddaf before go-live).', ''],
+    ['Not Configured', String(n('off')), false, null, false, 'Sources with no credentials set on this server.', ''],
+    ['Checked', agoText(Date.now() - j.checkedAt), false, () => refreshSources(), false, 'When this status was last checked. Click to check again.', 'nav']
+  ]);
+  const grid = $('#sourcesGrid');
+  if (grid) grid.innerHTML = list.map(s => `
+    <div class="src-card ${s.status}">
+      <h3>${esc(s.name)}</h3>
+      <div class="src-k">${esc(s.kitchen)}</div>
+      <div class="src-what">${esc(s.what)}</div>
+      <dl>
+        <dt>Status</dt><dd><span class="src-status ${s.status}">${esc(s.status === 'off' ? 'not configured' : s.status)}</span></dd>
+        <dt>Last update</dt><dd>${s.lastSync ? esc(agoText(s.ageMs)) : '–'}</dd>
+        ${s.records != null ? `<dt>Records</dt><dd>${Number(s.records).toLocaleString()}</dd>` : ''}
+        ${s.error ? `<dt>Error</dt><dd>${esc(s.error)}</dd>` : ''}
+        ${s.note ? `<dt>Note</dt><dd>${esc(s.note)}</dd>` : ''}
+      </dl>
+    </div>`).join('');
+}
+$('#sourcesPill') && ($('#sourcesPill').onclick = () => show('sources'));
+refreshSources();
+setInterval(() => { if (document.visibilityState !== 'hidden') refreshSources(); }, 60 * 1000);
+
+const RENDER = { sources: renderSources, sales: renderSales, cancel: renderCancel, prep: renderPrep, ratings: renderRatings, items: renderItemsPage, delayed: renderDelayed, commission: renderCommission, ebitda: renderEbitda, targets: renderTargets, comparison: renderComparison, accounting: renderAccounting, export: renderExport };
+function render() { RENDER[S.page](); if (typeof syncKitchenUI === 'function') syncKitchenUI(); }
 
 function show(page) {
   S.page = page;
@@ -4135,7 +4263,8 @@ function resetFilters() {
   Object.keys(S.f).forEach(k => {
     if (k === 'ratingFilter') S.f[k] = 'all';
     else if (k === 'onlyDelayed') S.f[k] = false;
-    else if (!['from', 'to'].includes(k)) S.f[k] = 'All';
+    // The kitchen (location) is a global choice, not a filter to reset.
+    else if (!['from', 'to', 'location'].includes(k)) S.f[k] = 'All';
   });
 }
 

@@ -35,6 +35,14 @@ node server.js
 http://localhost:3000
 ```
 
+## Two kitchens, two platforms (v2)
+- **Motor City** runs on Grubtech (GrubCENTER sync). **Jaddaf** runs on UrbanPiper (Atlas): orders arrive by Atlas webhook, the catalogue by a one-click snapshot from a signed-in Atlas tab (Atlas has no read API; every login needs reCAPTCHA).
+- Every order carries `source` (`grubcenter` | `urbanpiper`) and `location`. Each source writes its own Blob file (`orders.json`, `up_orders.json`); `/api/orders`, `/api/order-items` merge at read time (`readAllOrders` in `api/_lib/store.js`, `allOrders()` in `server.js`).
+- **Kitchen switcher** (sidebar): All / Motor City / Jaddaf sets `S.f.location` for every page and is remembered in localStorage (`fh_kitchen_v1`). There is no per-page Location filter any more.
+- **Navigation** is grouped into collapsible sections: Sales, Operations, Menu, Finance, Data (`fh_nav_closed_v1`).
+- **Data Sources** page (`#sources`) and sidebar pill read `/api/sources`. Status rules live in `public/sources.js` (shared by server and browser): ok, stale, waiting, error, off.
+- `mk()` in `public/app.js` unregisters a destroyed chart (`delete charts[id]`); without that, any empty-data redraw left a destroyed chart in `charts` and `patchPct()` crashed Chart.js.
+
 ## Targets & Growth (`#targets`)
 - Monthly Net Sales and Orders targets for the company and for each channel. There are no brand targets.
 - Targets are entered per month in Target Setup and kept per browser (localStorage `fh_targets_v1`, keyed `YYYY-MM`). Editing the company target auto-splits it across channels by last-30-day sales share, adjusted for commission (`FHGrowth.splitTarget`). Editing a channel locks it as Manual; "Re-split automatically" clears the locks.
