@@ -1519,6 +1519,86 @@ function renderSales() {
   const discGrossPct = rec ? pc(disc / rec, 1) : '0%';
   const discNetPct = net ? pc(disc / net, 1) : '0%';
   $('#discTotal').innerHTML = `${money(disc)}<div style="font-size:9.5px;font-weight:600;color:#555;margin-top:2px;">${discGrossPct} Gross · ${discNetPct} Net</div>`;
+  renderDiscountByAggregator();
+}
+
+// ---------------- Discount by Aggregator ----------------
+// Per channel: discount given in the selected range, and where this month's
+// discount will close at the current pace. The projection takes each
+// channel's average per COMPLETED day this month (today is partial and would
+// drag the pace down) and carries it to month-end:
+//   projected close = MTD through yesterday + daily pace × days left incl. today
+// On the 1st, today's figures so far are the only data, so they are used as
+// the pace. Follows the kitchen switcher and the page's other filters
+// (brand, payment, partner...), but always covers the live month.
+function discountByAggregator() {
+  const sel = base('sales').filter(o => !o.cancelled);
+  const [mStart, today] = currentMonthBoundsKeys();
+  const monthAll = base('sales', true).filter(o => !o.cancelled && dkey(o.receivedAt) >= mStart && dkey(o.receivedAt) <= today);
+  const dom = +today.slice(8, 10);
+  const y = +today.slice(0, 4), mo = +today.slice(5, 7);
+  const daysInMonth = new Date(Date.UTC(y, mo, 0)).getUTCDate();
+  const completed = dom - 1;
+  const remaining = daysInMonth - completed;
+  const agg = rows => {
+    const gross = sum(rows, o => o.receiptTotal), disc = sum(rows, o => o.discount), net = sum(rows, o => o.netSales);
+    const com = sum(rows, o => FHCommission.commissionForOrder(o));
+    const discounted = rows.filter(o => o.discount > 0).length;
+    return { n: rows.length, gross, disc, net, com, discounted };
+  };
+  const project = rows => {
+    const mtd = agg(rows);
+    // Completed days set the pace; on the 1st only today's partial exists.
+    const done = completed ? agg(rows.filter(o => dkey(o.receivedAt) < today)) : null;
+    const close = k => (done ? done[k] + (done[k] / completed) * remaining : mtd[k] * daysInMonth);
+    return { mtdDisc: mtd.disc, projDisc: close('disc'), projGross: close('gross'), projNet: close('net'), projCom: close('com') };
+  };
+  const chans = [...new Set(sel.map(o => o.channel).concat(monthAll.map(o => o.channel)))];
+  const rows = chans.map(ch => {
+    const s = agg(sel.filter(o => o.channel === ch));
+    const p = project(monthAll.filter(o => o.channel === ch));
+    return { ch, ...s, ...p };
+  }).filter(r => r.n || r.mtdDisc || r.projDisc).sort((a, b) => b.disc - a.disc || b.projDisc - a.projDisc);
+  const tot = { ch: 'Total', ...agg(sel), ...project(monthAll) };
+  return { rows, tot, meta: { mStart, today, daysInMonth, completed, remaining } };
+}
+function renderDiscountByAggregator() {
+  const el = $('#discAggTable'), sumEl = $('#discAggSummary');
+  if (!el) return;
+  const { rows, tot, meta } = discountByAggregator();
+  const pct = (a, b) => (b ? pc(a / b, 1) : '–');
+  const avgDisc = r => (r.discounted ? money(r.disc / r.discounted) : '–');
+  // Flag channels discounting well above the business average.
+  const avgRate = tot.gross ? tot.disc / tot.gross : 0;
+  const line = (r, cls = '') => `<tr class="${cls}${S.f.channel === r.ch ? ' on' : ''}" data-ch="${esc(r.ch)}">
+      <td>${r.ch === 'Total' ? '<b>Total</b>' : esc(r.ch)}</td>
+      <td>${cnt(r.n)}</td><td>${pct(r.discounted, r.n)}</td><td>${money(r.gross)}</td><td><b>${money(r.disc)}</b></td>
+      <td class="${r.ch !== 'Total' && r.gross && r.disc / r.gross > avgRate * 1.25 && r.disc > 0 ? 'hi' : ''}">${pct(r.disc, r.gross)}</td><td>${avgDisc(r)}</td>
+      <td class="sep">${money(r.mtdDisc)}</td><td><b>${money(r.projDisc)}</b></td><td>${pct(r.projDisc, r.projGross)}</td>
+      <td>${money(r.projNet)}</td><td>${money(r.projCom)}</td><td>${money(r.projNet - r.projCom)}</td>
+    </tr>`;
+  const monthName = new Date(meta.mStart + 'T00:00:00Z').toLocaleString('en-US', { month: 'short', year: 'numeric', timeZone: 'UTC' });
+  el.innerHTML = `<thead>
+      <tr class="grp"><th></th><th colspan="6">Selected range</th><th colspan="6" class="sep">${esc(monthName)} close (projected)</th></tr>
+      <tr class="cols"><th>Aggregator</th><th title="Non-cancelled orders">Orders</th><th title="Share of orders that carried any discount">Disc. orders</th><th title="Receipt total before discount, VAT-inclusive">Gross Sales</th><th>Discount given</th><th title="Discount ÷ Gross Sales">Disc. % of gross</th><th title="Discount ÷ number of discounted orders">Avg disc. / disc. order</th>
+      <th class="sep" title="Discount given this month so far">Discount MTD</th><th title="MTD through yesterday + daily pace × days left (incl. today)">Projected discount</th><th title="Projected discount ÷ projected gross sales">Proj. disc. %</th><th title="Projected Net Sales (after discount) at the same pace">Proj. Net Sales</th><th title="Projected aggregator commission at contract rates">Proj. commission</th><th title="Projected Net Sales − projected commission">Proj. net after comm.</th></tr>
+    </thead><tbody>${rows.length ? rows.map(r => line(r)).join('') + line(tot, 'tot') : '<tr><td colspan="13" class="muted" style="text-align:left">No orders for this selection yet.</td></tr>'}</tbody>`;
+  $$('tbody tr[data-ch]', el).forEach(tr => {
+    const ch = tr.dataset.ch;
+    if (ch === 'Total') return;
+    tr.title = `Click to filter the dashboard to ${ch} (click again to reset)`;
+    tr.onclick = () => { S.f.channel = S.f.channel === ch ? 'All' : ch; syncFilterUI(); render(); };
+  });
+  if (sumEl) {
+    const top = rows.slice().sort((a, b) => b.projDisc - a.projDisc)[0];
+    sumEl.innerHTML = [
+      `Discount given: <b>${money(tot.disc)}</b> (${pct(tot.disc, tot.gross)} of gross, ${pct(tot.discounted, tot.n)} of orders)`,
+      `${esc(monthName)} discount MTD: <b>${money(tot.mtdDisc)}</b>`,
+      `Projected month-end discount: <b>${money(tot.projDisc)}</b>`,
+      top ? `Largest: <b>${esc(top.ch)}</b> ${money(top.projDisc)}` : '',
+      `<span class="muted small">Pace from ${meta.completed || 1} ${meta.completed === 1 ? 'day' : 'days'}, ${meta.remaining} left incl. today</span>`
+    ].filter(Boolean).map(x => `<span>${x}</span>`).join('');
+  }
 }
 
 function patchPct(id, rows, totalOrders) {

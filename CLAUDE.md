@@ -48,6 +48,10 @@ http://localhost:3000
 - Accounting tiles are grouped by `ACCOUNTING_GROUPS` (Profit & Loss, Cash, Receivables & Payables, Balance Sheet).
 - `KITCHEN_CALC[page](kitchen)` computes a page's order-based figures for one kitchen through `base(page, false, kitchen)`. It drives the `MC … | JD …` split line on tiles when the switcher is on All, and the Motor City vs Jaddaf table (`kitchenCompareTable`) that replaced the single-location charts on Order Details, Cancellations, Prep Time and Items. Zoho and Targets tiles are group-level and have no split.
 
+## Discount by Aggregator (Order Details)
+- `discountByAggregator()` / `renderDiscountByAggregator()` in `public/app.js`: per channel, discount given in the selected range (orders, % of orders discounted, gross, discount, % of gross, average per discounted order) and the live month's projected close.
+- Projection: each channel's discount, gross, net and commission per completed day this month (today excluded, since it is partial) carried to month-end: MTD through yesterday + pace × days left including today. On the 1st, today's figures are the pace. Follows the kitchen switcher and page filters; clicking a row filters the dashboard to that channel.
+
 ## Targets & Growth (`#targets`)
 - Monthly Net Sales and Orders targets for the company and for each channel. There are no brand targets.
 - Targets are entered per month in Target Setup and kept per browser (localStorage `fh_targets_v1`, keyed `YYYY-MM`). Editing the company target auto-splits it across channels by last-30-day sales share, adjusted for commission (`FHGrowth.splitTarget`). Editing a channel locks it as Manual; "Re-split automatically" clears the locks.

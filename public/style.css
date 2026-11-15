@@ -1150,3 +1150,19 @@ tbody tr[onclick]:hover, tr.daily-row:hover { filter: brightness(0.95); }
 .kc-table th.kc-h.on { background: var(--y); }
 .kc-table .num { text-align: right; font-variant-numeric: tabular-nums; }
 @media (max-width: 700px) { .kpis > .kpi, .kpis > .kpi.wide { flex: 1 1 calc((100% - 8px) / 2); } }
+
+/* ---------- Discount by Aggregator (Order Details) ---------- */
+.a-discagg { grid-column: span 12; }
+.disc-sum { display: flex; flex-wrap: wrap; gap: 6px 18px; padding: 8px 12px 4px; font-size: 12.5px; color: #333; }
+.disc-sum b { color: var(--k); }
+.disc-agg { width: 100%; border-collapse: collapse; font-size: 12px; }
+.disc-agg th, .disc-agg td { padding: 6px 9px; border-bottom: 1px solid #e3e7e8; text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.disc-agg th:first-child, .disc-agg td:first-child { text-align: left; }
+.disc-agg thead tr.grp th { background: #fafbfb; font-size: 10.5px; letter-spacing: .06em; text-transform: uppercase; color: #5f5f5f; text-align: center; }
+.disc-agg thead tr.cols th { background: var(--y); color: var(--k); font-weight: 700; }
+.disc-agg th.sep, .disc-agg td.sep { border-left: 2px solid #d9dfe1; }
+.disc-agg tr.tot td { font-weight: 700; background: #fffbea; }
+.disc-agg tbody tr { cursor: pointer; } .disc-agg tbody tr:hover td { background: #fffdf2; }
+.disc-agg tr.on td { background: #fff4c7; }
+.disc-agg td.hi { color: #b3261e; font-weight: 700; }
+.a-discagg .tbl-wrap { max-height: none; overflow-x: auto; overflow-y: visible; }
