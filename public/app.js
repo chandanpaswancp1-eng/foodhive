@@ -891,7 +891,7 @@ function buildToggles() {
 const KITCHENS = ['Motor City', 'Jaddaf'];
 const KITCHEN_SHORT = { 'Motor City': 'MC', Jaddaf: 'JD' };
 const KPI_ORDER = {
-  sales: ['Net Sales', 'Gross Sales', 'Total Orders', 'AOV', 'Total Discount', 'Discount %', 'Projected Month-End', 'Month-End Total', 'Top Performing Brand'],
+  sales: ['Gross Sales', 'Net Sales', 'Total Orders', 'AOV', 'Total Discount', 'Discount %', 'Projected Month-End', 'Month-End Total', 'Top Performing Brand'],
   cancel: ['Cancelled Orders Amount', 'Total Cancelled Orders', 'Cancel Rate %', 'Cancelled AOV', 'Refund Amount', 'Reverted by Aggregator'],
   prep: ['Receiving → Dispatched', 'Acc → Started', 'Started → Prepared', 'Prepared → STD', 'STD → Dispatched', 'Received → Delivered', 'Best vs Worst Brand Location'],
   ratings: ['Total Ratings', 'Positive Ratings', 'Negative Ratings', 'Negative Ratings %', 'Polarity rate'],
@@ -910,7 +910,7 @@ const ACCOUNTING_GROUPS = [
 // side): what kind of number each one is, at a glance. The cluster lists also
 // set the tile order within the page.
 const KPI_CLUSTERS = {
-  sales: [['Revenue', ['Net Sales', 'Gross Sales', 'AOV']], ['Volume', ['Total Orders']], ['Discounts', ['Total Discount', 'Discount %']], ['Outlook', ['Projected Month-End', 'Month-End Total', 'Top Performing Brand']]],
+  sales: [['Revenue', ['Gross Sales', 'Net Sales', 'AOV']], ['Volume', ['Total Orders']], ['Discounts', ['Total Discount', 'Discount %']], ['Outlook', ['Projected Month-End', 'Month-End Total', 'Top Performing Brand']]],
   cancel: [['Cancellations', ['Cancelled Orders Amount', 'Total Cancelled Orders', 'Cancel Rate %', 'Cancelled AOV']], ['Money returned', ['Refund Amount', 'Reverted by Aggregator']]],
   prep: [['End to end (min)', ['Receiving → Dispatched', 'Received → Delivered']], ['Kitchen stages (min)', ['Acc → Started', 'Started → Prepared', 'Prepared → STD', 'STD → Dispatched']], ['Outlets', ['Best vs Worst Brand Location']]],
   ratings: [['Ratings', ['Total Ratings', 'Positive Ratings', 'Negative Ratings']], ['Rates', ['Negative Ratings %', 'Polarity rate']]],
