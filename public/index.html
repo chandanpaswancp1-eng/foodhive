@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>FOOD HIVE · Operations &amp; Sales Dashboard</title>
 <link rel="icon" href="assets/favicon.png">
-<link rel="stylesheet" href="style.css?v=3.19">
+<link rel="stylesheet" href="style.css?v=3.30">
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.2.0/dist/chartjs-plugin-datalabels.min.js"></script>
 <!-- xlsx-js-style: a drop-in SheetJS fork (same XLSX.* API used for CSV/XLSX import)
@@ -33,24 +33,36 @@
     <div class="side-toggles" id="sideTogglesTop"></div>
 
     <nav id="nav">
+      <div class="nav-sec" data-sec="sales"><button type="button" class="nav-sec-h">Sales</button>
       <a data-page="sales"><img src="assets/sales.png" alt=""><span>Order Details</span></a>
+      <a data-page="comparison"><img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48' width='48' height='48'%3E%3Ccircle cx='24' cy='24' r='20' fill='%23FDCB3C' stroke='%231d1d1d' stroke-width='2.5'/%3E%3Crect x='13' y='24' width='6' height='12' fill='%231d1d1d'/%3E%3Crect x='21' y='18' width='6' height='18' fill='%231d1d1d'/%3E%3Cpolyline points='30,20 35,14 29,14 35,14 35,20' fill='none' stroke='%231d1d1d' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E" alt=""><span>Comparison</span></a>
+      <a data-page="targets"><img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48' width='48' height='48'%3E%3Ccircle cx='24' cy='24' r='20' fill='%23FDCB3C' stroke='%231d1d1d' stroke-width='2.5'/%3E%3Ccircle cx='24' cy='24' r='11' fill='none' stroke='%231d1d1d' stroke-width='2.4'/%3E%3Ccircle cx='24' cy='24' r='4.5' fill='%231d1d1d'/%3E%3C/svg%3E" alt=""><span>Targets &amp; Growth</span></a>
+      </div>
+      <div class="nav-sec" data-sec="operations"><button type="button" class="nav-sec-h">Operations</button>
       <a data-page="cancel"><img src="assets/cancel.png" alt=""><span>Cancellations</span></a>
       <a data-page="prep"><img src="assets/prep.png" alt=""><span>Prep Time</span></a>
-      <a data-page="ratings"><img src="assets/ratings.png" alt=""><span>Ratings</span></a>
-      <a data-page="items"><img src="assets/items.png" alt=""><span>Items Detail</span></a>
       <a data-page="delayed"><img src="assets/delayed.png" alt=""><span>Delayed Orders</span></a>
+      <a data-page="ratings"><img src="assets/ratings.png" alt=""><span>Ratings</span></a>
+      </div>
+      <div class="nav-sec" data-sec="menu"><button type="button" class="nav-sec-h">Menu</button>
+      <a data-page="items"><img src="assets/items.png" alt=""><span>Items Detail</span></a>
+      </div>
+      <div class="nav-sec" data-sec="finance"><button type="button" class="nav-sec-h">Finance</button>
       <a data-page="commission"><img src="assets/commission.svg" alt=""><span>Commission</span></a>
       <a data-page="ebitda"><img src="assets/ebitda.svg" alt=""><span>EBITDA</span></a>
-      <a data-page="targets"><img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48' width='48' height='48'%3E%3Ccircle cx='24' cy='24' r='20' fill='%23FDCB3C' stroke='%231d1d1d' stroke-width='2.5'/%3E%3Ccircle cx='24' cy='24' r='11' fill='none' stroke='%231d1d1d' stroke-width='2.4'/%3E%3Ccircle cx='24' cy='24' r='4.5' fill='%231d1d1d'/%3E%3C/svg%3E" alt=""><span>Targets &amp; Growth</span></a>
-      <a data-page="comparison"><img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48' width='48' height='48'%3E%3Ccircle cx='24' cy='24' r='20' fill='%23FDCB3C' stroke='%231d1d1d' stroke-width='2.5'/%3E%3Crect x='13' y='24' width='6' height='12' fill='%231d1d1d'/%3E%3Crect x='21' y='18' width='6' height='18' fill='%231d1d1d'/%3E%3Cpolyline points='30,20 35,14 29,14 35,14 35,20' fill='none' stroke='%231d1d1d' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E" alt=""><span>Comparison</span></a>
       <a data-page="accounting"><img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48' width='48' height='48'%3E%3Ccircle cx='24' cy='24' r='20' fill='%23FDCB3C' stroke='%231d1d1d' stroke-width='2.5'/%3E%3Ctext x='24' y='32' font-family='Arial, sans-serif' font-size='23' font-weight='700' text-anchor='middle' fill='%231d1d1d'%3E%24%3C/text%3E%3C/svg%3E" alt=""><span>Accounting</span></a>
+      </div>
+      <div class="nav-sec" data-sec="data"><button type="button" class="nav-sec-h">Data</button>
+      <a data-page="sources"><img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48' width='48' height='48'%3E%3Ccircle cx='24' cy='24' r='20' fill='%23FDCB3C' stroke='%231d1d1d' stroke-width='2.5'/%3E%3Cellipse cx='24' cy='16' rx='10' ry='4' fill='none' stroke='%231d1d1d' stroke-width='2.3'/%3E%3Cpath d='M14 16v16c0 2.2 4.5 4 10 4s10-1.8 10-4V16' fill='none' stroke='%231d1d1d' stroke-width='2.3'/%3E%3Cpath d='M14 24c0 2.2 4.5 4 10 4s10-1.8 10-4' fill='none' stroke='%231d1d1d' stroke-width='2.3'/%3E%3C/svg%3E" alt=""><span>Data Sources</span></a>
       <a data-page="export"><img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48' width='48' height='48'%3E%3Ccircle cx='24' cy='24' r='20' fill='%23FDCB3C' stroke='%231d1d1d' stroke-width='2.5'/%3E%3Cline x1='24' y1='12' x2='24' y2='28' stroke='%231d1d1d' stroke-width='2.6' stroke-linecap='round'/%3E%3Cpolyline points='17,21 24,28 31,21' fill='none' stroke='%231d1d1d' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cpolyline points='13,30 13,36 35,36 35,30' fill='none' stroke='%231d1d1d' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E" alt=""><span>Data Export</span></a>
+      </div>
     </nav>
 
     <!-- Toggles placed below nav on Pages 1, 2, 5, 6 -->
     <div class="side-toggles" id="sideTogglesBottom"></div>
 
     <div class="side-foot">
+      <button type="button" id="sourcesPill" class="sources-pill" title="Data source health">● Sources</button>
       <div id="srcBadge" class="src-badge live">● Live · GrubCENTER (2614)</div>
       <div id="lastSyncAgo" class="last-sync-ago" title="GrubCENTER's own live totals can be a few minutes ahead of this until the next sync — click Sync Now for the latest">Not synced yet</div>
       <button class="btn-sync" id="btnSync" title="Pull the latest orders from GrubCENTER (today — or the selected range when it covers 3 days or less)">🔄 Sync Now</button>
@@ -86,8 +98,8 @@
           <div class="pb"><canvas id="c-time"></canvas></div>
         </div>
         <div class="panel a-loc">
-          <div class="ph">Net Sales | Total Orders Location</div>
-          <div class="pb"><canvas id="c-loc"></canvas></div>
+          <div class="ph">Kitchens: Motor City vs Jaddaf</div>
+          <div class="tbl-wrap kc-wrap"><table class="kc-table" id="kc-sales"></table></div>
         </div>
         <div class="panel a-slot">
           <div class="ph">Net Sales | Total Orders by Time-Slot</div>
@@ -134,8 +146,8 @@
       </div>
       <div class="grid g-cancel">
         <div class="panel">
-          <div class="ph">Orders Value | Total Orders by Locations</div>
-          <div class="pb"><canvas id="c-cloc"></canvas></div>
+          <div class="ph">Kitchens: Motor City vs Jaddaf</div>
+          <div class="tbl-wrap kc-wrap"><table class="kc-table" id="kc-cancel"></table></div>
         </div>
         <div class="panel">
           <div class="ph">Orders Value | Total Orders by Channel</div>
@@ -176,7 +188,7 @@
           <div class="grid g-prep" id="prepCharts"></div>
           <div class="grid g-prep2">
             <div class="panel"><div class="tbl-wrap"><table id="prepTable"></table></div></div>
-            <div class="panel"><div class="ph">Count of Location by Location</div><div class="pb"><canvas id="c-ploc"></canvas></div></div>
+            <div class="panel" id="c-ploc"><div class="ph">Kitchens: Motor City vs Jaddaf</div><div class="tbl-wrap kc-wrap"><table class="kc-table" id="kc-prep"></table></div></div>
           </div>
         </div>
       </div>
@@ -223,7 +235,7 @@
       </div>
       <div class="grid g-items" id="grid-items">
         <div class="panel i-brand"><div class="ph" id="t-ibrand">86 Items and %GT 86 Items by Brand</div><div class="pb"><canvas id="c-ibrand"></canvas></div></div>
-        <div class="panel i-loc"><div class="ph">86 Items and %GT 86 Items by Location</div><div class="pb"><canvas id="c-iloc"></canvas></div></div>
+        <div class="panel i-loc"><div class="ph">Kitchens: Motor City vs Jaddaf</div><div class="tbl-wrap kc-wrap"><table class="kc-table" id="kc-items"></table></div></div>
         <div class="panel i-dist"><div class="ph">Total 86 Items Distribution</div><div class="pb"><canvas id="c-idist"></canvas></div></div>
         <div class="panel i-src"><div class="ph">Distribution by Source</div><div class="pb"><canvas id="c-isrc"></canvas></div></div>
         <div class="panel i-typ"><div class="ph">Distribution by Type</div><div class="pb"><canvas id="c-ityp"></canvas></div></div>
@@ -452,6 +464,20 @@
       <div class="sync-msg" id="acctSyncMsg"></div>
     </section>
 
+    <!-- PAGE : DATA SOURCES -->
+    <section class="page" id="page-sources">
+      <div class="kpis" id="kpi-sources"></div>
+      <div class="src-grid" id="sourcesGrid"></div>
+      <div class="panel src-help">
+        <div class="ph">How each kitchen's data arrives</div>
+        <div class="pb src-help-body">
+          <p><b>Motor City</b> runs on Grubtech. The dashboard signs in to GrubCENTER and syncs orders, prep timings, cancellations and line items every 10 minutes, with today's orders refreshed every 10 seconds. The 86 list refreshes from GrubCENTER's item-availability snapshot.</p>
+          <p><b>Jaddaf</b> runs on UrbanPiper. Orders will be pushed to the dashboard by an Atlas webhook as they happen. The menu catalogue is refreshed with one click from a signed-in Atlas tab, because Atlas has no read API.</p>
+          <p><b>Zoho Books</b> supplies the accounting figures for the whole group.</p>
+        </div>
+      </div>
+    </section>
+
     <!-- PAGE 10 : DATA EXPORT -->
     <section class="page" id="page-export">
       <header class="filters" id="filters-export"></header>
@@ -563,7 +589,8 @@
 
 <script src="normalize.js?v=3.12"></script>
 <script src="commission.js?v=3.11"></script>
+<script src="sources.js?v=1.0"></script>
 <script src="growth.js?v=1.5"></script>
-<script src="app.js?v=3.38"></script>
+<script src="app.js?v=3.53"></script>
 </body>
 </html>

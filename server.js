@@ -12,6 +12,7 @@ const path = require('path');
 const zlib = require('zlib');
 const { URL } = require('url');
 const N = require('./public/normalize.js');
+const FHSources = require('./public/sources.js');
 
 // This is a long-running process serving every user -- one unexpected
 // exception (e.g. from a response write on an already-aborted connection)
@@ -336,7 +337,12 @@ const STORE = {
   syncing: false,
   liveOpsCount: 0,
   liveCancelCount: 0,
-  zoho: null
+  zoho: null,
+  // UrbanPiper (Jaddaf): orders arrive by Atlas webhook; catalogue by snapshot.
+  upOrders: [],
+  upOrderItems: [],
+  upMeta: { lastWebhookAt: 0, webhookCount: 0, catalogAt: 0 },
+  upCatalog: null
 };
 
 // 1. Initial preload from disk
@@ -379,6 +385,12 @@ function preloadData() {
   const snapFile = path.join(__dirname, 'data', 'items_snapshot_events.json');
   if (fs.existsSync(snapFile)) {
     try { STORE.itemsArray = N.mergeItemEvents(STORE.itemsArray, JSON.parse(fs.readFileSync(snapFile, 'utf8'))); } catch (_) {}
+    try { STORE.itemsLastSync = fs.statSync(snapFile).mtimeMs; } catch (_) {}
+  }
+
+  for (const [file, key] of [['up_orders.json', 'upOrders'], ['up_order_items.json', 'upOrderItems'], ['up_meta.json', 'upMeta']]) {
+    const f = path.join(__dirname, 'data', file);
+    if (fs.existsSync(f)) { try { STORE[key] = JSON.parse(fs.readFileSync(f, 'utf8')); } catch (_) {} }
   }
 
   if (fs.existsSync(orderItemsFile)) {
@@ -501,7 +513,7 @@ async function runSync(from, to, itemsFrom) {
       };
     });
 
-    const normLive = N.normalizeOrders(mergedLive);
+    const normLive = N.normalizeOrders(mergedLive).map(o => ({ ...o, source: 'grubcenter' }));
 
     const officialBrandsFile = path.join(__dirname, 'data', 'official_foodhive_brands.json');
     let official = null;
@@ -578,6 +590,7 @@ async function runSync(from, to, itemsFrom) {
     if (rawItemsSnapshot.length) {
       const fresh = N.mergeItemEvents(N.snapshotToItemEvents(rawItemsSnapshot));
       STORE.itemsArray = N.mergeItemEvents(STORE.itemsArray, fresh);
+      STORE.itemsLastSync = Date.now();
       persistJson('items_snapshot_events.json', STORE.itemsArray.filter(x => x.source === N.SNAPSHOT_SOURCE));
       console.log(`[GrubCENTER Sync Complete] ${fresh.length} items currently 86'd, ${STORE.itemsArray.length} 86 events in store`);
     }
@@ -621,7 +634,7 @@ async function liveToday() {
     });
     let official = null;
     try { official = new Set(JSON.parse(fs.readFileSync(path.join(__dirname, 'data', 'official_foodhive_brands.json'), 'utf8')).map(b => b.toLowerCase().trim())); } catch (_) {}
-    const orders = N.normalizeOrders(merged).filter(o =>
+    const orders = N.normalizeOrders(merged).map(o => ({ ...o, source: 'grubcenter' })).filter(o =>
       o.brand !== 'TEST BRAND' && o.channel !== 'Grubtech Test' &&
       (!official || (o.brand && official.has(String(o.brand).toLowerCase().trim()))));
     live.data = { day, at: Date.now(), orders };
@@ -1004,9 +1017,29 @@ function sendGzip(req, res, code, obj) {
   }
 }
 
+// ---------- Sources: GrubCENTER (Motor City) + UrbanPiper (Jaddaf) ----------
+// Each source keeps its own store so writers never race; readers merge.
+// Orders cached before `source` existed all came from GrubCENTER.
+const tagSource = (arr, source) => (arr || []).map(o => (o && !o.source ? { ...o, source } : o));
+const allOrders = () => tagSource(STORE.ordersArray, 'grubcenter').concat(tagSource(STORE.upOrders, 'urbanpiper'));
+const allOrderItems = () => tagSource(STORE.orderItemsArray, 'grubcenter').concat(tagSource(STORE.upOrderItems, 'urbanpiper'));
+
 http.createServer(async (req, res) => {
   const u = new URL(req.url, 'http://x');
   try {
+    if (u.pathname === '/api/sources') {
+      const zohoConfigured = !!(CFG.zohoClientId && CFG.zohoClientSecret && CFG.zohoRefreshToken && CFG.zohoOrgId);
+      const gcConfigured = !!(CFG.email && CFG.password);
+      const sources = FHSources.describeSources({
+        grubcenter: { configured: gcConfigured, lastSync: STORE.lastSync },
+        items86: { configured: gcConfigured, lastSync: STORE.itemsLastSync || 0, records: STORE.itemsArray.length },
+        upOrders: { configured: !!process.env.URBANPIPER_WEBHOOK_SECRET, lastSync: STORE.upMeta.lastWebhookAt, records: STORE.upOrders.length, note: STORE.upMeta.lastWebhookAt ? null : 'No webhook received yet (Jaddaf not live)' },
+        upCatalog: { configured: true, lastSync: (STORE.upCatalog && (STORE.upCatalog.receivedAt || STORE.upCatalog.capturedAt)) || 0, records: STORE.upCatalog && STORE.upCatalog.items ? STORE.upCatalog.items.length : null, note: STORE.upCatalog ? null : 'No Atlas snapshot yet' },
+        zoho: { configured: zohoConfigured, lastSync: STORE.zoho && STORE.zoho.lastSync }
+      });
+      return sendGzip(req, res, 200, { checkedAt: Date.now(), summary: FHSources.summarize(sources), sources });
+    }
+
     if (u.pathname === '/api/status') {
       // lastSync / syncing are reported even when the Cognito check fails:
       // the UI polls them to know when a sync finished, and dropping them on
@@ -1065,9 +1098,11 @@ http.createServer(async (req, res) => {
 
     if (u.pathname === '/api/orders') {
       const from = u.searchParams.get('from'), to = u.searchParams.get('to');
-      let filtered = STORE.ordersArray;
+      // GrubCENTER (Motor City) + UrbanPiper (Jaddaf), each tagged with `source`.
+      const all = allOrders();
+      let filtered = all;
       if (from || to) {
-        filtered = STORE.ordersArray.filter(o => {
+        filtered = all.filter(o => {
           if (!o.receivedAt) return false;
           const d = dubaiDateKey(o.receivedAt);
           return (!from || d >= from) && (!to || d <= to);
@@ -1090,7 +1125,7 @@ http.createServer(async (req, res) => {
 
       return sendGzip(req, res, 200, {
         count: filtered.length,
-        totalInStore: STORE.ordersArray.length,
+        totalInStore: all.length,
         orders: filtered,
         opsCount: STORE.liveOpsCount,
         cancelCount: STORE.liveCancelCount,
@@ -1101,9 +1136,10 @@ http.createServer(async (req, res) => {
 
     if (u.pathname === '/api/order-items') {
       const from = u.searchParams.get('from'), to = u.searchParams.get('to');
-      let filtered = STORE.orderItemsArray;
+      const allItems = allOrderItems();
+      let filtered = allItems;
       if (from || to) {
-        filtered = STORE.orderItemsArray.filter(x => {
+        filtered = allItems.filter(x => {
           if (!x.at) return false;
           const d = dubaiDateKey(x.at);
           return (!from || d >= from) && (!to || d <= to);
@@ -1111,7 +1147,7 @@ http.createServer(async (req, res) => {
       }
       return sendGzip(req, res, 200, {
         count: filtered.length,
-        totalInStore: STORE.orderItemsArray.length,
+        totalInStore: allItems.length,
         items: filtered,
         lastSync: STORE.lastSync
       });

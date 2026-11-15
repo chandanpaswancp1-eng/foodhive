@@ -1,5 +1,6 @@
 const { waitUntil } = require('@vercel/functions');
-const { configured, syncOnce, readOrderItems, readMeta, dubaiDateKey } = require('./_lib/grubcenter');
+const { configured, syncOnce, readMeta, dubaiDateKey } = require('./_lib/grubcenter');
+const { readAllOrderItems } = require('./_lib/store');
 
 const SYNC_INTERVAL_MS = 10 * 60 * 1000;
 
@@ -7,7 +8,7 @@ module.exports = async (req, res) => {
   const url = new URL(req.url, 'http://x');
   const from = url.searchParams.get('from'), to = url.searchParams.get('to');
 
-  const [itemsArray, meta] = await Promise.all([readOrderItems(), readMeta()]);
+  const [itemsArray, meta] = await Promise.all([readAllOrderItems(), readMeta()]);
   let filtered = itemsArray;
   if (from || to) {
     filtered = itemsArray.filter(x => {

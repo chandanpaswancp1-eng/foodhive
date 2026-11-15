@@ -139,7 +139,12 @@ function destroyAllCharts() {
 // above). All chart-adjacent motion was removed for that reason; KPI tiles
 // (plain DOM, never touched by Chart.js) are the safe place for motion.
 function mk(id, cfg) {
-  if (charts[id]) charts[id].destroy();
+  // Unregister as well as destroy: with no data (cfg.__empty) no new chart
+  // replaces it, and callers like patchPct() that look a chart up in
+  // charts[id] would otherwise call update() on a destroyed chart, which
+  // throws inside Chart.js ("addEventListener of null"). Reached whenever a
+  // filter leaves a chart empty, e.g. the Jaddaf kitchen before go-live.
+  if (charts[id]) { charts[id].destroy(); delete charts[id]; }
   const el = document.getElementById(id); if (!el) return;
   const p = el.parentElement; $$('.empty', p).forEach(e => e.remove());
   if (cfg.__empty) {
@@ -350,11 +355,15 @@ function dateOk(t) { const k = dkey(t); return (!S.f.from || k >= S.f.from) && (
 // f is 'All' (string), a single value (string, set by chart/table click-to-
 // drill), or an array (set by the Brand/Channel multi-select filter below).
 const eq = (v, f) => f === 'All' || (Array.isArray(f) ? f.includes(v) : v === f);
-function base(page, skipDate) {
+// `loc` overrides the kitchen (location) for one call, so KPI splits and the
+// kitchen comparison tables can compute any page's figures per kitchen with
+// every other filter unchanged. Defaults to the selected branch (S.f.location).
+function base(page, skipDate, loc) {
   const f = S.f;
+  const kitchen = loc == null ? f.location : loc;
   return S.orders.filter(o => {
     if (!skipDate && !dateOk(o.receivedAt)) return false;
-    if (!eq(o.brand, f.brand) || !eq(o.location, f.location) || !eq(o.cuisine, f.cuisine)) return false;
+    if (!eq(o.brand, f.brand) || !eq(o.location, kitchen) || !eq(o.cuisine, f.cuisine)) return false;
     if (page === 'sales' || page === 'commission' || page === 'ebitda') {
       if (!eq(o.channel, f.channel) || !eq(o.payment, f.payment) || !eq(o.partner, f.partner)) return false;
       if (f.day !== 'All' && dowOf(o.receivedAt) !== f.day) return false;
@@ -375,17 +384,19 @@ function base(page, skipDate) {
 }
 
 // ---------------- filter bar configuration ----------------
+// Branch (S.f.location) is chosen from the Branch filter on Order Details, a
+// multi-select like Brand. Like every filter in S.f it applies on every page.
 const FILTERS = {
-  sales: [['dates', 'Received At'], ['channel', 'Channel'], ['brand', 'Brand'], ['location', 'Location'], ['payment', 'Payment Method'], ['day', 'Day Name'], ['partner', 'Delivery Partner']],
-  cancel: [['location', 'Location'], ['brand', 'Brand'], ['reason', 'Reason'], ['channel', 'Channel'], ['post', 'Post Cancelled'], ['dates', 'Received At']],
-  prep: [['location', 'Location'], ['brand', 'Brand']],
+  sales: [['dates', 'Received At'], ['channel', 'Channel'], ['brand', 'Brand'], ['location', 'Branch'], ['payment', 'Payment Method'], ['day', 'Day Name'], ['partner', 'Delivery Partner']],
+  cancel: [['brand', 'Brand'], ['reason', 'Reason'], ['channel', 'Channel'], ['post', 'Post Cancelled'], ['dates', 'Received At']],
+  prep: [['brand', 'Brand']],
   ratings: [['dates', 'Received At']],
-  items: [['location', 'Location'], ['brand', 'Brand'], ['dates', 'Received At']],
-  delayed: [['brand', 'Brand'], ['location', 'Branch'], ['dates', 'Received At']],
-  commission: [['dates', 'Received At'], ['channel', 'Channel'], ['brand', 'Brand'], ['location', 'Location']],
-  ebitda: [['dates', 'Received At'], ['channel', 'Channel'], ['brand', 'Brand'], ['location', 'Location']],
-  export: [['dates', 'Received At'], ['brand', 'Brand'], ['location', 'Location']],
-  comparison: [['location', 'Location']],
+  items: [['brand', 'Brand'], ['dates', 'Received At']],
+  delayed: [['brand', 'Brand'], ['dates', 'Received At']],
+  commission: [['dates', 'Received At'], ['channel', 'Channel'], ['brand', 'Brand']],
+  ebitda: [['dates', 'Received At'], ['channel', 'Channel'], ['brand', 'Brand']],
+  export: [['dates', 'Received At'], ['brand', 'Brand']],
+  comparison: [],
   targets: [['channel', 'Channel']]
 };
 
@@ -395,6 +406,8 @@ function optionsFor(key) {
   if (key === 'day') return DOW;
   if (key === 'post') return ['Yes', 'No'];
   if (key === 'reason') return uniq(S.orders.filter(o => o.cancelled).map(o => o.reason)).sort();
+  // Both branches are always listed, Jaddaf included before it has orders.
+  if (key === 'location') return uniq(['Motor City', 'Jaddaf'].concat(src.map(o => o.location))).filter(Boolean).sort();
   return uniq(src.map(get[key] || (() => ''))).filter(Boolean).sort();
 }
 
@@ -603,7 +616,7 @@ function getDefaultPeriod() {
 }
 
 // ---------------- Brand/Channel multi-select filter ----------------
-const MULTI_FILTER_KEYS = new Set(['brand', 'channel']);
+const MULTI_FILTER_KEYS = new Set(['brand', 'channel', 'location']);
 
 function selectedValuesFor(key) {
   const f = S.f[key];
@@ -867,6 +880,160 @@ function buildToggles() {
   }
 }
 
+// ---------------- KPI LAYOUT (two kitchens) ----------------
+// 1. One order on every page: money -> volume -> unit economics -> rate /
+//    quality -> top performer. kpis() sorts each page's tiles by title.
+// 2. Accounting tiles sit in labelled groups.
+// 3. On "All", order-based tiles show a Motor City | Jaddaf split line, and
+//    each page's kitchen comparison table uses the same calculators.
+// Tile values, click handlers and tooltips stay in each page's render code;
+// this layer only orders, groups and adds the per-kitchen figures.
+const KITCHENS = ['Motor City', 'Jaddaf'];
+const KITCHEN_SHORT = { 'Motor City': 'MC', Jaddaf: 'JD' };
+const KPI_ORDER = {
+  sales: ['Gross Sales', 'Net Sales', 'Total Orders', 'AOV', 'Total Discount', 'Discount %', 'Projected Month-End', 'Month-End Total', 'Top Performing Brand'],
+  cancel: ['Cancelled Orders Amount', 'Total Cancelled Orders', 'Cancel Rate %', 'Cancelled AOV', 'Refund Amount', 'Reverted by Aggregator'],
+  prep: ['Receiving → Dispatched', 'Acc → Started', 'Started → Prepared', 'Prepared → STD', 'STD → Dispatched', 'Received → Delivered', 'Best vs Worst Brand Location'],
+  ratings: ['Total Ratings', 'Positive Ratings', 'Negative Ratings', 'Negative Ratings %', 'Polarity rate'],
+  items: ['86 Items', '86 per 100 Orders', 'Brand with Most 86 Items', 'Location with Most 86 Items'],
+  delayed: ['Delayed Orders', 'Total Orders', 'Delayed %', 'Avg Delay (min)'],
+  commission: ['Total Commission', 'Net after Commission', 'Blended Commission %', 'Commission % of Gross Sales', 'Highest-Commission Channel'],
+  ebitda: ['Net Sales', 'EBITDA', 'EBITDA Margin %', 'Food Cost %', 'Prime Cost %', 'Portal Commission %', 'Controllable Profit %', 'Download P&L (PDF)']
+};
+const ACCOUNTING_GROUPS = [
+  ['Profit & Loss', ['Total Income', 'Total Expenses', 'Net Profit', 'Net Margin %', 'Sales Net (orders)', 'Portal Commission', 'True Net Profit']],
+  ['Cash', ['Bank Balance', 'Cash']],
+  ['Receivables & Payables', ['A/R Outstanding', 'Overdue Invoices', 'Total Invoices', 'A/P Outstanding', 'Overdue Bills', 'Total Bills', 'Total Procurement Amount', 'Top Vendor Owed']],
+  ['Balance Sheet', ['Total Assets', 'Total Liabilities', 'Total Equity']]
+];
+// Every page's tiles sit in small labelled clusters (one band, side by
+// side): what kind of number each one is, at a glance. The cluster lists also
+// set the tile order within the page.
+const KPI_CLUSTERS = {
+  sales: [['Revenue', ['Gross Sales', 'Net Sales', 'AOV']], ['Volume', ['Total Orders']], ['Discounts', ['Total Discount', 'Discount %']], ['Outlook', ['Projected Month-End', 'Month-End Total', 'Top Performing Brand']]],
+  cancel: [['Cancellations', ['Cancelled Orders Amount', 'Total Cancelled Orders', 'Cancel Rate %', 'Cancelled AOV']], ['Money returned', ['Refund Amount', 'Reverted by Aggregator']]],
+  prep: [['End to end (min)', ['Receiving → Dispatched', 'Received → Delivered']], ['Kitchen stages (min)', ['Acc → Started', 'Started → Prepared', 'Prepared → STD', 'STD → Dispatched']], ['Outlets', ['Best vs Worst Brand Location']]],
+  ratings: [['Ratings', ['Total Ratings', 'Positive Ratings', 'Negative Ratings']], ['Rates', ['Negative Ratings %', 'Polarity rate']]],
+  items: [['Stock-outs', ['86 Items', '86 per 100 Orders']], ['Hotspots', ['Brand with Most 86 Items', 'Location with Most 86 Items']]],
+  delayed: [['Delays', ['Delayed Orders', 'Total Orders']], ['Rates', ['Delayed %', 'Avg Delay (min)']]],
+  commission: [['Commission', ['Total Commission', 'Net after Commission']], ['Rates', ['Blended Commission %', 'Commission % of Gross Sales']], ['Top channel', ['Highest-Commission Channel']]],
+  ebitda: [['Profit', ['Net Sales', 'EBITDA', 'EBITDA Margin %']], ['Cost ratios', ['Food Cost %', 'Prime Cost %', 'Portal Commission %', 'Controllable Profit %']], ['Report', ['Download P&L (PDF)']]],
+  comparison: [['Sales', ['Net Sales Today', 'Net Sales Yesterday']], ['Change', ['Day-over-Day', 'Week-over-Week']], ['Brands', ['Top Gaining Brand', 'Top Declining Brand']]],
+  accounting: ACCOUNTING_GROUPS
+};
+Object.entries(KPI_CLUSTERS).forEach(([pg, groups]) => { KPI_ORDER[pg] = groups.flatMap(([, t]) => t); });
+const KPI_GROUPS = Object.fromEntries(Object.entries(KPI_CLUSTERS).map(([pg, groups]) => [pg, Object.fromEntries(groups.flatMap(([g, t]) => t.map(x => [x, g])))]));
+
+// Stable sort by the page's order; tiles not listed keep their relative
+// position after the listed ones.
+function orderKpis(page, list) {
+  const ord = KPI_ORDER[page];
+  if (!ord) return list;
+  const rank = h => { const i = ord.indexOf(h); return i < 0 ? ord.length : i; };
+  return list.map((t, i) => [t, i]).sort((a, b) => rank(a[0][0]) - rank(b[0][0]) || a[1] - b[1]).map(x => x[0]);
+}
+
+// Per-kitchen figures for one page: { tile title: { v: number|null, f: formatter, add: additive? } }.
+// Same formulas as the page's own tiles, over base(page, false, kitchen).
+const kAvg = a => (a.length ? a.reduce((s, x) => s + x, 0) / a.length : null);
+const KITCHEN_CALC = {
+  sales: loc => {
+    const O = base('sales', false, loc).filter(o => !o.cancelled);
+    const net = sum(O, o => o.netSales), rec = sum(O, o => o.receiptTotal), disc = sum(O, o => o.discount), n = O.length;
+    return {
+      'Net Sales': { v: net, f: money, add: true }, 'Gross Sales': { v: rec, f: money, add: true },
+      'Total Orders': { v: n, f: cnt, add: true }, 'AOV': { v: n ? net / n : null, f: x => x.toFixed(2) },
+      'Total Discount': { v: disc, f: money, add: true }, 'Discount %': { v: rec ? disc / rec : null, f: x => pc(x, 1) }
+    };
+  },
+  cancel: loc => {
+    const all = base('cancel', false, loc), C = all.filter(o => o.cancelled);
+    const amt = sum(C, o => o.receiptTotal), n = C.length;
+    return {
+      'Cancelled Orders Amount': { v: amt, f: money, add: true }, 'Total Cancelled Orders': { v: n, f: cnt, add: true },
+      'Cancel Rate %': { v: all.length ? n / all.length : null, f: x => pc(x, 2) }, 'Cancelled AOV': { v: n ? amt / n : null, f: x => x.toFixed(2) }
+    };
+  },
+  prep: loc => {
+    const O = base('prep', false, loc).filter(o => !o.cancelled).map(o => stageVals(o));
+    return Object.fromEntries(STAGES.map(([k, l]) => [l, { v: kAvg(O.map(v => v[k]).filter(v => v != null)), f: x => x.toFixed(2) }]));
+  },
+  ratings: loc => {
+    let R = base('ratings', false, loc).filter(o => !o.cancelled).map(o => ({ ...o, rating: orderRating(o) })).filter(o => o.rating != null);
+    if (S.selBrands.size) R = R.filter(o => S.selBrands.has(o.brand));
+    if (S.f.star && S.f.star !== 'All') R = R.filter(o => Math.round(o.rating) === +S.f.star);
+    const n = R.length, neg = R.filter(o => o.rating <= 3).length, pos = n - neg;
+    return {
+      'Total Ratings': { v: n, f: cnt, add: true }, 'Positive Ratings': { v: pos, f: cnt, add: true }, 'Negative Ratings': { v: neg, f: cnt, add: true },
+      'Negative Ratings %': { v: n ? neg / n : null, f: x => pc(x, 2) }, 'Polarity rate': { v: n ? pos / n : null, f: x => pc(x, 2) }
+    };
+  },
+  items: loc => {
+    const f = S.f;
+    const I = S.items.filter(x => dateOk(x.at) && eq(x.brand, f.brand) && eq(x.location, loc) && eq(x.cuisine, f.cuisine) && (f.item === 'All' || x.item === f.item) && (f.source === 'All' || x.source === f.source) && (f.type === 'All' || x.type === f.type));
+    const orders = base('items', false, loc).filter(o => !o.cancelled).length;
+    return { '86 Items': { v: I.length, f: cnt, add: true }, '86 per 100 Orders': { v: orders ? I.length / orders * 100 : null, f: x => x.toFixed(2) } };
+  },
+  delayed: loc => {
+    const all = base('delayed', false, loc).filter(o => !o.cancelled).map(o => { const p = prepOf(o); const est = o.estPrep != null ? o.estPrep : EST_DEFAULT; return { p, delay: p == null ? null : p - est }; }).filter(x => x.p != null);
+    const d = all.filter(x => x.delay > DELAY_LIMIT);
+    return {
+      'Delayed Orders': { v: d.length, f: cnt, add: true }, 'Total Orders': { v: all.length, f: cnt, add: true },
+      'Delayed %': { v: all.length ? d.length / all.length : null, f: x => pc(x, 2) }, 'Avg Delay (min)': { v: kAvg(d.map(x => x.delay - DELAY_LIMIT)), f: x => x.toFixed(1) }
+    };
+  },
+  commission: loc => {
+    const O = base('commission', false, loc).filter(o => !o.cancelled);
+    const net = sum(O, o => o.netSales), gross = sum(O, o => o.receiptTotal), com = sum(O, o => FHCommission.commissionForOrder(o));
+    return {
+      'Total Commission': { v: com, f: money, add: true }, 'Net after Commission': { v: net - com, f: money, add: true },
+      'Blended Commission %': { v: net ? com / net : null, f: x => pc(x, 1) }, 'Commission % of Gross Sales': { v: gross ? com / gross : null, f: x => pc(x, 1) }
+    };
+  },
+  ebitda: loc => {
+    const O = base('ebitda', false, loc).filter(o => !o.cancelled);
+    const net = sum(O, o => o.netSales), com = sum(O, o => FHCommission.commissionForOrder(o));
+    return { 'Net Sales': { v: net, f: money, add: true }, 'Portal Commission %': { v: net ? com / net : null, f: x => pc(x, 1) } };
+  },
+  accounting: loc => {
+    const g = grubCenterMonthFigures(loc);
+    return { 'Sales Net (orders)': { v: g.netSales, f: money, add: true }, 'Portal Commission': { v: g.commission, f: money, add: true } };
+  }
+};
+const kitchenHasOrders = loc => S.orders.some(o => o.location === loc);
+const kFmt = (c, loc) => (!c || c.v == null || (!kitchenHasOrders(loc) && !c.v) ? '–' : c.f(c.v));
+
+// Split lines for the page's tiles, only when the switcher is on All.
+function kpiSplitLines(page) {
+  if ((S.f.location || 'All') !== 'All' || !KITCHEN_CALC[page]) return null;
+  const per = KITCHENS.map(k => [k, KITCHEN_CALC[page](k)]);
+  const out = {};
+  Object.keys(per[0][1]).forEach(t => {
+    out[t] = per.map(([k, c]) => `<span>${KITCHEN_SHORT[k]} ${esc(kFmt(c[t], k))}</span>`).join('<i>|</i>');
+  });
+  return out;
+}
+
+// Motor City vs Jaddaf table for a page, in place of its single-location
+// chart. Rows are the page's per-kitchen figures in the standard order.
+function kitchenCompareTable(tableId, page) {
+  const el = document.getElementById(tableId);
+  if (!el || !KITCHEN_CALC[page]) return;
+  const per = Object.fromEntries(KITCHENS.map(k => [k, KITCHEN_CALC[page](k)]));
+  const grp = KITCHEN_CALC[page]('All');
+  const ord = KPI_ORDER[page] || [];
+  const titles = Object.keys(grp).sort((a, b) => (ord.indexOf(a) < 0 ? 99 : ord.indexOf(a)) - (ord.indexOf(b) < 0 ? 99 : ord.indexOf(b)));
+  const cur = S.f.location || 'All';
+  el.innerHTML = `<thead><tr><th>KPI</th>${KITCHENS.map(k => `<th class="num kc-h${cur === k ? ' on' : ''}" data-k="${esc(k)}" title="Show ${esc(k)} only">${esc(k)}</th>`).join('')}<th class="num kc-h${cur === 'All' ? ' on' : ''}" data-k="All" title="Show both kitchens">Group</th><th class="num">MC share</th></tr></thead><tbody>${
+    titles.map(t => {
+      const g = grp[t], mc = per['Motor City'][t];
+      const share = g && g.add && g.v ? pc((mc && mc.v || 0) / g.v, 1) : '–';
+      return `<tr><td>${esc(t)}</td>${KITCHENS.map(k => `<td class="num">${esc(kFmt(per[k][t], k))}</td>`).join('')}<td class="num"><b>${esc(g && g.v != null ? g.f(g.v) : '–')}</b></td><td class="num">${share}</td></tr>`;
+    }).join('')
+  }</tbody>`;
+  $$('th.kc-h', el).forEach(th => { th.onclick = () => { if (typeof setKitchen === 'function') setKitchen(th.dataset.k); }; });
+}
+
 // ---------------- KPI card renderer ----------------
 function kpis(id, list) {
   const container = $('#' + id);
@@ -877,15 +1044,36 @@ function kpis(id, list) {
     if (h && v) { prevVals[h.textContent] = v.textContent; prevActive[h.textContent] = el.classList.contains('active'); }
   });
 
-  container.innerHTML = list.map(([h, v, wide, , isActive, tooltip, kind], idx) => {
+  // Standard order, group rows and per-kitchen split lines (see KPI LAYOUT).
+  const page = id.replace(/^kpi-/, '');
+  list = orderKpis(page, list);
+  const split = kpiSplitLines(page);
+  const groupOf = KPI_GROUPS[page] || {};
+  const tileHtml = ([h, v, wide, , isActive, tooltip, kind], idx) => {
     const act = isActive ? ' active' : '';
     const kindCls = kind && kind !== 'filter' ? ` kpi--${kind}` : '';
     const tip = tooltip ? ` title="${esc(tooltip)}"` : ' title="Click to filter/reflect data"';
+    const sub = split && split[h] ? `<div class="ks">${split[h]}</div>` : '';
     return `<div class="kpi${wide ? ' wide' : ''}${act}${kindCls}" data-idx="${idx}"${tip} role="button" tabindex="0">
       <div class="kh">${h}</div>
-      <div class="kv">${v}</div>
+      <div class="kv${/^\s*[-−]\d/.test(String(v)) ? ' kv-neg' : ''}">${v}</div>${sub}
     </div>`;
-  }).join('');
+  };
+  // Consecutive tiles of the same group form one labelled cluster; tiles
+  // without a group (new or page-specific) get a cluster of their own.
+  const clusters = [];
+  list.forEach((t, idx) => {
+    const g = groupOf[t[0]] || '';
+    const last = clusters[clusters.length - 1];
+    if (last && last.g === g && g) last.items.push([t, idx]);
+    else clusters.push({ g, items: [[t, idx]] });
+  });
+  const weight = c => c.items.reduce((w, [t]) => w + (t[2] ? 2.2 : 1), 0);
+  container.classList.add('kpis--clustered');
+  container.innerHTML = clusters.map(c => `<section class="kpi-cluster" style="flex-grow:${weight(c)}"${c.g ? ` aria-label="${esc(c.g)}"` : ''}>
+      ${c.g ? `<div class="kpi-cluster-h">${esc(c.g)}</div>` : ''}
+      <div class="kpi-cluster-row">${c.items.map(([t, idx]) => tileHtml(t, idx)).join('')}</div>
+    </section>`).join('');
 
   container.querySelectorAll('.kpi').forEach(el => {
     const idx = +el.dataset.idx;
@@ -1287,9 +1475,8 @@ function renderSales() {
     options: tOpts
   } : { __empty: true });
 
-  const loc = salesAgg(O, o => o.location).sort((a, b) => metricOf(b, m) - metricOf(a, m)).slice(0, 10).map(r => ({ k: r.k, v: metricOf(r, m), orders: r.orders }));
-  combo('c-loc', loc, { name: mname, pctName: '%GT Total Orders', filterKey: 'location', fmt: mf });
-  patchPct('c-loc', loc, n);
+  // Kitchens side by side (replaces the single-location bar chart).
+  kitchenCompareTable('kc-sales', 'sales');
 
   const sl = salesAgg(O, o => slotOf(dubaiHour(o.receivedAt))).sort((a, b) => metricOf(b, m) - metricOf(a, m));
   combo('c-slot', sl.map(r => ({ k: r.k, v: metricOf(r, m) })), { name: mname, pctName: '%GT Total Orders', filterKey: 'slot', fmt: mf });
@@ -1502,7 +1689,8 @@ function renderCancel() {
   kpis('kpi-cancel', [
     ['Cancelled Orders Amount', money(amt), false, () => { S.ui.cmetric = 'value'; buildToggles(); renderCancel(); }, val, 'Click to view Cancelled Orders Value in AED across all charts'],
     ['Total Cancelled Orders', cnt(n), false, () => { S.ui.cmetric = 'orders'; buildToggles(); renderCancel(); }, !val, 'Click to view Cancelled Orders Count volume across all charts'],
-    ['AOV', n ? (amt / n).toFixed(2) : '0', false, null, false, 'Average Order Value of cancelled orders (Cancelled Orders Amount / Total Cancelled Orders). Use the "Post Cancelled" filter above to isolate direct kitchen food waste.'],
+    ['Cancel Rate %', base('cancel').length ? pc(n / base('cancel').length, 2) : '0%', false, null, false, 'Cancelled orders as a share of all orders in the same filters (Total Cancelled Orders / all orders).'],
+    ['Cancelled AOV', n ? (amt / n).toFixed(2) : '0', false, null, false, 'Average Order Value of cancelled orders (Cancelled Orders Amount / Total Cancelled Orders). Use the "Post Cancelled" filter above to isolate direct kitchen food waste.'],
     ['Refund Amount', money(refund.amt), false, openRefundDrillModal, false, 'Cancelled orders paid by PREPAID or CARD only (money already captured at order time) — excludes CASH-on-delivery and FOC (free) orders, since no money changed hands for those. Click for the channel breakdown.', 'drill'],
     ['Reverted by Aggregator', money(reverted.amt), false, openAggregatorRevertDrillModal, false, 'Net Sales of cancelled orders attributed to the aggregator/delivery partner (platform-cancelled, rider not found, captain delay) — excludes "Duplicated order" and other non-aggregator reasons. Click for the channel breakdown.', 'drill']
   ]);
@@ -1513,7 +1701,7 @@ function renderCancel() {
     combo(id, rows.map(r => ({ k: r.k, v: mv(r) })), { name: val ? 'Orders Value' : 'Cancelled Orders', pctName: '%GT Cancelled Orders', fmt: lbf, filterKey });
     const c = charts[id]; if (c && c.data.datasets[1]) { c.data.datasets[1].data = rows.map(r => (tot ? r.orders / tot * 100 : 0)); c.update('none'); }
   };
-  fill('c-cloc', o => o.location, 8, 'location');
+  kitchenCompareTable('kc-cancel', 'cancel');
   fill('c-cchan', o => o.channel, 8, 'channel');
 
   const post = groupBy(C, o => (o.postCancelled ? 'Yes' : 'No')).map(g => ({ k: g.k, v: val ? sum(g.rows, o => o.receiptTotal) : g.rows.length }));
@@ -1767,9 +1955,8 @@ function renderPrep() {
     }).join('')}</tbody>`;
   }
 
-  // location counts
-  const lc = groupBy(O, x => x.o.location).map(g2 => ({ k: g2.k, v: g2.rows.length })).sort((a, b) => b.v - a.v).slice(0, 28);
-  barsPlain('c-ploc', lc, { fmt: v => String(v), filterKey: 'location' });
+  // Kitchens side by side (replaces the order count by location chart).
+  kitchenCompareTable('kc-prep', 'prep');
 }
 
 function renderRatings() {
@@ -1864,18 +2051,20 @@ function renderItems86() {
 
   const isBrandActive = !!(topB && f.brand === topB.k);
   const isLocActive = !!(topL && f.location === topL.k);
-  const isAllActive = f.brand === 'All' && f.location === 'All' && f.item === 'All';
+  const isAllActive = f.brand === 'All' && f.item === 'All' && f.source === 'All' && f.type === 'All';
+  const ordersInScope = base('items').filter(o => !o.cancelled).length;
 
   kpis('kpi-items', [
     ['86 Items', cnt(n), false, () => {
+      // Resets the 86 filters; the kitchen is a global choice (switcher).
       S.f.brand = 'All';
-      S.f.location = 'All';
       S.f.item = 'All';
       S.f.source = 'All';
       S.f.type = 'All';
       syncFilterUI();
       renderItems86();
     }, isAllActive, 'Click to reset all 86 filters to show full inventory stock-outs'],
+    ['86 per 100 Orders', ordersInScope ? (n / ordersInScope * 100).toFixed(2) : '0', false, null, false, '86 events per 100 orders in the same date range, brand and kitchen: stock-outs relative to how busy the kitchen was.'],
     ['Brand with Most 86 Items', topB ? esc(topB.k) : '–', true, () => {
       if (!topB) return;
       S.f.brand = (S.f.brand === topB.k ? 'All' : topB.k);
@@ -1884,9 +2073,7 @@ function renderItems86() {
     }, isBrandActive, topB ? (isBrandActive ? `Currently showing Brand "${topB.k}" (click to reset)` : `Click to filter 86ed items for Brand "${topB.k}"`) : ''],
     ['Location with Most 86 Items', topL ? esc(topL.k) : '–', true, () => {
       if (!topL) return;
-      S.f.location = (S.f.location === topL.k ? 'All' : topL.k);
-      syncFilterUI();
-      render();
+      setKitchen(S.f.location === topL.k ? 'All' : topL.k);
     }, isLocActive, topL ? (isLocActive ? `Currently showing Location "${topL.k}" (click to reset)` : `Click to filter 86ed items for Location "${topL.k}"`) : '']
   ]);
 
@@ -1896,8 +2083,7 @@ function renderItems86() {
   const bRows = cr(x => (S.ui.igroup === 'brand' ? x.brand : x.cuisine), 12);
   combo('c-ibrand', bRows, { name: 'Total 86 Items', pctName: '%GT of 86 Items', fmt: cnt, filterKey: S.ui.igroup === 'brand' ? 'brand' : 'cuisine' });
 
-  const lRows = cr(x => x.location, 11);
-  combo('c-iloc', lRows, { name: 'Count of 86 Items', pctName: '%GT Count of 86 Items', fmt: cnt, filterKey: 'location' });
+  kitchenCompareTable('kc-items', 'items');
 
   hbar('c-idist', cr(x => x.item, 10), { fmt: cnt, filterKey: 'item' });
   donut('c-isrc', groupBy(I, x => x.source).map(g => ({ k: g.k, v: g.rows.length })).sort((a, b) => b.v - a.v), { fmt: cnt, colors: [Y, '#1e88e5', '#555', '#ee2a5c'], filterKey: 'source' });
@@ -1939,7 +2125,7 @@ function renderItems86() {
   } : { __empty: true });
 
   // fix %GT fields
-  [['c-ibrand', bRows], ['c-iloc', lRows]].forEach(([id, rows]) => {
+  [['c-ibrand', bRows]].forEach(([id, rows]) => {
     const c = charts[id]; if (c && c.data.datasets[1]) { c.data.datasets[1].data = rows.map(r => r.v / tot * 100); c.update('none'); }
   });
 }
@@ -2082,10 +2268,11 @@ function renderDelayed() {
       const el = document.getElementById('delayTable');
       if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
     }, isOnlyDelayed, 'Click to filter dashboard to only delayed orders (>10 min delay) and highlight bottlenecks'],
-    ['> 10 Minutes %', allOrders.length ? pc(delayed.length / allOrders.length, 2) : '0%', false, () => {
+    ['Delayed %', allOrders.length ? pc(delayed.length / allOrders.length, 2) : '0%', false, () => {
       S.f.onlyDelayed = !S.f.onlyDelayed;
       renderDelayed();
-    }, isOnlyDelayed, 'Click to toggle delay exception view (>10 min delay)']
+    }, isOnlyDelayed, 'Share of orders delayed more than 10 minutes past their estimated prep time. Click to toggle the delayed-only view.'],
+    ['Avg Delay (min)', delayed.length ? (sum(delayed, x => x.delay - DELAY_LIMIT) / delayed.length).toFixed(1) : '0', false, null, false, 'For delayed orders: average minutes beyond the 10-minute allowance.']
   ]);
 
   const O = isOnlyDelayed ? delayed : allOrders;
@@ -2185,6 +2372,7 @@ function renderCommission() {
   const topComm = chanAgg.slice().sort((a, b) => b.commission - a.commission)[0];
 
   kpis('kpi-commission', [
+    ['Net after Commission', money(net - commission), false, null, false, 'Net Sales minus aggregator commission: what the business keeps from these orders before food and operating costs.'],
     ['Total Commission', money(commission), false, () => {
       const el = document.getElementById('c-commchan');
       if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -3368,9 +3556,9 @@ function grubCenterNetSalesByMonth() {
 // the revenue side Zoho Books never records (this org books vendor bills but
 // no sales invoices), computed straight from order data like every other
 // page already does.
-function grubCenterMonthFigures() {
+function grubCenterMonthFigures(loc) {
   const [from, to] = currentMonthBoundsKeys();
-  const O = S.orders.filter(o => !o.cancelled && dkey(o.receivedAt) >= from && dkey(o.receivedAt) <= to);
+  const O = S.orders.filter(o => !o.cancelled && dkey(o.receivedAt) >= from && dkey(o.receivedAt) <= to && (!loc || loc === 'All' || o.location === loc));
   return {
     netSales: sum(O, o => o.netSales),
     commission: sum(O, o => FHCommission.commissionForOrder(o))
@@ -3476,9 +3664,9 @@ function renderAccounting() {
     ['Total Invoices', has ? cnt(z.invoices.length) : '–', false, drill(() => show('export')), false, 'All Zoho Books invoices, any status. Click to open Data Export and download the full list.', 'nav'],
     ['Total Bills', has ? cnt(z.bills.length) : '–', false, drill(() => show('export')), false, 'All Zoho Books bills, any status. Click to open Data Export and download the full list.', 'nav'],
     ['Top Vendor Owed', has ? topVendorOwedLabel(z) : '–', true, drill(() => openAccountingAgingDrillModal('ap')), false, 'The vendor with the highest total outstanding balance across all their bills. Click for the full A/P breakdown.', 'drill'],
-    ['GrubCENTER Net Sales', money(grub.netSales), false, () => show('ebitda'), false, 'Net Sales for the current month, from GrubCENTER order data (the real revenue source -- Zoho Books never records sales invoices for this business). Click to see the full P&L on the EBITDA page.', 'nav'],
-    ['GrubCENTER Commission', money(grub.commission), false, () => show('commission'), false, 'Portal/aggregator commission for the current month, computed from order data. Click to see the full channel breakdown on the Commission page.', 'nav'],
-    ['True Net Profit', has ? money(trueNetProfit) : '–', true, drill(openTrueProfitDrillModal), false, 'GrubCENTER Net Sales − GrubCENTER Commission − Zoho Operating Expenses, for the current month. Click for the full breakdown.', 'drill'],
+    ['Sales Net (orders)', money(grub.netSales), false, () => show('ebitda'), false, 'Net Sales for the current month, from GrubCENTER order data (the real revenue source -- Zoho Books never records sales invoices for this business). Click to see the full P&L on the EBITDA page.', 'nav'],
+    ['Portal Commission', money(grub.commission), false, () => show('commission'), false, 'Portal/aggregator commission for the current month, computed from order data. Click to see the full channel breakdown on the Commission page.', 'nav'],
+    ['True Net Profit', has ? money(trueNetProfit) : '–', false, drill(openTrueProfitDrillModal), false, 'Order Net Sales (both kitchens) − Portal Commission − Zoho Operating Expenses, for the current month. Click for the full breakdown.', 'drill'],
     ['Total Assets', has && z.balanceSheet ? money(z.balanceSheet.totalAssets) : '–', false, (has && z.balanceSheet) ? openBalanceSheetDrillModal : null, false, 'Total assets on the balance sheet, as of today (Zoho Books). Click for the full breakdown.', 'drill'],
     ['Total Liabilities', has && z.balanceSheet ? money(z.balanceSheet.totalLiabilities) : '–', false, (has && z.balanceSheet) ? openBalanceSheetDrillModal : null, false, 'Total liabilities on the balance sheet, as of today (Zoho Books). Click for the full breakdown.', 'drill'],
     ['Total Equity', has && z.balanceSheet ? money(z.balanceSheet.totalEquity) : '–', false, (has && z.balanceSheet) ? openBalanceSheetDrillModal : null, false, "Total equity on the balance sheet, as of today (Zoho Books' own Total Equities figure, cross-checked against Assets − Liabilities). Click for the full breakdown.", 'drill']
@@ -4084,7 +4272,101 @@ function wireTargetsPage() {
 wireTargetsPage();
 
 // ---------------- render & navigation ----------------
-const RENDER = { sales: renderSales, cancel: renderCancel, prep: renderPrep, ratings: renderRatings, items: renderItemsPage, delayed: renderDelayed, commission: renderCommission, ebitda: renderEbitda, targets: renderTargets, comparison: renderComparison, accounting: renderAccounting, export: renderExport };
+// ================= BRANCH (kitchen) SELECTION =================
+// One dashboard, two branches: Motor City (GrubCENTER) and Jaddaf
+// (UrbanPiper). The branch is a normal filter (S.f.location), chosen from the
+// Branch filter on Order Details or a kitchen comparison table's header.
+function lsGet(k) { try { return localStorage.getItem(k); } catch (_) { return null; } }
+function lsSet(k, v) { try { localStorage.setItem(k, v); } catch (_) {} }
+// The branch used to be remembered per browser; a stale saved choice would
+// now filter silently, so drop it.
+try { localStorage.removeItem('fh_kitchen_v1'); } catch (_) {}
+function setKitchen(k) {
+  S.f.location = k;
+  S.selLocs.clear();
+  syncFilterUI();
+  render();
+}
+
+// ================= NAV SECTIONS =================
+// Collapsible groups; the open/closed state is remembered per browser. The
+// active page stays visible even inside a closed group.
+(function initNavSections() {
+  const KEY = 'fh_nav_closed_v1';
+  let closed = [];
+  try { closed = JSON.parse(lsGet(KEY) || '[]'); } catch (_) {}
+  $$('#nav .nav-sec').forEach(sec => {
+    if (closed.includes(sec.dataset.sec)) sec.classList.add('closed');
+    const h = $('.nav-sec-h', sec);
+    h.setAttribute('aria-expanded', String(!sec.classList.contains('closed')));
+    h.onclick = () => {
+      sec.classList.toggle('closed');
+      h.setAttribute('aria-expanded', String(!sec.classList.contains('closed')));
+      lsSet(KEY, JSON.stringify($$('#nav .nav-sec.closed').map(x => x.dataset.sec)));
+    };
+  });
+})();
+
+// ================= DATA SOURCES =================
+// Health of every source behind the dashboard (/api/sources), shown as the
+// sidebar pill and on the Data Sources page.
+S.sources = null;
+function agoText(ms) {
+  if (ms == null) return 'never';
+  const m = Math.round(ms / 60000);
+  if (m < 1) return 'just now';
+  if (m < 60) return m + ' min ago';
+  const h = Math.round(m / 60);
+  return h < 48 ? h + ' h ago' : Math.round(h / 24) + ' days ago';
+}
+async function refreshSources() {
+  try {
+    const j = await fetch('/api/sources').then(r => r.json());
+    if (!j || !Array.isArray(j.sources)) return;
+    S.sources = j;
+    const pill = $('#sourcesPill');
+    if (pill) {
+      const st = j.summary.status;
+      pill.className = 'sources-pill ' + (st === 'ok' ? '' : st);
+      pill.textContent = st === 'ok' ? '● Sources: all fresh' : `● ${j.summary.problems.length} source${j.summary.problems.length > 1 ? 's' : ''} need attention`;
+      pill.title = st === 'ok' ? 'All data sources are fresh' : 'Needs attention: ' + j.summary.problems.join(', ');
+    }
+    if (S.page === 'sources') render();
+  } catch (_) {}
+}
+function renderSources() {
+  const j = S.sources;
+  if (!j) { refreshSources(); kpis('kpi-sources', [['Data Sources', 'Loading…', true, null, false, '', '']]); return; }
+  const list = j.sources;
+  const n = st => list.filter(s => s.status === st).length;
+  kpis('kpi-sources', [
+    ['Sources', String(list.length), false, null, false, 'Data sources feeding the dashboard.', ''],
+    ['Fresh', String(n('ok')), false, null, false, 'Sources whose latest data is within their freshness limit.', ''],
+    ['Need Attention', String(n('stale') + n('error')), false, null, false, 'Sources that are stale or whose last attempt failed.', ''],
+    ['Waiting', String(n('waiting')), false, null, false, 'Set up, but no data has arrived yet (for example Jaddaf before go-live).', ''],
+    ['Not Configured', String(n('off')), false, null, false, 'Sources with no credentials set on this server.', ''],
+    ['Checked', agoText(Date.now() - j.checkedAt), false, () => refreshSources(), false, 'When this status was last checked. Click to check again.', 'nav']
+  ]);
+  const grid = $('#sourcesGrid');
+  if (grid) grid.innerHTML = list.map(s => `
+    <div class="src-card ${s.status}">
+      <h3>${esc(s.name)}</h3>
+      <div class="src-k">${esc(s.kitchen)}</div>
+      <div class="src-what">${esc(s.what)}</div>
+      <dl>
+        <dt>Status</dt><dd><span class="src-status ${s.status}">${esc(s.status === 'off' ? 'not configured' : s.status)}</span></dd>
+        <dt>Last update</dt><dd>${s.lastSync ? esc(agoText(s.ageMs)) : '–'}</dd>
+        ${s.records != null ? `<dt>Records</dt><dd>${Number(s.records).toLocaleString()}</dd>` : ''}
+        ${s.error ? `<dt>Error</dt><dd>${esc(s.error)}</dd>` : ''}
+        ${s.note ? `<dt>Note</dt><dd>${esc(s.note)}</dd>` : ''}
+      </dl>
+    </div>`).join('');
+}
+$('#sourcesPill') && ($('#sourcesPill').onclick = () => show('sources'));
+refreshSources();
+setInterval(() => { if (document.visibilityState !== 'hidden') refreshSources(); }, 60 * 1000);
+
+const RENDER = { sources: renderSources, sales: renderSales, cancel: renderCancel, prep: renderPrep, ratings: renderRatings, items: renderItemsPage, delayed: renderDelayed, commission: renderCommission, ebitda: renderEbitda, targets: renderTargets, comparison: renderComparison, accounting: renderAccounting, export: renderExport };
 function render() { RENDER[S.page](); }
 
 function show(page) {

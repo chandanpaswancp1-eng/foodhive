@@ -35,6 +35,20 @@ node server.js
 http://localhost:3000
 ```
 
+## Two kitchens, two platforms (v2)
+- **Motor City** runs on Grubtech (GrubCENTER sync). **Jaddaf** runs on UrbanPiper (Atlas): orders arrive by Atlas webhook, the catalogue by a one-click snapshot from a signed-in Atlas tab (Atlas has no read API; every login needs reCAPTCHA).
+- Every order carries `source` (`grubcenter` | `urbanpiper`) and `location`. Each source writes its own Blob file (`orders.json`, `up_orders.json`); `/api/orders`, `/api/order-items` merge at read time (`readAllOrders` in `api/_lib/store.js`, `allOrders()` in `server.js`).
+- **Branch filter**: Order Details has a **Branch** multi-select in its filter bar (Motor City, Jaddaf; same control as Brand). It sets `S.f.location`, which like every `S.f` filter applies on all pages; Reset All clears it. A kitchen comparison table's column header also sets it (`setKitchen()`). It is not remembered between visits.
+- **Navigation** is grouped into collapsible sections: Sales, Operations, Menu, Finance, Data (`fh_nav_closed_v1`).
+- **Data Sources** page (`#sources`) and sidebar pill read `/api/sources`. Status rules live in `public/sources.js` (shared by server and browser): ok, stale, waiting, error, off.
+- `mk()` in `public/app.js` unregisters a destroyed chart (`delete charts[id]`); without that, any empty-data redraw left a destroyed chart in `charts` and `patchPct()` crashed Chart.js.
+
+## KPI layout (two kitchens)
+- Every page's tiles sit in labelled clusters side by side (`KPI_CLUSTERS` in `public/app.js`; e.g. Order Details: Revenue · Volume · Discounts · Outlook; Accounting: Profit & Loss · Cash · Receivables & Payables · Balance Sheet). The cluster lists also set the tile order. A new tile goes into a cluster; otherwise it gets an unlabelled cluster at the end.
+- Each cluster renders as one white card (styles under `.kpis--clustered` in `public/style.css`): label top-left, large left-aligned value, kitchen split below, hairline dividers between figures, selected figure tinted with a yellow underline, negative values red (`.kv-neg`).
+- Clusters never shrink below their tiles (CSS min-width auto); the band wraps instead. KPI values do not wrap; a value with a note inside (Projected Month-End) wraps its note only.
+- `KITCHEN_CALC[page](kitchen)` computes a page's order-based figures for one kitchen through `base(page, false, kitchen)`. It drives the `MC … | JD …` split line on tiles when the switcher is on All, and the Motor City vs Jaddaf table (`kitchenCompareTable`) that replaced the single-location charts on Order Details, Cancellations, Prep Time and Items. Zoho and Targets tiles are group-level and have no split.
+
 ## Targets & Growth (`#targets`)
 - Monthly Net Sales and Orders targets for the company and for each channel. There are no brand targets.
 - Targets are entered per month in Target Setup and kept per browser (localStorage `fh_targets_v1`, keyed `YYYY-MM`). Editing the company target auto-splits it across channels by last-30-day sales share, adjusted for commission (`FHGrowth.splitTarget`). Editing a channel locks it as Manual; "Re-split automatically" clears the locks.

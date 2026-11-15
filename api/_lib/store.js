@@ -56,4 +56,28 @@ const writeZoho = data => writeBlobJson(ZOHO_KEY, data);
 const readZohoMeta = () => readBlobJson(ZOHO_META_KEY, { session: null });
 const writeZohoMeta = meta => writeBlobJson(ZOHO_META_KEY, meta);
 
-module.exports = { readOrders, writeOrders, readItems, writeItems, readOrderItems, writeOrderItems, readMeta, writeMeta, readZoho, writeZoho, readZohoMeta, writeZohoMeta, readBlobJson, writeBlobJson };
+// UrbanPiper (Jaddaf) data lives in its own files so its webhook writer never
+// races the GrubCENTER sync writing orders.json. Readers merge at read time.
+const UP_ORDERS_KEY = 'up_orders.json';
+const UP_ORDER_ITEMS_KEY = 'up_order_items.json';
+const UP_META_KEY = 'up_meta.json';
+const readUpOrders = () => readBlobJson(UP_ORDERS_KEY, []);
+const writeUpOrders = arr => writeBlobJson(UP_ORDERS_KEY, arr);
+const readUpOrderItems = () => readBlobJson(UP_ORDER_ITEMS_KEY, []);
+const writeUpOrderItems = arr => writeBlobJson(UP_ORDER_ITEMS_KEY, arr);
+const readUpMeta = () => readBlobJson(UP_META_KEY, { lastWebhookAt: 0, webhookCount: 0, catalogAt: 0 });
+const writeUpMeta = meta => writeBlobJson(UP_META_KEY, meta);
+
+// Every order carries its source. Orders stored before this field existed
+// all came from GrubCENTER.
+const withSource = (arr, source) => (arr || []).map(o => (o && !o.source ? { ...o, source } : o));
+async function readAllOrders() {
+  const [g, u] = await Promise.all([readOrders(), readUpOrders().catch(() => [])]);
+  return withSource(g, 'grubcenter').concat(withSource(u, 'urbanpiper'));
+}
+async function readAllOrderItems() {
+  const [g, u] = await Promise.all([readOrderItems(), readUpOrderItems().catch(() => [])]);
+  return withSource(g, 'grubcenter').concat(withSource(u, 'urbanpiper'));
+}
+
+module.exports = { readOrders, writeOrders, readItems, writeItems, readOrderItems, writeOrderItems, readMeta, writeMeta, readZoho, writeZoho, readZohoMeta, writeZohoMeta, readBlobJson, writeBlobJson, readUpOrders, writeUpOrders, readUpOrderItems, writeUpOrderItems, readUpMeta, writeUpMeta, readAllOrders, readAllOrderItems, withSource };
