@@ -28,8 +28,11 @@ module.exports = async (req, res) => {
   // completed at all. Settled older orders rarely change -- the daily cron
   // (api/sync-cron.js) and the explicit "Sync Now" button cover the rest.
   //
-  // Order-items uses the same narrow window: it has far more rows per day
-  // than orders and was the main reason a wider pull timed out.
+  // Order line items cover TODAY only: they take ~20 s per day from
+  // GrubCENTER, and yesterday + today of both orders and line items ran past
+  // the 60 s limit in production (2026-11-15), so the first visit after a
+  // quiet spell never saved its sync. Yesterday's line items are refreshed by
+  // the daily cron and Sync Now.
   const stale = configured() && Date.now() - (meta.lastSync || 0) > SYNC_INTERVAL_MS;
   if (stale) {
     const bgTo = to || dubaiDateKey(Date.now());
@@ -37,7 +40,7 @@ module.exports = async (req, res) => {
     // Honour a short explicit range (a specific day the client opened), but
     // never fan out to a wide selection.
     const bgFrom = from && from >= earliest && from <= bgTo ? from : dubaiDateKey(Date.now() - 864e5);
-    waitUntil(syncOnce(bgFrom, bgTo, bgFrom).catch(() => {}));
+    waitUntil(syncOnce(bgFrom, bgTo, bgTo).catch(() => {}));
   }
 
   res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
