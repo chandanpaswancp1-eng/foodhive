@@ -23,7 +23,7 @@ description: Run and drive the FoodHive dashboard (local server and Vercel deplo
 - Sales page polling: `/api/live` requested every 10 s; remove an order from `S.orders` and it returns on the next poll.
 
 ## Kitchens and sources (v2)
-- Sweep every page under each kitchen: `FoodHive.show(page)` then select a branch by clicking its Branches tile on Order Details (`#kpi-sales .kpi` titled Motor City or Jaddaf; click again for All), or a `.kc-table th.kc-h[data-k]` header, counting `error` events. Jaddaf has no orders before go-live, so it exercises every empty-data path.
+- Sweep every page under each kitchen: `FoodHive.show(page)` then select a branch with the Branch filter on Order Details (`.msel[data-k="location"]`), or a `.kc-table th.kc-h[data-k]` header, counting `error` events. Jaddaf has no orders before go-live, so it exercises every empty-data path.
 - `/api/sources` returns one status per source; `waiting` and `off` are not problems.
 - The browser tab may be used by the person at the same time; log trusted clicks (`e.isTrusted`) before blaming page jumps on the code.
 

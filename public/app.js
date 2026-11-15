@@ -384,10 +384,10 @@ function base(page, skipDate, loc) {
 }
 
 // ---------------- filter bar configuration ----------------
-// Location is not a per-page filter: the branch chosen from the Branches KPI
-// tiles on Order Details sets S.f.location for every page.
+// Branch (S.f.location) is chosen from the Branch filter on Order Details, a
+// multi-select like Brand. Like every filter in S.f it applies on every page.
 const FILTERS = {
-  sales: [['dates', 'Received At'], ['channel', 'Channel'], ['brand', 'Brand'], ['payment', 'Payment Method'], ['day', 'Day Name'], ['partner', 'Delivery Partner']],
+  sales: [['dates', 'Received At'], ['channel', 'Channel'], ['brand', 'Brand'], ['location', 'Branch'], ['payment', 'Payment Method'], ['day', 'Day Name'], ['partner', 'Delivery Partner']],
   cancel: [['brand', 'Brand'], ['reason', 'Reason'], ['channel', 'Channel'], ['post', 'Post Cancelled'], ['dates', 'Received At']],
   prep: [['brand', 'Brand']],
   ratings: [['dates', 'Received At']],
@@ -406,6 +406,8 @@ function optionsFor(key) {
   if (key === 'day') return DOW;
   if (key === 'post') return ['Yes', 'No'];
   if (key === 'reason') return uniq(S.orders.filter(o => o.cancelled).map(o => o.reason)).sort();
+  // Both branches are always listed, Jaddaf included before it has orders.
+  if (key === 'location') return uniq(['Motor City', 'Jaddaf'].concat(src.map(o => o.location))).filter(Boolean).sort();
   return uniq(src.map(get[key] || (() => ''))).filter(Boolean).sort();
 }
 
@@ -614,7 +616,7 @@ function getDefaultPeriod() {
 }
 
 // ---------------- Brand/Channel multi-select filter ----------------
-const MULTI_FILTER_KEYS = new Set(['brand', 'channel']);
+const MULTI_FILTER_KEYS = new Set(['brand', 'channel', 'location']);
 
 function selectedValuesFor(key) {
   const f = S.f[key];
@@ -908,7 +910,7 @@ const ACCOUNTING_GROUPS = [
 // side): what kind of number each one is, at a glance. The cluster lists also
 // set the tile order within the page.
 const KPI_CLUSTERS = {
-  sales: [['Revenue', ['Net Sales', 'Gross Sales', 'AOV']], ['Volume', ['Total Orders']], ['Branches', ['Motor City', 'Jaddaf']], ['Discounts', ['Total Discount', 'Discount %']], ['Outlook', ['Projected Month-End', 'Month-End Total', 'Top Performing Brand']]],
+  sales: [['Revenue', ['Net Sales', 'Gross Sales', 'AOV']], ['Volume', ['Total Orders']], ['Discounts', ['Total Discount', 'Discount %']], ['Outlook', ['Projected Month-End', 'Month-End Total', 'Top Performing Brand']]],
   cancel: [['Cancellations', ['Cancelled Orders Amount', 'Total Cancelled Orders', 'Cancel Rate %', 'Cancelled AOV']], ['Money returned', ['Refund Amount', 'Reverted by Aggregator']]],
   prep: [['End to end (min)', ['Receiving → Dispatched', 'Received → Delivered']], ['Kitchen stages (min)', ['Acc → Started', 'Started → Prepared', 'Prepared → STD', 'STD → Dispatched']], ['Outlets', ['Best vs Worst Brand Location']]],
   ratings: [['Ratings', ['Total Ratings', 'Positive Ratings', 'Negative Ratings']], ['Rates', ['Negative Ratings %', 'Polarity rate']]],
@@ -1327,22 +1329,7 @@ function renderSales() {
   const mname = mnameMap[m] || (m === 'gross' ? 'Gross Sales' : 'Net Sales');
   const mf = metricFmt(m);
 
-  // Branches: each kitchen's Net Sales with the page's other filters, always
-  // both (independent of the switcher), so the split is visible at a glance.
-  // Clicking a branch switches the dashboard to it; again returns to All.
-  const branchAll = sum(base('sales', false, 'All').filter(o => !o.cancelled), o => o.netSales);
-  const branchTile = loc => {
-    const B = base('sales', false, loc).filter(o => !o.cancelled);
-    const bNet = sum(B, o => o.netSales);
-    const live = kitchenHasOrders(loc);
-    const note = live ? `${cnt(B.length)} orders · ${branchAll ? pc(bNet / branchAll, 1) : '0%'} of Net Sales` : 'Not live yet';
-    return [loc, `${live ? money(bNet) : '–'}<div style="font-size:11px;font-weight:500;color:#6b7275;margin-top:2px;">${note}</div>`, false,
-      () => setKitchen(S.f.location === loc ? 'All' : loc), S.f.location === loc,
-      `${loc} branch Net Sales for the current filters. Click to show only ${loc}; click again for both branches.`, 'filter'];
-  };
   kpis('kpi-sales', [
-    branchTile('Motor City'),
-    branchTile('Jaddaf'),
     ['Gross Sales', money(rec), false, () => {
       S.ui.metric = (m === 'gross' || m === 'receipt' ? 'sales' : 'gross');
       buildToggles();
@@ -4287,24 +4274,19 @@ wireTargetsPage();
 // ---------------- render & navigation ----------------
 // ================= BRANCH (kitchen) SELECTION =================
 // One dashboard, two branches: Motor City (GrubCENTER) and Jaddaf
-// (UrbanPiper). The branch is chosen from the Branches KPI tiles on Order
-// Details (or a kitchen comparison table's column header). It sets
-// S.f.location for every page and is remembered per browser.
-const KITCHEN_KEY = 'fh_kitchen_v1';
+// (UrbanPiper). The branch is a normal filter (S.f.location), chosen from the
+// Branch filter on Order Details or a kitchen comparison table's header.
 function lsGet(k) { try { return localStorage.getItem(k); } catch (_) { return null; } }
 function lsSet(k, v) { try { localStorage.setItem(k, v); } catch (_) {} }
+// The branch used to be remembered per browser; a stale saved choice would
+// now filter silently, so drop it.
+try { localStorage.removeItem('fh_kitchen_v1'); } catch (_) {}
 function setKitchen(k) {
   S.f.location = k;
-  lsSet(KITCHEN_KEY, k);
   S.selLocs.clear();
-  // Redraw only, like the existing filter dropdowns do. Rebuilding the
-  // filter bar here as well raced Chart.js redraws ("addEventListener of null").
+  syncFilterUI();
   render();
 }
-(function initKitchen() {
-  const saved = lsGet(KITCHEN_KEY);
-  if (saved && ['All', 'Motor City', 'Jaddaf'].includes(saved)) S.f.location = saved;
-})();
 
 // ================= NAV SECTIONS =================
 // Collapsible groups; the open/closed state is remembered per browser. The
@@ -4435,8 +4417,7 @@ function resetFilters() {
   Object.keys(S.f).forEach(k => {
     if (k === 'ratingFilter') S.f[k] = 'all';
     else if (k === 'onlyDelayed') S.f[k] = false;
-    // The kitchen (location) is a global choice, not a filter to reset.
-    else if (!['from', 'to', 'location'].includes(k)) S.f[k] = 'All';
+    else if (!['from', 'to'].includes(k)) S.f[k] = 'All';
   });
 }
 
