@@ -14,7 +14,7 @@ FoodHive Operations & Sales Analytics Dashboard — an exact visual and function
 - **Frontend**: Vanilla JavaScript (`public/app.js`), Chart.js 4.4.1 + ChartDataLabels plugin, CSS (`public/style.css`), HTML (`public/index.html`).
   - Pre-rendered HTML for instant (<15ms) first contentful paint.
   - Client auto-refresh polling every 2 minutes; the server's full GrubCENTER sync runs every 10 minutes.
-  - Live view: every 5 seconds the client polls `/api/live`, which returns today's orders and cancellations straight from GrubCENTER. The server shares one result for 5 seconds across all viewers and never writes it to storage. Prep timings and older days still come from the full sync.
+  - Live view: every 10 seconds the client polls `/api/live`, which returns today's orders and cancellations straight from GrubCENTER. The server shares one result for 10 seconds across all viewers and never writes it to storage. Prep timings and older days still come from the full sync.
   - 86 items: on Vercel, `/api/availability` refreshes the 86 log from GrubCENTER's item-availability snapshot (about 24,000 rows) in its own function call, at most every 10 minutes (`syncItems`, `items_meta.json`). Keep it out of `syncOnce`, because order line items alone can take 20+ s and the two together pass Vercel's 60 s limit. Locally, `server.js` `runSync` fetches the snapshot inline.
   - Color palette: Primary Yellow (`#FDCB3C`), Dark Charcoal (`#1d1d1d`), Slate Line (`#d9dfe1`), Accent Blue (`#1b2a9b`).
 

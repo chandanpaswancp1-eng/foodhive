@@ -18,9 +18,9 @@ description: Run and drive the FoodHive dashboard (local server and Vercel deplo
 - `/api/refresh` returns immediately and syncs in the background (`waitUntil`). Watch `lastSync` on `/api/status` to see it finish.
 
 ## Flows worth driving
-- `/api/live`: two calls within 5 s share the same `at`; after 5 s a new `at`.
+- `/api/live`: two calls within 10 s share the same `at`; after 10 s a new `at`.
 - `/api/availability`: the newest `at`, `source` counts, and no duplicate item+brand+location+at.
-- Sales page polling: `/api/live` requested every 5 s; remove an order from `S.orders` and it returns on the next poll.
+- Sales page polling: `/api/live` requested every 10 s; remove an order from `S.orders` and it returns on the next poll.
 
 ## Gotchas
 - GrubCENTER order line items can take 20+ s for one day, so anything added to `syncOnce` risks the 60 s limit.

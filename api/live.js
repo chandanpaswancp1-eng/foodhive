@@ -1,6 +1,6 @@
 const { configured, liveToday } = require('./_lib/grubcenter');
 
-// Today's orders straight from GrubCENTER, for the dashboard's 5-second
+// Today's orders straight from GrubCENTER, for the dashboard's 10-second
 // live view. Never writes to storage; see liveToday() in _lib/grubcenter.js.
 module.exports = async (req, res) => {
   res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
