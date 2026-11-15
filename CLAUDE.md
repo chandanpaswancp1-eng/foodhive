@@ -45,6 +45,7 @@ http://localhost:3000
 
 ## KPI layout (two kitchens)
 - Every page's tiles sit in labelled clusters side by side (`KPI_CLUSTERS` in `public/app.js`; e.g. Order Details: Revenue · Volume · Discounts · Outlook; Accounting: Profit & Loss · Cash · Receivables & Payables · Balance Sheet). The cluster lists also set the tile order. A new tile goes into a cluster; otherwise it gets an unlabelled cluster at the end.
+- Order Details has a **Branches** group (Motor City, Jaddaf): each branch's Net Sales with its orders and share of Net Sales under the page's other filters, always both branches; clicking one sets the kitchen switcher (again: back to All).
 - Each cluster renders as one white card (styles under `.kpis--clustered` in `public/style.css`): label top-left, large left-aligned value, kitchen split below, hairline dividers between figures, selected figure tinted with a yellow underline, negative values red (`.kv-neg`).
 - Clusters never shrink below their tiles (CSS min-width auto); the band wraps instead. KPI values do not wrap; a value with a note inside (Projected Month-End) wraps its note only.
 - `KITCHEN_CALC[page](kitchen)` computes a page's order-based figures for one kitchen through `base(page, false, kitchen)`. It drives the `MC … | JD …` split line on tiles when the switcher is on All, and the Motor City vs Jaddaf table (`kitchenCompareTable`) that replaced the single-location charts on Order Details, Cancellations, Prep Time and Items. Zoho and Targets tiles are group-level and have no split.

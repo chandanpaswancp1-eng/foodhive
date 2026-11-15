@@ -908,7 +908,7 @@ const ACCOUNTING_GROUPS = [
 // side): what kind of number each one is, at a glance. The cluster lists also
 // set the tile order within the page.
 const KPI_CLUSTERS = {
-  sales: [['Revenue', ['Net Sales', 'Gross Sales', 'AOV']], ['Volume', ['Total Orders']], ['Discounts', ['Total Discount', 'Discount %']], ['Outlook', ['Projected Month-End', 'Month-End Total', 'Top Performing Brand']]],
+  sales: [['Revenue', ['Net Sales', 'Gross Sales', 'AOV']], ['Volume', ['Total Orders']], ['Branches', ['Motor City', 'Jaddaf']], ['Discounts', ['Total Discount', 'Discount %']], ['Outlook', ['Projected Month-End', 'Month-End Total', 'Top Performing Brand']]],
   cancel: [['Cancellations', ['Cancelled Orders Amount', 'Total Cancelled Orders', 'Cancel Rate %', 'Cancelled AOV']], ['Money returned', ['Refund Amount', 'Reverted by Aggregator']]],
   prep: [['End to end (min)', ['Receiving → Dispatched', 'Received → Delivered']], ['Kitchen stages (min)', ['Acc → Started', 'Started → Prepared', 'Prepared → STD', 'STD → Dispatched']], ['Outlets', ['Best vs Worst Brand Location']]],
   ratings: [['Ratings', ['Total Ratings', 'Positive Ratings', 'Negative Ratings']], ['Rates', ['Negative Ratings %', 'Polarity rate']]],
@@ -1327,7 +1327,22 @@ function renderSales() {
   const mname = mnameMap[m] || (m === 'gross' ? 'Gross Sales' : 'Net Sales');
   const mf = metricFmt(m);
 
+  // Branches: each kitchen's Net Sales with the page's other filters, always
+  // both (independent of the switcher), so the split is visible at a glance.
+  // Clicking a branch switches the dashboard to it; again returns to All.
+  const branchAll = sum(base('sales', false, 'All').filter(o => !o.cancelled), o => o.netSales);
+  const branchTile = loc => {
+    const B = base('sales', false, loc).filter(o => !o.cancelled);
+    const bNet = sum(B, o => o.netSales);
+    const live = kitchenHasOrders(loc);
+    const note = live ? `${cnt(B.length)} orders · ${branchAll ? pc(bNet / branchAll, 1) : '0%'} of Net Sales` : 'Not live yet';
+    return [loc, `${live ? money(bNet) : '–'}<div style="font-size:11px;font-weight:500;color:#6b7275;margin-top:2px;">${note}</div>`, false,
+      () => setKitchen(S.f.location === loc ? 'All' : loc), S.f.location === loc,
+      `${loc} branch Net Sales for the current filters. Click to show only ${loc}; click again for both branches.`, 'filter'];
+  };
   kpis('kpi-sales', [
+    branchTile('Motor City'),
+    branchTile('Jaddaf'),
     ['Gross Sales', money(rec), false, () => {
       S.ui.metric = (m === 'gross' || m === 'receipt' ? 'sales' : 'gross');
       buildToggles();
