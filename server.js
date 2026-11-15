@@ -586,12 +586,12 @@ async function runSync(from, to, itemsFrom) {
   }
 }
 
-// ---------- Live view (polled every 5 s by the dashboard) ----------
-// Today's orders and cancellations straight from GrubCENTER, shared for 5 s
+// ---------- Live view (polled every 10 s by the dashboard) ----------
+// Today's orders and cancellations straight from GrubCENTER, shared for 10 s
 // across all viewers and never written to the cache files. Same rules as
 // runSync for cancellations, reopened orders, official brands and the test
 // fixture. Prep timings and older days still come from the regular sync.
-const LIVE_TTL_MS = 5000;
+const LIVE_TTL_MS = 10000;
 const live = { at: 0, data: null, promise: null };
 async function liveToday() {
   if (live.data && Date.now() - live.at < LIVE_TTL_MS) return live.data;

@@ -483,15 +483,15 @@ async function syncItems() {
 // seeded into the Blob store once (see scripts/seed-blob.js) rather than read off local disk.
 const readBlobOfficialBrands = () => readBlobJson('official_foodhive_brands.json', null);
 
-// ---------- Live view (polled every 5 s by the dashboard) ----------
+// ---------- Live view (polled every 10 s by the dashboard) ----------
 // Pulls only TODAY's orders and cancellations straight from GrubCENTER and
-// returns them without writing to the Blob store, so a 5-second poll costs
+// returns them without writing to the Blob store, so a 10-second poll costs
 // two small API calls and no storage writes. Results are shared for
 // LIVE_TTL_MS across every viewer on a warm instance, and concurrent calls
 // share one in-flight request, so more open tabs do not mean more
 // GrubCENTER traffic. Prep timings, line items and older days still come
 // from the regular sync.
-const LIVE_TTL_MS = 5000;
+const LIVE_TTL_MS = 10000;
 const live = { at: 0, data: null, promise: null, session: null, official: null, officialAt: 0 };
 
 async function liveSession() {

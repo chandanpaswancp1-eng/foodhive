@@ -4883,8 +4883,8 @@ async function waitForBackgroundSync(since, opts = {}) {
     } catch (_) {}
   }, 2 * 60 * 1000);
 
-  // 4. Live view: every 5 s pull today's orders straight from GrubCENTER via
-  // /api/live (shared and cached server-side for 5 s, never written to
+  // 4. Live view: every 10 s pull today's orders straight from GrubCENTER via
+  // /api/live (shared and cached server-side for 10 s, never written to
   // storage) and merge them in. Fields the live feed lacks, such as prep
   // timings from the full sync, are kept. Repaints only when something
   // actually changed, so an idle dashboard does not redraw its charts.
@@ -4913,7 +4913,7 @@ async function waitForBackgroundSync(since, opts = {}) {
       setData(orders, null, null, 'live', `● Live · GrubCENTER (${orders.length})`, { preserveFilters: true });
     } catch (_) {
     } finally { liveBusy = false; }
-  }, 5000);
+  }, 10000);
 
   window.S = S;
   window.show = show;
