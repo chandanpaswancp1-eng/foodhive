@@ -1054,7 +1054,7 @@ function kpis(id, list) {
     const sub = split && split[h] ? `<div class="ks">${split[h]}</div>` : '';
     return `<div class="kpi${wide ? ' wide' : ''}${act}${kindCls}" data-idx="${idx}"${tip} role="button" tabindex="0">
       <div class="kh">${h}</div>
-      <div class="kv">${v}</div>${sub}
+      <div class="kv${/^\s*[-−]\d/.test(String(v)) ? ' kv-neg' : ''}">${v}</div>${sub}
     </div>`;
   };
   // Consecutive tiles of the same group form one labelled cluster; tiles
