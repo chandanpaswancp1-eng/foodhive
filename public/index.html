@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>FOOD HIVE · Operations &amp; Sales Dashboard</title>
 <link rel="icon" href="assets/favicon.png">
-<link rel="stylesheet" href="style.css?v=3.20">
+<link rel="stylesheet" href="style.css?v=3.21">
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.2.0/dist/chartjs-plugin-datalabels.min.js"></script>
 <!-- xlsx-js-style: a drop-in SheetJS fork (same XLSX.* API used for CSV/XLSX import)
@@ -104,8 +104,8 @@
           <div class="pb"><canvas id="c-time"></canvas></div>
         </div>
         <div class="panel a-loc">
-          <div class="ph">Net Sales | Total Orders Location</div>
-          <div class="pb"><canvas id="c-loc"></canvas></div>
+          <div class="ph">Kitchens: Motor City vs Jaddaf</div>
+          <div class="tbl-wrap kc-wrap"><table class="kc-table" id="kc-sales"></table></div>
         </div>
         <div class="panel a-slot">
           <div class="ph">Net Sales | Total Orders by Time-Slot</div>
@@ -152,8 +152,8 @@
       </div>
       <div class="grid g-cancel">
         <div class="panel">
-          <div class="ph">Orders Value | Total Orders by Locations</div>
-          <div class="pb"><canvas id="c-cloc"></canvas></div>
+          <div class="ph">Kitchens: Motor City vs Jaddaf</div>
+          <div class="tbl-wrap kc-wrap"><table class="kc-table" id="kc-cancel"></table></div>
         </div>
         <div class="panel">
           <div class="ph">Orders Value | Total Orders by Channel</div>
@@ -194,7 +194,7 @@
           <div class="grid g-prep" id="prepCharts"></div>
           <div class="grid g-prep2">
             <div class="panel"><div class="tbl-wrap"><table id="prepTable"></table></div></div>
-            <div class="panel"><div class="ph">Count of Location by Location</div><div class="pb"><canvas id="c-ploc"></canvas></div></div>
+            <div class="panel" id="c-ploc"><div class="ph">Kitchens: Motor City vs Jaddaf</div><div class="tbl-wrap kc-wrap"><table class="kc-table" id="kc-prep"></table></div></div>
           </div>
         </div>
       </div>
@@ -241,7 +241,7 @@
       </div>
       <div class="grid g-items" id="grid-items">
         <div class="panel i-brand"><div class="ph" id="t-ibrand">86 Items and %GT 86 Items by Brand</div><div class="pb"><canvas id="c-ibrand"></canvas></div></div>
-        <div class="panel i-loc"><div class="ph">86 Items and %GT 86 Items by Location</div><div class="pb"><canvas id="c-iloc"></canvas></div></div>
+        <div class="panel i-loc"><div class="ph">Kitchens: Motor City vs Jaddaf</div><div class="tbl-wrap kc-wrap"><table class="kc-table" id="kc-items"></table></div></div>
         <div class="panel i-dist"><div class="ph">Total 86 Items Distribution</div><div class="pb"><canvas id="c-idist"></canvas></div></div>
         <div class="panel i-src"><div class="ph">Distribution by Source</div><div class="pb"><canvas id="c-isrc"></canvas></div></div>
         <div class="panel i-typ"><div class="ph">Distribution by Type</div><div class="pb"><canvas id="c-ityp"></canvas></div></div>
@@ -597,6 +597,6 @@
 <script src="commission.js?v=3.11"></script>
 <script src="sources.js?v=1.0"></script>
 <script src="growth.js?v=1.5"></script>
-<script src="app.js?v=3.42"></script>
+<script src="app.js?v=3.43"></script>
 </body>
 </html>

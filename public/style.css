@@ -1132,3 +1132,21 @@ tbody tr[onclick]:hover, tr.daily-row:hover { filter: brightness(0.95); }
 .src-status.ok { background: #e3f6e8; color: #1b7a3a; } .src-status.stale { background: #fff4d6; color: #8a5a00; } .src-status.error { background: #fde5e3; color: #b3261e; } .src-status.waiting { background: #e8edff; color: #2f47b5; } .src-status.off { background: #eceff1; color: #555; }
 .src-help-body { font-size: 12.5px; line-height: 1.55; padding: 4px 14px 12px; }
 .src-help-body p { margin: 8px 0; }
+
+/* ---------- v2: KPI layout for two kitchens ---------- */
+/* At most 8 tiles per row: every tile is at least 1/8 of the row. */
+.kpis > .kpi { flex: 1 1 calc((100% - 56px) / 8); }
+.kpis > .kpi.wide { flex: 2.2 1 calc((100% - 56px) / 8); }
+.kpi-group { flex: 0 0 100%; font: 800 10.5px/1 inherit; letter-spacing: .08em; text-transform: uppercase; color: #5f5f5f; padding: 8px 2px 0; }
+.kpi-group:first-child { padding-top: 0; }
+.kpi .ks { display: flex; justify-content: center; gap: 6px; flex-wrap: wrap; font-size: 10.5px; font-weight: 600; color: #555; border-top: 1px dashed #e3e7e8; padding: 4px 6px 5px; font-variant-numeric: tabular-nums; }
+.kpi .ks i { font-style: normal; color: #c3c9cb; }
+.kc-wrap { max-height: none; overflow: auto; padding: 0 6px 6px; }
+.kc-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.kc-table th, .kc-table td { padding: 7px 10px; border-bottom: 1px solid var(--line, #e3e7e8); text-align: left; }
+.kc-table th { font-weight: 700; color: var(--k); background: #fafbfb; position: sticky; top: 0; }
+.kc-table th.kc-h { cursor: pointer; }
+.kc-table th.kc-h:hover { text-decoration: underline; }
+.kc-table th.kc-h.on { background: var(--y); }
+.kc-table .num { text-align: right; font-variant-numeric: tabular-nums; }
+@media (max-width: 700px) { .kpis > .kpi, .kpis > .kpi.wide { flex: 1 1 calc((100% - 8px) / 2); } }

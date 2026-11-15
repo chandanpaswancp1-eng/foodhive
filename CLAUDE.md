@@ -43,6 +43,11 @@ http://localhost:3000
 - **Data Sources** page (`#sources`) and sidebar pill read `/api/sources`. Status rules live in `public/sources.js` (shared by server and browser): ok, stale, waiting, error, off.
 - `mk()` in `public/app.js` unregisters a destroyed chart (`delete charts[id]`); without that, any empty-data redraw left a destroyed chart in `charts` and `patchPct()` crashed Chart.js.
 
+## KPI layout (two kitchens)
+- Tile order on every page is set in `KPI_ORDER` (`public/app.js`): money, then volume, unit economics, rate or quality, top performer. `kpis()` sorts by title, so a new tile goes into `KPI_ORDER` or lands at the end of the row. At most 8 tiles per row (CSS).
+- Accounting tiles are grouped by `ACCOUNTING_GROUPS` (Profit & Loss, Cash, Receivables & Payables, Balance Sheet).
+- `KITCHEN_CALC[page](kitchen)` computes a page's order-based figures for one kitchen through `base(page, false, kitchen)`. It drives the `MC … | JD …` split line on tiles when the switcher is on All, and the Motor City vs Jaddaf table (`kitchenCompareTable`) that replaced the single-location charts on Order Details, Cancellations, Prep Time and Items. Zoho and Targets tiles are group-level and have no split.
+
 ## Targets & Growth (`#targets`)
 - Monthly Net Sales and Orders targets for the company and for each channel. There are no brand targets.
 - Targets are entered per month in Target Setup and kept per browser (localStorage `fh_targets_v1`, keyed `YYYY-MM`). Editing the company target auto-splits it across channels by last-30-day sales share, adjusted for commission (`FHGrowth.splitTarget`). Editing a channel locks it as Manual; "Re-split automatically" clears the locks.
