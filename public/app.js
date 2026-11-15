@@ -357,7 +357,7 @@ function dateOk(t) { const k = dkey(t); return (!S.f.from || k >= S.f.from) && (
 const eq = (v, f) => f === 'All' || (Array.isArray(f) ? f.includes(v) : v === f);
 // `loc` overrides the kitchen (location) for one call, so KPI splits and the
 // kitchen comparison tables can compute any page's figures per kitchen with
-// every other filter unchanged. Defaults to the kitchen switcher.
+// every other filter unchanged. Defaults to the selected branch (S.f.location).
 function base(page, skipDate, loc) {
   const f = S.f;
   const kitchen = loc == null ? f.location : loc;
@@ -384,8 +384,8 @@ function base(page, skipDate, loc) {
 }
 
 // ---------------- filter bar configuration ----------------
-// Location is not a per-page filter: the global kitchen switcher in the
-// sidebar sets S.f.location for every page.
+// Location is not a per-page filter: the branch chosen from the Branches KPI
+// tiles on Order Details sets S.f.location for every page.
 const FILTERS = {
   sales: [['dates', 'Received At'], ['channel', 'Channel'], ['brand', 'Brand'], ['payment', 'Payment Method'], ['day', 'Day Name'], ['partner', 'Delivery Partner']],
   cancel: [['brand', 'Brand'], ['reason', 'Reason'], ['channel', 'Channel'], ['post', 'Post Cancelled'], ['dates', 'Received At']],
@@ -4285,47 +4285,25 @@ function wireTargetsPage() {
 wireTargetsPage();
 
 // ---------------- render & navigation ----------------
-// ================= KITCHEN SWITCHER (global) =================
-// One dashboard, two kitchens: Motor City (GrubCENTER) and Jaddaf
-// (UrbanPiper). The switch sets S.f.location for every page, replacing the
-// old per-page Location dropdowns, and is remembered per browser.
+// ================= BRANCH (kitchen) SELECTION =================
+// One dashboard, two branches: Motor City (GrubCENTER) and Jaddaf
+// (UrbanPiper). The branch is chosen from the Branches KPI tiles on Order
+// Details (or a kitchen comparison table's column header). It sets
+// S.f.location for every page and is remembered per browser.
 const KITCHEN_KEY = 'fh_kitchen_v1';
 function lsGet(k) { try { return localStorage.getItem(k); } catch (_) { return null; } }
 function lsSet(k, v) { try { localStorage.setItem(k, v); } catch (_) {} }
-// Runs after every render, so it only writes to the DOM when something
-// changed. Chart.js watches the whole document for DOM mutations to bind
-// charts to their canvases; rewriting these buttons on every redraw fired
-// that watcher mid-redraw and threw "addEventListener of null".
-function syncKitchenUI() {
-  let has = null;
-  $$('#kitchenSwitch button').forEach(b => {
-    const k = b.dataset.k, on = (S.f.location || 'All') === k;
-    if (b.classList.contains('on') !== on) b.classList.toggle('on', on);
-    if (b.getAttribute('aria-pressed') !== String(on)) b.setAttribute('aria-pressed', String(on));
-    if (!has) has = new Set(S.orders.map(o => o.location));
-    const idle = k !== 'All' && !has.has(k);
-    if (b.dataset.idle !== String(idle)) {
-      b.dataset.idle = String(idle);
-      b.innerHTML = esc(k) + (idle ? '<span class="badge">Not live</span>' : '');
-      b.title = idle ? `${k}: no orders yet` : `Show ${k === 'All' ? 'both kitchens' : k}`;
-    }
-  });
-}
 function setKitchen(k) {
   S.f.location = k;
   lsSet(KITCHEN_KEY, k);
   S.selLocs.clear();
-  syncKitchenUI();
-  // Redraw only, like the existing filter dropdowns do. Dropdown options do
-  // not depend on the kitchen, and rebuilding the filter bar here as well
-  // raced Chart.js redraws ("addEventListener of null").
+  // Redraw only, like the existing filter dropdowns do. Rebuilding the
+  // filter bar here as well raced Chart.js redraws ("addEventListener of null").
   render();
 }
 (function initKitchen() {
   const saved = lsGet(KITCHEN_KEY);
   if (saved && ['All', 'Motor City', 'Jaddaf'].includes(saved)) S.f.location = saved;
-  $$('#kitchenSwitch button').forEach(b => { b.onclick = () => setKitchen(b.dataset.k); });
-  syncKitchenUI();
 })();
 
 // ================= NAV SECTIONS =================
@@ -4407,7 +4385,7 @@ refreshSources();
 setInterval(() => { if (document.visibilityState !== 'hidden') refreshSources(); }, 60 * 1000);
 
 const RENDER = { sources: renderSources, sales: renderSales, cancel: renderCancel, prep: renderPrep, ratings: renderRatings, items: renderItemsPage, delayed: renderDelayed, commission: renderCommission, ebitda: renderEbitda, targets: renderTargets, comparison: renderComparison, accounting: renderAccounting, export: renderExport };
-function render() { RENDER[S.page](); if (typeof syncKitchenUI === 'function') syncKitchenUI(); }
+function render() { RENDER[S.page](); }
 
 function show(page) {
   S.page = page;

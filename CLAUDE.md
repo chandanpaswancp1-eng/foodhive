@@ -38,14 +38,14 @@ http://localhost:3000
 ## Two kitchens, two platforms (v2)
 - **Motor City** runs on Grubtech (GrubCENTER sync). **Jaddaf** runs on UrbanPiper (Atlas): orders arrive by Atlas webhook, the catalogue by a one-click snapshot from a signed-in Atlas tab (Atlas has no read API; every login needs reCAPTCHA).
 - Every order carries `source` (`grubcenter` | `urbanpiper`) and `location`. Each source writes its own Blob file (`orders.json`, `up_orders.json`); `/api/orders`, `/api/order-items` merge at read time (`readAllOrders` in `api/_lib/store.js`, `allOrders()` in `server.js`).
-- **Kitchen switcher** (sidebar): All / Motor City / Jaddaf sets `S.f.location` for every page and is remembered in localStorage (`fh_kitchen_v1`). There is no per-page Location filter any more.
+- **Branch selection**: chosen from the **Branches** KPI tiles on Order Details (or a kitchen comparison table's column header) via `setKitchen()`. It sets `S.f.location` for every page and is remembered in localStorage (`fh_kitchen_v1`). There is no sidebar switch and no per-page Location filter.
 - **Navigation** is grouped into collapsible sections: Sales, Operations, Menu, Finance, Data (`fh_nav_closed_v1`).
 - **Data Sources** page (`#sources`) and sidebar pill read `/api/sources`. Status rules live in `public/sources.js` (shared by server and browser): ok, stale, waiting, error, off.
 - `mk()` in `public/app.js` unregisters a destroyed chart (`delete charts[id]`); without that, any empty-data redraw left a destroyed chart in `charts` and `patchPct()` crashed Chart.js.
 
 ## KPI layout (two kitchens)
 - Every page's tiles sit in labelled clusters side by side (`KPI_CLUSTERS` in `public/app.js`; e.g. Order Details: Revenue · Volume · Discounts · Outlook; Accounting: Profit & Loss · Cash · Receivables & Payables · Balance Sheet). The cluster lists also set the tile order. A new tile goes into a cluster; otherwise it gets an unlabelled cluster at the end.
-- Order Details has a **Branches** group (Motor City, Jaddaf): each branch's Net Sales with its orders and share of Net Sales under the page's other filters, always both branches; clicking one sets the kitchen switcher (again: back to All).
+- Order Details has a **Branches** group (Motor City, Jaddaf): each branch's Net Sales with its orders and share of Net Sales under the page's other filters, always both branches; clicking one selects that branch for every page (again: back to All).
 - Each cluster renders as one white card (styles under `.kpis--clustered` in `public/style.css`): label top-left, large left-aligned value, kitchen split below, hairline dividers between figures, selected figure tinted with a yellow underline, negative values red (`.kv-neg`).
 - Clusters never shrink below their tiles (CSS min-width auto); the band wraps instead. KPI values do not wrap; a value with a note inside (Projected Month-End) wraps its note only.
 - `KITCHEN_CALC[page](kitchen)` computes a page's order-based figures for one kitchen through `base(page, false, kitchen)`. It drives the `MC … | JD …` split line on tiles when the switcher is on All, and the Motor City vs Jaddaf table (`kitchenCompareTable`) that replaced the single-location charts on Order Details, Cancellations, Prep Time and Items. Zoho and Targets tiles are group-level and have no split.

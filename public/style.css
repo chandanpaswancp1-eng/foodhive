@@ -1106,11 +1106,6 @@ tbody tr[onclick]:hover, tr.daily-row:hover { filter: brightness(0.95); }
 .cp-campaign:hover { background: #e8ecff; }
 
 /* ---------- v2: kitchen switcher, nav sections, data sources ---------- */
-.kitchen-switch { display: flex; background: rgba(29,29,29,0.08); border-radius: 8px; padding: 2px; margin: 0 0 10px; }
-.kitchen-switch button { flex: 1; border: 0; background: transparent; font: 700 10.5px/1.2 inherit; color: var(--k); padding: 6px 2px; border-radius: 6px; cursor: pointer; }
-.kitchen-switch button.on { background: var(--k); color: var(--y); }
-.kitchen-switch button:focus-visible { outline: 2px solid var(--k); outline-offset: 1px; }
-.kitchen-switch button .badge { display: block; font-size: 8px; font-weight: 600; opacity: .7; }
 .nav-sec { margin-bottom: 4px; }
 .nav-sec-h { display: flex; align-items: center; justify-content: space-between; width: 100%; border: 0; background: transparent; font: 800 9.5px/1 inherit; letter-spacing: .08em; text-transform: uppercase; color: rgba(29,29,29,.62); padding: 8px 4px 5px; cursor: pointer; }
 .nav-sec-h::after { content: '▾'; font-size: 10px; transition: transform .15s; }
