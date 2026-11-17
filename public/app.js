@@ -384,20 +384,22 @@ function base(page, skipDate, loc) {
 }
 
 // ---------------- filter bar configuration ----------------
-// Branch (S.f.location) is chosen from the Branch filter on Order Details, a
-// multi-select like Brand. Like every filter in S.f it applies on every page.
+// Branch (S.f.location: Motor City, Jaddaf) is a multi-select like Brand and
+// sits in the filter bar of every page that has one. Like every filter in
+// S.f it applies on all pages, so choosing it on one page carries over.
+// Accounting (Zoho) is group-level, so it has no Branch filter.
 const FILTERS = {
   sales: [['dates', 'Received At'], ['channel', 'Channel'], ['brand', 'Brand'], ['location', 'Branch'], ['payment', 'Payment Method'], ['day', 'Day Name'], ['partner', 'Delivery Partner']],
-  cancel: [['brand', 'Brand'], ['reason', 'Reason'], ['channel', 'Channel'], ['post', 'Post Cancelled'], ['dates', 'Received At']],
-  prep: [['brand', 'Brand']],
-  ratings: [['dates', 'Received At']],
-  items: [['brand', 'Brand'], ['dates', 'Received At']],
-  delayed: [['brand', 'Brand'], ['dates', 'Received At']],
-  commission: [['dates', 'Received At'], ['channel', 'Channel'], ['brand', 'Brand']],
-  ebitda: [['dates', 'Received At'], ['channel', 'Channel'], ['brand', 'Brand']],
-  export: [['dates', 'Received At'], ['brand', 'Brand']],
-  comparison: [],
-  targets: [['channel', 'Channel']]
+  cancel: [['brand', 'Brand'], ['location', 'Branch'], ['reason', 'Reason'], ['channel', 'Channel'], ['post', 'Post Cancelled'], ['dates', 'Received At']],
+  prep: [['brand', 'Brand'], ['location', 'Branch']],
+  ratings: [['location', 'Branch'], ['dates', 'Received At']],
+  items: [['brand', 'Brand'], ['location', 'Branch'], ['dates', 'Received At']],
+  delayed: [['brand', 'Brand'], ['location', 'Branch'], ['dates', 'Received At']],
+  commission: [['dates', 'Received At'], ['channel', 'Channel'], ['brand', 'Brand'], ['location', 'Branch']],
+  ebitda: [['dates', 'Received At'], ['channel', 'Channel'], ['brand', 'Brand'], ['location', 'Branch']],
+  export: [['dates', 'Received At'], ['brand', 'Brand'], ['location', 'Branch']],
+  comparison: [['location', 'Branch']],
+  targets: [['channel', 'Channel'], ['location', 'Branch']]
 };
 
 function optionsFor(key) {
