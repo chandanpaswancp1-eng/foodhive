@@ -30,4 +30,7 @@ data/up_orders.json
 data/up_order_items.json
 data/up_meta.json
 data/up_catalog.json
+data/up_items.json
+data/up_conn.json
 data/up_webhook_samples.json
+data/brand_ratings.json

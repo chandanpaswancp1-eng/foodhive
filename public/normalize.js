@@ -300,5 +300,5 @@
     }).filter(x => x.orderId && x.at);
   }
 
-  return { normalizeOrders, normalizeItems, normalizeOrderItems, snapshotToItemEvents, mergeItemEvents, SNAPSHOT_SOURCE, isItemDataset, toDate, key };
+  return { normalizeOrders, normalizeItems, normalizeOrderItems, snapshotToItemEvents, mergeItemEvents, SNAPSHOT_SOURCE, isItemDataset, toDate, key, inferCuisine };
 });

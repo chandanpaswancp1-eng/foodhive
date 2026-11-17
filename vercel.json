@@ -40,6 +40,12 @@
     },
     "api/availability.js": {
       "maxDuration": 60
+    },
+    "api/up-import.js": {
+      "maxDuration": 30
+    },
+    "api/up-connect.js": {
+      "maxDuration": 30
     }
   }
 }

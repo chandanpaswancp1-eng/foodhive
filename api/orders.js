@@ -1,6 +1,8 @@
 const { waitUntil } = require('@vercel/functions');
 const { configured, syncOnce, readMeta, dubaiDateKey } = require('./_lib/grubcenter');
-const { readAllOrders } = require('./_lib/store');
+const { readAllOrders, readUpMeta, readUpConn } = require('./_lib/store');
+const { syncAtlasOnce, connectionState } = require('./_lib/atlas-sync');
+const upIo = require('./_lib/up-blob-io');
 
 const SYNC_INTERVAL_MS = 10 * 60 * 1000;
 
@@ -9,7 +11,7 @@ module.exports = async (req, res) => {
   const from = url.searchParams.get('from'), to = url.searchParams.get('to');
 
   // GrubCENTER (Motor City) + UrbanPiper (Jaddaf) orders, each tagged with `source`.
-  const [ordersArray, meta] = await Promise.all([readAllOrders(), readMeta()]);
+  const [ordersArray, meta, upMeta, upConn] = await Promise.all([readAllOrders(), readMeta(), readUpMeta().catch(() => ({})), readUpConn().catch(() => null)]);
   let filtered = ordersArray;
   if (from || to) {
     filtered = ordersArray.filter(o => {
@@ -42,6 +44,10 @@ module.exports = async (req, res) => {
     const bgFrom = from && from >= earliest && from <= bgTo ? from : dubaiDateKey(Date.now() - 864e5);
     waitUntil(syncOnce(bgFrom, bgTo, bgTo).catch(() => {}));
   }
+  // Jaddaf (Atlas) on the same 10-minute rhythm while a connection is live.
+  // Orders only; the catalogue is refreshed by Sync Now and the cron.
+  const upStale = connectionState(upConn).connected && Date.now() - ((upMeta && upMeta.lastCaptureAt) || 0) > SYNC_INTERVAL_MS;
+  if (upStale) waitUntil(syncAtlasOnce(upIo, { catalog: false }).catch(() => {}));
 
   res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
   res.status(200).json({
