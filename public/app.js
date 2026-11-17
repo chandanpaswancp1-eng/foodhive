@@ -1517,30 +1517,22 @@ function renderSales() {
   const tods = ['Morning', 'Afternoon', 'Evening', 'Night'];
   const cols = { Morning: K, Afternoon: Y, Evening: '#ff7043', Night: '#1e88e5' };
   const dates = uniq(O.map(o => dkey(o.receivedAt))).sort();
+  // salesAgg + metricOf, like the other charts: ratio metrics (Discount %,
+  // AOV) are computed per bucket. Summing per order used to fall through to
+  // Net Sales, so Discount % read as AED with a "%" (e.g. 196.8%).
   const tmap = {};
-  O.forEach(o => {
-    const k = todOf(dubaiHour(o.receivedAt)) + '|' + dkey(o.receivedAt);
-    tmap[k] = (tmap[k] || 0) + (m === 'orders' ? 1 : (m === 'gross' || m === 'receipt') ? o.receiptTotal : m === 'disc' ? o.discount : o.netSales);
-  });
+  salesAgg(O, o => todOf(dubaiHour(o.receivedAt)) + '|' + dkey(o.receivedAt)).forEach(r => { tmap[r.k] = metricOf(r, m); });
   lineChart('c-tod', dates, tods.map(t => ({ name: t, color: cols[t], data: dates.map(d => tmap[t + '|' + d] || 0) })), { fmt: mf });
 
-  const hr = Array.from({ length: 24 }, (_, h) => ({ k: String(h), v: 0, o: 0 }));
-  O.forEach(o => {
-    const h = dubaiHour(o.receivedAt);
-    hr[h].v += (m === 'orders' ? 1 : (m === 'gross' || m === 'receipt') ? o.receiptTotal : m === 'disc' ? o.discount : o.netSales);
-    hr[h].o++;
-  });
+  const byHour = new Map(salesAgg(O, o => dubaiHour(o.receivedAt)).map(r => [r.k, r]));
+  const hr = Array.from({ length: 24 }, (_, h) => { const r = byHour.get(h); return { k: String(h), v: r ? metricOf(r, m) : 0, o: r ? r.orders : 0 }; });
   // hr is always 24 slots long (even with zero orders), so combo()'s own
   // `!rows.length` empty check never fires here -- gate on n explicitly.
   if (n) { combo('c-hour', hr, { name: mname, pctName: '%GT Total Orders', filterKey: 'hour', fmt: mf }); patchPct('c-hour', hr.map(h => ({ orders: h.o })), n); }
   else mk('c-hour', { __empty: true });
 
-  const dw = DOW.map(d => ({ k: d, v: 0, o: 0 }));
-  O.forEach(o => {
-    const i = (dubaiDOW(o.receivedAt) + 6) % 7;
-    dw[i].v += (m === 'orders' ? 1 : (m === 'gross' || m === 'receipt') ? o.receiptTotal : m === 'disc' ? o.discount : o.netSales);
-    dw[i].o++;
-  });
+  const byDow = new Map(salesAgg(O, o => (dubaiDOW(o.receivedAt) + 6) % 7).map(r => [r.k, r]));
+  const dw = DOW.map((d, i) => { const r = byDow.get(i); return { k: d, v: r ? metricOf(r, m) : 0, o: r ? r.orders : 0 }; });
   // dw is always 7 slots long (even with zero orders) -- same reasoning as c-hour above.
   if (n) { combo('c-dow', dw, { name: mname, pctName: '%GT Total Orders', filterKey: 'day', fmt: mf }); patchPct('c-dow', dw.map(d => ({ orders: d.o })), n); }
   else mk('c-dow', { __empty: true });
