@@ -1037,6 +1037,20 @@ function kitchenCompareTable(tableId, page) {
 }
 
 // ---------------- KPI card renderer ----------------
+// If any KPI title in a band wraps, every title in the band keeps two lines
+// (.kh2 in style.css) so the values below them stay level.
+function fitKpiTitles(band) {
+  if (!band || !band.isConnected) return;
+  band.classList.toggle('kh2', false);
+  const wraps = [...band.querySelectorAll('.kpi .kh')].some(h => {
+    const lh = parseFloat(getComputedStyle(h).lineHeight) || 15;
+    return h.getBoundingClientRect().height > lh * 1.5;
+  });
+  band.classList.toggle('kh2', wraps);
+}
+let fitKpiTimer = null;
+window.addEventListener('resize', () => { clearTimeout(fitKpiTimer); fitKpiTimer = setTimeout(() => $$('.kpis--clustered').forEach(fitKpiTitles), 150); });
+
 function kpis(id, list) {
   const container = $('#' + id);
   if (!container) return;
@@ -1071,11 +1085,15 @@ function kpis(id, list) {
     else clusters.push({ g, items: [[t, idx]] });
   });
   const weight = c => c.items.reduce((w, [t]) => w + (t[2] ? 2.2 : 1), 0);
+  // Ratings page in Operational mode: the figures are estimated from prep
+  // time (orderRating), not customer ratings, so the labels say so.
+  const label = g => (S.page === 'ratings' && S.ui.rmode !== 'strict' && (g === 'Ratings' || g === 'Rates') ? g + ' · ops estimate' : g);
   container.classList.add('kpis--clustered');
-  container.innerHTML = clusters.map(c => `<section class="kpi-cluster" style="flex-grow:${weight(c)}"${c.g ? ` aria-label="${esc(c.g)}"` : ''}>
-      ${c.g ? `<div class="kpi-cluster-h">${esc(c.g)}</div>` : ''}
+  container.innerHTML = clusters.map(c => `<section class="kpi-cluster" style="flex-grow:${weight(c)}"${c.g ? ` aria-label="${esc(label(c.g))}"` : ''}>
+      ${c.g ? `<div class="kpi-cluster-h">${esc(label(c.g))}</div>` : ''}
       <div class="kpi-cluster-row">${c.items.map(([t, idx]) => tileHtml(t, idx)).join('')}</div>
     </section>`).join('');
+  fitKpiTitles(container);
 
   container.querySelectorAll('.kpi').forEach(el => {
     const idx = +el.dataset.idx;
@@ -2085,15 +2103,17 @@ function renderAggRatings() {
 
 // KPI tiles for the Ratings page (the "Aggregator ratings" cluster).
 function aggRatingKpis() {
-  if (!S.brandRatings) return [];
+  const notYet = ['Lowest Aggregator Rating', '–<div class="muted small" style="font-size:11px;font-weight:500;margin-top:2px">Not imported yet · click to add</div>', false, () => openAggUpdateModal(), false, 'No aggregator ratings imported yet. Capture them from the Talabat, Deliveroo, Careem, Keeta or Noon partner portal. Click to add them.'];
+  if (!S.brandRatings) return [notYet, ['Listings Below 4.0★', '–', false, () => openAggUpdateModal(), false, 'Appears once aggregator ratings are imported.']];
   const { rows } = aggMatrix();
   const cells = rows.flatMap(r => FHRatings.CHANNELS.filter(c => r.per[c]).map(c => ({ brand: r.brand, ch: c, ...r.per[c] })));
   const scroll = () => { const p = $('.agg-panel'); if (p) p.scrollIntoView({ behavior: 'smooth', block: 'start' }); };
-  if (!cells.length) return [['Lowest Aggregator Rating', '–', false, () => openAggUpdateModal(), false, 'No aggregator ratings yet. Click to add them.']];
+  if (!cells.length) return [notYet, ['Listings Below 4.0★', '–', false, () => openAggUpdateModal(), false, 'Appears once aggregator ratings are imported.']];
   const low = cells.reduce((a, b) => (b.rating < a.rating ? b : a));
   const below = cells.filter(c => c.rating < 4);
+  const tied = cells.filter(c => c.rating === low.rating).length;
   return [
-    ['Lowest Aggregator Rating', `${low.rating.toFixed(1)}★ <span class="muted small">${esc(low.brand)} · ${esc(aggChName(low.ch))}</span>`, false, () => openAggCellModal(low.brand, low.ch), false, 'Lowest store rating of any brand on any aggregator, from the partner portals. Click for details.'],
+    ['Lowest Aggregator Rating', `${low.rating.toFixed(1)}★<div class="muted small" style="font-size:11px;font-weight:500;margin-top:2px">${esc(low.brand)} · ${esc(aggChName(low.ch))}${tied > 1 ? ` · ${tied} listings at ${low.rating.toFixed(1)}★` : ''}</div>`, false, () => openAggCellModal(low.brand, low.ch), false, 'Lowest store rating of any brand on any aggregator, from the partner portals. Click for details.'],
     ['Listings Below 4.0★', cnt(below.length), false, scroll, false, `Brand-on-aggregator listings rated under 4.0 out of ${cells.length}. Click to see the full table.`]
   ];
 }
