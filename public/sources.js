@@ -17,8 +17,9 @@
   const SOURCES = [
     { id: 'grubcenter', name: 'GrubCENTER orders', kitchen: 'Motor City', staleAfter: 30 * MIN, what: 'Orders, ops timings, cancellations, line items' },
     { id: 'items86', name: 'GrubCENTER 86 items', kitchen: 'Motor City', staleAfter: 2 * HOUR, what: 'Item availability snapshot' },
-    { id: 'upOrders', name: 'UrbanPiper orders', kitchen: 'Jaddaf', staleAfter: null, what: 'Orders pushed by the Atlas webhook' },
-    { id: 'upCatalog', name: 'UrbanPiper catalogue', kitchen: 'Jaddaf', staleAfter: 7 * DAY, what: 'Menus, items, prices, publish status' },
+    { id: 'upOrders', name: 'UrbanPiper orders', kitchen: 'Jaddaf', staleAfter: DAY, what: 'Orders captured from Atlas with the bookmarklet', atlas: true },
+    { id: 'upCatalog', name: 'UrbanPiper catalogue', kitchen: 'Jaddaf', staleAfter: 7 * DAY, what: 'Items, prices, switched-off (86) items', atlas: true },
+    { id: 'aggRatings', name: 'Aggregator ratings', kitchen: 'Group', staleAfter: 7 * DAY, what: 'Brand store ratings captured from partner portals' },
     { id: 'zoho', name: 'Zoho Books', kitchen: 'Group', staleAfter: 30 * MIN, what: 'Accounting: income, expenses, bills, invoices' }
   ];
 

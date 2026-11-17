@@ -913,7 +913,7 @@ const KPI_CLUSTERS = {
   sales: [['Revenue', ['Gross Sales', 'Net Sales', 'AOV']], ['Volume', ['Total Orders']], ['Discounts', ['Total Discount', 'Discount %']], ['Outlook', ['Projected Month-End', 'Month-End Total', 'Top Performing Brand']]],
   cancel: [['Cancellations', ['Cancelled Orders Amount', 'Total Cancelled Orders', 'Cancel Rate %', 'Cancelled AOV']], ['Money returned', ['Refund Amount', 'Reverted by Aggregator']]],
   prep: [['End to end (min)', ['Receiving → Dispatched', 'Received → Delivered']], ['Kitchen stages (min)', ['Acc → Started', 'Started → Prepared', 'Prepared → STD', 'STD → Dispatched']], ['Outlets', ['Best vs Worst Brand Location']]],
-  ratings: [['Ratings', ['Total Ratings', 'Positive Ratings', 'Negative Ratings']], ['Rates', ['Negative Ratings %', 'Polarity rate']]],
+  ratings: [['Aggregator ratings', ['Lowest Aggregator Rating', 'Listings Below 4.0★']], ['Ratings', ['Total Ratings', 'Positive Ratings', 'Negative Ratings']], ['Rates', ['Negative Ratings %', 'Polarity rate']]],
   items: [['Stock-outs', ['86 Items', '86 per 100 Orders']], ['Hotspots', ['Brand with Most 86 Items', 'Location with Most 86 Items']]],
   delayed: [['Delays', ['Delayed Orders', 'Total Orders']], ['Rates', ['Delayed %', 'Avg Delay (min)']]],
   commission: [['Commission', ['Total Commission', 'Net after Commission']], ['Rates', ['Blended Commission %', 'Commission % of Gross Sales']], ['Top channel', ['Highest-Commission Channel']]],
@@ -1973,8 +1973,10 @@ function renderRatings() {
     ['Negative Ratings', cnt(neg), false, () => { S.f.ratingFilter = (rf === 'neg' ? 'all' : 'neg'); S.f.star = 'All'; renderRatings(); }, rf === 'neg', 'Click to filter and drill down into Negative Ratings (≤3★) across brands and locations'],
     ['Positive Ratings', cnt(pos), false, () => { S.f.ratingFilter = (rf === 'pos' ? 'all' : 'pos'); S.f.star = 'All'; renderRatings(); }, rf === 'pos', 'Click to filter and inspect Positive Ratings (4-5★) across brands and locations'],
     ['Negative Ratings %', n ? pc(neg / n, 2) : '0%', false, () => { S.f.ratingFilter = (rf === 'neg' ? 'all' : 'neg'); S.f.star = 'All'; renderRatings(); }, rf === 'neg', 'Click to isolate negative feedback rate drivers'],
-    ['Polarity rate', n ? pc(pos / n, 2) : '0%', false, () => { S.f.ratingFilter = (rf === 'pos' ? 'all' : 'pos'); S.f.star = 'All'; renderRatings(); }, rf === 'pos', 'Click to isolate customer satisfaction polarity']
+    ['Polarity rate', n ? pc(pos / n, 2) : '0%', false, () => { S.f.ratingFilter = (rf === 'pos' ? 'all' : 'pos'); S.f.star = 'All'; renderRatings(); }, rf === 'pos', 'Click to isolate customer satisfaction polarity'],
+    ...aggRatingKpis()
   ]);
+  renderAggRatings();
 
   let chartR = R;
   if (rf === 'neg') chartR = R.filter(o => o.rating <= 3);
@@ -1994,7 +1996,7 @@ function renderRatings() {
         labels: rows.map(r => r.k),
         datasets: [
           { type: 'bar', label: rf === 'neg' ? 'Negative Ratings (≤3★)' : rf === 'pos' ? 'Positive Ratings (4-5★)' : 'Total Ratings', data: rows.map(r => r.n), backgroundColor: rf === 'neg' ? '#ee2a5c' : color, yAxisID: 'y', order: 2, datalabels: lbl(v => v) },
-          { type: 'line', label: 'Average Rating', data: rows.map(r => +r.a.toFixed(1)), borderColor: K, backgroundColor: K, borderWidth: 1.6, pointRadius: 2, tension: .3, yAxisID: 'y1', order: 1, datalabels: { display: rows.length < 26, align: 'top', backgroundColor: 'rgba(255,255,255,.85)', borderRadius: 3, padding: 1, font: { size: 10, weight: '600' }, color: K } }
+          { type: 'line', label: S.ui.rmode === 'strict' ? 'Average Rating' : 'Avg Rating (ops estimate)', data: rows.map(r => +r.a.toFixed(1)), borderColor: K, backgroundColor: K, borderWidth: 1.6, pointRadius: 2, tension: .3, yAxisID: 'y1', order: 1, datalabels: { display: rows.length < 26, align: 'top', backgroundColor: 'rgba(255,255,255,.85)', borderRadius: 3, padding: 1, font: { size: 10, weight: '600' }, color: K } }
         ]
       },
       options: opts
@@ -2031,6 +2033,224 @@ function fillList(ul, input, values, set) {
     renderRatings();
   });
 }
+
+// ================= BRAND RATINGS BY AGGREGATOR =================
+// Real store ratings from each aggregator's partner portal (GrubCENTER sends
+// none). Shared server-side in brand_ratings.json via /api/brand-ratings;
+// logic shared with the server lives in public/ratings.js (FHRatings).
+// These are lifetime store ratings, so the date filter does not apply; the
+// brand filters and the Branch filter do.
+S.brandRatings = null;
+let aggLoading = null;
+function loadBrandRatings(force) {
+  if (S.brandRatings && !force) return Promise.resolve(S.brandRatings);
+  if (aggLoading && !force) return aggLoading;
+  aggLoading = fetch('/api/brand-ratings', { cache: 'no-store' })
+    .then(r => (r.ok ? r.json() : FHRatings.empty()))
+    .catch(() => FHRatings.empty())
+    .then(d => { S.brandRatings = d; aggLoading = null; return d; });
+  return aggLoading;
+}
+const aggChName = ch => (ch === 'Keeta 2.0' ? 'Keeta' : ch);
+function aggRowFilter() {
+  const loc = S.f.location || 'All';
+  return r => (!S.selBrands.size || S.selBrands.has(r.brand))
+    && eq(r.brand, S.f.brand || 'All')
+    && (loc === 'All' || (Array.isArray(loc) ? loc.includes(r.location) : r.location === loc))
+    && (!S.selLocs.size || !r.location || S.selLocs.has(r.location));
+}
+function aggMatrix() { return FHRatings.matrix(S.brandRatings, aggRowFilter()); }
+const fmtDay = ms => (ms ? new Date(ms).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', timeZone: 'Asia/Dubai' }) : '');
+
+function renderAggRatings() {
+  const el = $('#agg-ratings');
+  if (!el) return;
+  if (!S.brandRatings) { el.innerHTML = '<tbody><tr><td class="agg-empty">Loading ratings…</td></tr></tbody>'; loadBrandRatings().then(() => { if (S.page === 'ratings') renderRatings(); }); return; }
+  const { rows, totals } = aggMatrix();
+  const chs = FHRatings.CHANNELS;
+  const last = FHRatings.lastCapture(S.brandRatings);
+  $('#aggRatingsNote').textContent = last ? `· store ratings from partner portals, last updated ${fmtDay(last)}` : '';
+  if (!rows.length) {
+    el.innerHTML = `<tbody><tr><td class="agg-empty">${last ? 'No ratings match the current brand or branch filter.' : 'No aggregator ratings yet. Click <b>Update ratings</b> to capture them from a partner portal or enter them by hand.'}</td></tr></tbody>`;
+    return;
+  }
+  const cell = (x, brand, ch) => x
+    ? `<td class="agg-cell ${FHRatings.band(x.rating)}" data-b="${esc(brand)}" data-c="${esc(ch)}" title="${esc(brand)} on ${esc(aggChName(ch))}: click for details"><span class="r">${x.rating.toFixed(1)}★</span><span class="c">${x.count ? cnt(x.count) + ' ratings' : '&nbsp;'}</span></td>`
+    : '<td>–</td>';
+  el.innerHTML = `<thead><tr><th>Brand</th>${chs.map(c => `<th>${esc(aggChName(c))}</th>`).join('')}<th>All aggregators</th></tr></thead>
+    <tbody>${rows.map(r => `<tr><td>${esc(r.brand)}</td>${chs.map(c => cell(r.per[c], r.brand, c)).join('')}${r.overall ? `<td class="${FHRatings.band(r.overall.rating)}"><span class="r">${r.overall.rating.toFixed(2)}★</span><span class="c">${r.overall.count ? cnt(r.overall.count) + ' ratings' : '&nbsp;'}</span></td>` : '<td>–</td>'}</tr>`).join('')}</tbody>
+    <tfoot><tr><td>Average · captured</td>${chs.map(c => { const t = totals[c]; return t.avg ? `<td>${t.avg.rating.toFixed(2)}★<span class="c${t.stale ? ' stale' : ''}">${fmtDay(t.capturedAt)}${t.stale ? ' · stale' : ''}</span></td>` : '<td>–</td>'; }).join('')}<td></td></tr></tfoot>`;
+  $$('td.agg-cell', el).forEach(td => { td.onclick = () => openAggCellModal(td.dataset.b, td.dataset.c); });
+}
+
+// KPI tiles for the Ratings page (the "Aggregator ratings" cluster).
+function aggRatingKpis() {
+  if (!S.brandRatings) return [];
+  const { rows } = aggMatrix();
+  const cells = rows.flatMap(r => FHRatings.CHANNELS.filter(c => r.per[c]).map(c => ({ brand: r.brand, ch: c, ...r.per[c] })));
+  const scroll = () => { const p = $('.agg-panel'); if (p) p.scrollIntoView({ behavior: 'smooth', block: 'start' }); };
+  if (!cells.length) return [['Lowest Aggregator Rating', '–', false, () => openAggUpdateModal(), false, 'No aggregator ratings yet. Click to add them.']];
+  const low = cells.reduce((a, b) => (b.rating < a.rating ? b : a));
+  const below = cells.filter(c => c.rating < 4);
+  return [
+    ['Lowest Aggregator Rating', `${low.rating.toFixed(1)}★ <span class="muted small">${esc(low.brand)} · ${esc(aggChName(low.ch))}</span>`, false, () => openAggCellModal(low.brand, low.ch), false, 'Lowest store rating of any brand on any aggregator, from the partner portals. Click for details.'],
+    ['Listings Below 4.0★', cnt(below.length), false, scroll, false, `Brand-on-aggregator listings rated under 4.0 out of ${cells.length}. Click to see the full table.`]
+  ];
+}
+
+function openAggCellModal(brand, ch) {
+  const { rows } = aggMatrix();
+  const r = rows.find(x => x.brand === brand);
+  const x = r && r.per[ch];
+  if (!x) return;
+  const cap = S.brandRatings.byChannel[ch].capturedAt;
+  const stars = [5, 4, 3, 2, 1].map(s => ({ s, n: x.rows.reduce((a, row) => a + ((row.stars && row.stars[s]) || 0), 0) }));
+  const starTot = stars.reduce((a, b) => a + b.n, 0);
+  const hist = (S.brandRatings.history || []).filter(h => h.brand === brand && h.channel === ch).slice(-12);
+  $('#kpiModalBody').innerHTML = `<div class="a-ratecard"><table>
+      <thead><tr><th>Store (portal name)</th><th>Branch</th><th style="text-align:right">Rating</th><th style="text-align:right">Ratings</th></tr></thead>
+      <tbody>${x.rows.map(row => `<tr><td>${esc(row.store || row.brand)}</td><td>${esc(row.location || '–')}</td><td style="text-align:right">${row.rating.toFixed(2)}★</td><td style="text-align:right">${row.count == null ? '–' : cnt(row.count)}</td></tr>`).join('')}</tbody>
+    </table></div>
+    ${starTot ? `<h4 style="margin:14px 0 6px">Star breakdown</h4><div class="a-ratecard"><table><tbody>${stars.map(t => `<tr><td>${t.s}★</td><td style="text-align:right">${cnt(t.n)}</td><td style="text-align:right">${pc(t.n / starTot, 1)}</td></tr>`).join('')}</tbody></table></div>` : ''}
+    ${hist.length > 1 ? `<h4 style="margin:14px 0 6px">Previous captures</h4><div class="a-ratecard"><table><tbody>${hist.map(h => `<tr><td>${esc(h.date)}</td><td>${esc(h.location || '')}</td><td style="text-align:right">${h.rating.toFixed(2)}★</td><td style="text-align:right">${h.count == null ? '–' : cnt(h.count)}</td></tr>`).join('')}</tbody></table></div>` : ''}`;
+  openKpiModal(`${brand} on ${aggChName(ch)}: ${x.rating.toFixed(2)}★`, `Store rating from the ${aggChName(ch)} partner portal, captured ${fmtDay(cap)}.`);
+}
+
+function downloadAggCsv() {
+  const { rows } = aggMatrix();
+  const out = [];
+  rows.forEach(r => FHRatings.CHANNELS.forEach(c => (r.per[c] ? r.per[c].rows : []).forEach(row => out.push({
+    Brand: r.brand, Aggregator: aggChName(c), Branch: row.location || '', 'Portal store name': row.store || '',
+    Rating: row.rating, Ratings: row.count == null ? '' : row.count, Captured: fmtDubaiTs(S.brandRatings.byChannel[c].capturedAt)
+  }))));
+  downloadCSV(`brand_ratings_by_aggregator_${new Date().toISOString().slice(0, 10)}.csv`, ['Brand', 'Aggregator', 'Branch', 'Portal store name', 'Rating', 'Ratings', 'Captured'], out);
+}
+
+// ---- Update ratings: capture paste, CSV paste, or manual edit ----
+// Rows are edited in one table, then saved for one aggregator at a time.
+const aggForm = { channel: 'Talabat', capturedAt: null, rows: [] };
+function aggBrandList() {
+  return uniq(S.orders.map(o => o.brand).concat(Object.values((S.brandRatings && S.brandRatings.aliases) || {}))).filter(Boolean).sort();
+}
+// Accepts the bookmarklet JSON, or CSV/TSV lines: store, rating[, count].
+function parseAggPaste(text) {
+  const t = text.trim();
+  if (!t) return null;
+  if (t[0] === '{' || t[0] === '[') {
+    const j = JSON.parse(t);
+    const obj = Array.isArray(j) ? { rows: j } : j;
+    return { channel: obj.channel, capturedAt: obj.capturedAt, rows: (obj.rows || []).map(r => ({ store: r.store || r.brand || r.name, location: r.location || null, rating: +r.rating, count: r.count == null || r.count === '' ? null : Math.round(+r.count), stars: r.stars || null })) };
+  }
+  // One delimiter per line (tab, then semicolon, then comma) so a count like
+  // "1,204" in a tab-separated copy stays whole; quoted fields keep commas.
+  const splitLine = l => {
+    const d = l.includes('\t') ? '\t' : l.includes(';') ? ';' : ',';
+    const out = []; let cur = '', q = false;
+    for (const ch of l) {
+      if (ch === '"') q = !q;
+      else if (ch === d && !q) { out.push(cur.trim()); cur = ''; }
+      else cur += ch;
+    }
+    out.push(cur.trim());
+    return out;
+  };
+  const rows = t.split(/\r?\n/).map(splitLine).filter(c => c.length >= 2 && c[0] && isFinite(parseFloat(c[1])));
+  return { rows: rows.map(c => ({ store: c[0], rating: parseFloat(c[1]), count: c[2] && isFinite(parseInt(c[2].replace(/[^\d]/g, ''), 10)) ? parseInt(c[2].replace(/[^\d]/g, ''), 10) : null })) };
+}
+function aggFormFromSaved(ch) {
+  const c = S.brandRatings && S.brandRatings.byChannel[ch];
+  aggForm.channel = ch;
+  aggForm.capturedAt = null;
+  aggForm.rows = c ? c.rows.map(r => ({ store: r.store || r.brand, brand: r.brand, location: r.location, rating: r.rating, count: r.count, stars: r.stars, mapped: false })) : [];
+}
+function openAggUpdateModal() {
+  loadBrandRatings().then(() => {
+    aggFormFromSaved(aggForm.channel);
+    renderAggUpdateBody();
+    openKpiModal('Update aggregator ratings', 'Capture from a signed-in partner portal with the bookmarklet, paste CSV, or type ratings in. Saved for everyone who uses the dashboard.');
+  });
+}
+function renderAggUpdateBody(msg) {
+  const body = $('#kpiModalBody');
+  const brands = aggBrandList();
+  const aliases = (S.brandRatings && S.brandRatings.aliases) || {};
+  aggForm.rows.forEach(r => {
+    if (!r.brand || r.mapped === 'auto') { const m = FHRatings.matchStore(r.store, brands, aliases); if (!r.brand && m.brand) { r.brand = m.brand; r.mapped = 'auto'; } if (!r.location && m.location) r.location = m.location; }
+  });
+  body.innerHTML = `<div class="agg-form">
+    <div>1. Drag <a class="agg-bm" id="aggBookmarklet" href="#" title="Drag me to your bookmarks bar">⭐ FoodHive ratings</a> to your bookmarks bar. Open the ratings page of a partner portal you are signed in to, click the bookmark, then come back and paste below.</div>
+    <div>2. Paste the capture, or CSV lines like <code>Alfredo Pasta - Motor City, 4.3, 1250</code> (store, rating, ratings count):
+      <textarea id="aggPaste" placeholder='{"channel":"Talabat","rows":[...]}  or  store, rating, count'></textarea>
+      <button class="btn-dark" id="aggParse" style="margin-top:4px;padding:4px 10px;font-size:11px">Read pasted data</button></div>
+    <div>3. Check the rows, then save. <label>Aggregator <select id="aggCh">${FHRatings.CHANNELS.map(c => `<option${c === aggForm.channel ? ' selected' : ''} value="${esc(c)}">${esc(aggChName(c))}</option>`).join('')}</select></label>
+      <span class="muted small">Saving replaces this aggregator's saved rows.</span></div>
+    ${msg ? `<div class="${msg.err ? 'agg-err' : ''}">${esc(msg.text)}</div>` : ''}
+    <table><thead><tr><th>Portal store name</th><th>Brand</th><th>Branch</th><th>Rating</th><th>Ratings</th><th></th></tr></thead><tbody>
+      ${aggForm.rows.map((r, i) => `<tr class="${r.brand ? '' : 'unmatched'}" data-i="${i}">
+        <td><input data-f="store" value="${esc(r.store || '')}" style="width:150px"></td>
+        <td><select data-f="brand"><option value="">Pick brand…</option>${brands.map(b => `<option${b === r.brand ? ' selected' : ''}>${esc(b)}</option>`).join('')}</select></td>
+        <td><select data-f="location"><option value="">–</option>${FHRatings.LOCATIONS.map(l => `<option${l === r.location ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select></td>
+        <td><input data-f="rating" type="number" min="1" max="5" step="0.01" value="${r.rating == null || isNaN(r.rating) ? '' : r.rating}"></td>
+        <td><input data-f="count" type="number" min="0" step="1" value="${r.count == null ? '' : r.count}"></td>
+        <td><button class="btn-dark" data-del="${i}" style="padding:2px 6px;font-size:10px" title="Remove row">✕</button></td></tr>`).join('') || '<tr><td colspan="6" class="muted">No rows yet for this aggregator.</td></tr>'}
+    </tbody></table>
+    <div class="row" style="gap:6px"><button class="btn-dark" id="aggAddRow" style="padding:4px 10px;font-size:11px">+ Add row</button>
+      <button class="btn-yellow" id="aggSave" style="padding:4px 14px;font-size:12px">Save ${esc(aggChName(aggForm.channel))} ratings</button></div>
+  </div>`;
+  fetch('ratings-capture.js', { cache: 'no-store' }).then(r => r.text()).then(src => { const a = $('#aggBookmarklet'); if (a) a.href = 'javascript:' + encodeURIComponent(src.replace(/\/\*[\s\S]*?\*\//g, '').trim()); }).catch(() => {});
+  $('#aggBookmarklet').onclick = e => { e.preventDefault(); };
+  $('#aggCh').onchange = e => { aggFormFromSaved(e.target.value); renderAggUpdateBody(); };
+  $('#aggParse').onclick = () => {
+    try {
+      const p = parseAggPaste($('#aggPaste').value);
+      if (!p || !p.rows.length) return renderAggUpdateBody({ err: true, text: 'Nothing to read. Paste the bookmarklet capture or CSV lines.' });
+      if (p.channel && FHRatings.CHANNELS.includes(p.channel)) aggForm.channel = p.channel;
+      aggForm.capturedAt = p.capturedAt || null;
+      aggForm.rows = p.rows.map(r => ({ ...r, brand: null, mapped: false }));
+      const unmatched = aggForm.rows.filter(r => !FHRatings.matchStore(r.store, brands, aliases).brand).length;
+      renderAggUpdateBody({ text: `Read ${aggForm.rows.length} rows for ${aggChName(aggForm.channel)}.${unmatched ? ` Pick the brand for the ${unmatched} highlighted row${unmatched > 1 ? 's' : ''}.` : ''}` });
+    } catch (e) { renderAggUpdateBody({ err: true, text: 'Could not read that: ' + e.message }); }
+  };
+  $$('tbody tr[data-i]', body).forEach(tr => {
+    const r = aggForm.rows[+tr.dataset.i];
+    $$('[data-f]', tr).forEach(inp => {
+      inp.onchange = () => {
+        const f = inp.dataset.f, v = inp.value;
+        if (f === 'rating') r.rating = v === '' ? null : +v;
+        else if (f === 'count') r.count = v === '' ? null : Math.round(+v);
+        else if (f === 'brand') { r.brand = v || null; r.mapped = 'user'; tr.classList.toggle('unmatched', !v); }
+        else r[f] = v || null;
+      };
+    });
+  });
+  $$('[data-del]', body).forEach(b => { b.onclick = () => { aggForm.rows.splice(+b.dataset.del, 1); renderAggUpdateBody(); }; });
+  $('#aggAddRow').onclick = () => { aggForm.rows.push({ store: '', brand: null, location: null, rating: null, count: null, mapped: 'user' }); renderAggUpdateBody(); };
+  $('#aggSave').onclick = saveAggForm;
+}
+async function saveAggForm() {
+  const rows = aggForm.rows.filter(r => r.brand || r.store || r.rating != null);
+  const bad = rows.find(r => !r.brand);
+  if (bad) return renderAggUpdateBody({ err: true, text: `Pick a brand for "${bad.store || 'the new row'}" or remove it.` });
+  const aliases = {};
+  rows.forEach(r => { if (r.mapped === 'user' && r.store && FHRatings.norm(r.store) !== FHRatings.norm(r.brand)) aliases[FHRatings.splitLocation(r.store).name] = r.brand; });
+  const payload = { channel: aggForm.channel, capturedAt: aggForm.capturedAt || Date.now(), aliases, rows: rows.map(r => ({ brand: r.brand, location: r.location || null, store: r.store || null, rating: r.rating, count: r.count, stars: r.stars || null })) };
+  const err = FHRatings.validate(payload);
+  if (err) return renderAggUpdateBody({ err: true, text: err });
+  $('#aggSave').disabled = true;
+  try {
+    const res = await fetch('/api/brand-ratings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok || !j.ok) throw new Error(j.error || `HTTP ${res.status}`);
+    S.brandRatings = j.doc;
+    aggFormFromSaved(aggForm.channel);
+    renderAggUpdateBody({ text: `Saved ${payload.rows.length} ${aggChName(payload.channel)} ratings.` });
+    if (S.page === 'ratings') renderRatings();
+  } catch (e) {
+    renderAggUpdateBody({ err: true, text: 'Save failed: ' + e.message });
+  }
+}
+if ($('#aggUpdateBtn')) $('#aggUpdateBtn').onclick = openAggUpdateModal;
+if ($('#aggCsvBtn')) $('#aggCsvBtn').onclick = downloadAggCsv;
 
 // ================= PAGE 5: 86 ITEMS =================
 function renderItemsPage() {
@@ -4360,7 +4580,86 @@ function renderSources() {
         ${s.error ? `<dt>Error</dt><dd>${esc(s.error)}</dd>` : ''}
         ${s.note ? `<dt>Note</dt><dd>${esc(s.note)}</dd>` : ''}
       </dl>
+      ${s.atlas ? '<button class="btn-yellow src-atlas" style="margin-top:8px;padding:4px 12px;font-size:12px">Update from Atlas</button>' : ''}
     </div>`).join('');
+  $$('.src-atlas', grid || document).forEach(b => { b.onclick = () => openAtlasModal(); });
+}
+
+// Jaddaf runs on UrbanPiper Atlas, which has no read API and no webhook set
+// up. The Atlas bookmarklet (atlas-capture.js) copies orders or the
+// catalogue from a signed-in Atlas tab; pasting it here saves it for
+// everyone through /api/up-import (shared rules in public/atlas.js).
+// Receiving end of the bookmarklet's "Connect dashboard": it opens this page
+// with ?atlas-connect=1 and posts the Atlas session here (postMessage, never
+// in a URL). Only messages from the Atlas origin are accepted.
+const ATLAS_ORIGIN = 'https://atlas.urbanpiper.com';
+(function atlasConnectReceiver() {
+  let params;
+  try { params = new URLSearchParams(location.search); } catch (_) { return; }
+  if (!params.has('atlas-connect') || !window.opener) return;
+  try { history.replaceState(null, '', location.pathname + '#sources'); } catch (_) {}
+  let handled = false;
+  window.addEventListener('message', async e => {
+    if (e.origin !== ATLAS_ORIGIN || !e.data || e.data.type !== 'fh-atlas-token' || handled) return;
+    handled = true;
+    let j;
+    try {
+      const r = await fetch('/api/up-connect', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token: e.data.token }) });
+      j = await r.json().catch(() => ({ ok: false, error: 'HTTP ' + r.status }));
+    } catch (err) { j = { ok: false, error: err.message }; }
+    try { e.source.postMessage({ type: 'fh-atlas-connected', ok: !!j.ok, error: j.error || null, useUntil: j.useUntil || null }, ATLAS_ORIGIN); } catch (_) {}
+    const t = j.ok ? `Atlas connected until ${new Date(j.useUntil).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}. Syncing Jaddaf with Motor City…` : 'Atlas not connected: ' + j.error;
+    const m = $('#syncMsg'); if (m) { m.textContent = t; m.className = 'sync-msg' + (j.ok ? ' ok' : ' err'); }
+    refreshSources();
+    if (j.ok) syncNow(false);
+  });
+  try { window.opener.postMessage({ type: 'fh-atlas-ready' }, ATLAS_ORIGIN); } catch (_) {}
+})();
+
+function openAtlasModal(msg) {
+  const body = $('#kpiModalBody');
+  const up = S.sources && S.sources.sources.find(x => x.id === 'upOrders');
+  body.innerHTML = `<div class="agg-form">
+    <div>1. Drag <a class="agg-bm" id="atlasBookmarklet" href="#" title="Drag me to your bookmarks bar">🍽 FoodHive Atlas</a> to your bookmarks bar (once). The bookmark only works with this dashboard's address.</div>
+    <div>2. <b>Every day:</b> open <a href="https://atlas.urbanpiper.com/orders" target="_blank" rel="noopener">Atlas</a>, sign in, click the bookmark and press <b>Connect dashboard</b>. For the next 24 hours <b>Sync Now</b>, the 10-minute refresh and the nightly sync pull Jaddaf together with Motor City.
+      ${up && up.note ? `<div class="muted small" style="margin-top:4px">${esc(up.note)}</div>` : ''}</div>
+    <div>Without a connection you can still capture by hand: in the bookmark press <b>Capture orders</b> (or <b>Capture catalogue</b>), then paste here:
+      <textarea id="atlasPaste" placeholder='{"kind":"orders","orders":[...]}'></textarea></div>
+    <div id="atlasMsg" class="${msg && msg.err ? 'agg-err' : ''}">${msg ? esc(msg.text) : ''}</div>
+    <div class="row" style="gap:6px"><button class="btn-yellow" id="atlasSave" style="padding:4px 14px;font-size:12px">Save to dashboard</button>
+      <span class="muted small">Orders are matched by Atlas order id, so capturing the same days again just updates them. Test orders are skipped.</span></div>
+  </div>`;
+  openKpiModal('Update Jaddaf from Atlas', 'UrbanPiper Atlas has no API keys, so the dashboard borrows your signed-in Atlas session for 24 hours at a time. It is stored privately on the server and never shown.');
+  fetch('atlas-capture.js', { cache: 'no-store' }).then(r => r.text()).then(src => { const a = $('#atlasBookmarklet'); if (a) a.href = 'javascript:' + encodeURIComponent(src.replace(/\/\*[\s\S]*?\*\//g, '').replace('__FH_DASHBOARD__', location.origin).trim()); }).catch(() => {});
+  $('#atlasBookmarklet').onclick = e => { e.preventDefault(); };
+  const say = (text, err) => { const m = $('#atlasMsg'); m.textContent = text; m.className = err ? 'agg-err' : ''; };
+  $('#atlasPaste').oninput = () => {
+    const t = $('#atlasPaste').value.trim();
+    if (!t) return say('');
+    try { const p = JSON.parse(t); const e = FHAtlas.validate(p); say(e || 'Ready to save: ' + FHAtlas.summary(p) + '.', !!e); }
+    catch (_) { say('That is not a complete capture. Copy it again from the Atlas bookmark.', true); }
+  };
+  $('#atlasSave').onclick = async () => {
+    let p;
+    try { p = JSON.parse($('#atlasPaste').value.trim()); } catch (_) { return say('Paste the capture from the Atlas bookmark first.', true); }
+    const e = FHAtlas.validate(p);
+    if (e) return say(e, true);
+    $('#atlasSave').disabled = true;
+    say('Saving…');
+    try {
+      const r = await fetch('/api/up-import', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(p) });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || !j.ok) throw new Error(j.error || 'HTTP ' + r.status);
+      $('#atlasPaste').value = '';
+      say(j.kind === 'orders'
+        ? `Saved: ${j.added} new and ${j.updated} updated Jaddaf orders${j.skippedTests ? `, ${j.skippedTests} test orders skipped` : ''}. ${j.total} Jaddaf orders in total. Reloading data…`
+        : `Saved ${j.items} catalogue items (${j.disabled} switched off). Reloading data…`);
+      await loadLive();
+      refreshSources();
+      say($('#atlasMsg').textContent.replace('Reloading data…', 'Dashboard updated.'));
+    } catch (err) { say('Could not save: ' + err.message, true); }
+    finally { const b = $('#atlasSave'); if (b) b.disabled = false; }
+  };
 }
 $('#sourcesPill') && ($('#sourcesPill').onclick = () => show('sources'));
 refreshSources();
@@ -4861,11 +5160,17 @@ async function syncNow(full = false) {
       if (spanDays > 0 && spanDays <= 3) range = `?from=${S.f.from}&to=${S.f.to}`;
     }
     const qs = full ? '?full=1' : range;
+    if (msg) msg.textContent = 'Syncing Motor City (Grubtech) and Jaddaf (UrbanPiper)…';
     const res = await fetch('/api/refresh' + qs).then(r => r.json());
-    if (res.configured === false) { done(res.message || 'GrubCENTER not configured on this server', 'err'); return; }
+    // Jaddaf's result is final when /api/refresh answers; Motor City's
+    // GrubCENTER pull keeps running and is polled below.
+    const jd = atlasSyncText(res.atlas);
+    if (res.atlas && res.atlas.ok) { try { await fetchOrdersAndRender({ force: true }); } catch (_) {} }
+    refreshSources();
+    if (res.configured === false) { done(`Motor City: ${res.message || 'GrubCENTER not configured on this server'} · ${jd.text}`, 'err'); return; }
 
     const startedAt = Date.now();
-    const label = res.busy ? 'Waiting for the sync already in progress' : 'Fetching latest orders from GrubCENTER';
+    const label = (res.busy ? 'Waiting for the Motor City sync already in progress' : 'Fetching latest Motor City orders from GrubCENTER') + ` · ${jd.text}`;
     const paint = () => { if (msg) msg.textContent = `${label}… ${Math.round((Date.now() - startedAt) / 1000)}s`; };
     paint();
     ticker = setInterval(paint, 1000);
@@ -4876,18 +5181,31 @@ async function syncNow(full = false) {
     // was shorter than the 14-day pull it used to trigger, which is why the
     // button reported "still running" even when it was working.
     const ok = await pollForSync(before, { timeoutMs: 5 * 60 * 1000, intervalMs: 3000, allowHidden: true });
-    if (ok) { done(`✓ ${syncedSummary(res)}`, 'ok'); return; }
+    if (ok) { done(`✓ Motor City: ${syncedSummary(res)} · ${jd.text}`, jd.ok ? 'ok' : 'err'); return; }
 
     const st = await fetch('/api/status').then(r => r.json()).catch(() => null);
     if (st && st.lastSync > before) {
       await fetchOrdersAndRender({ force: true });
-      done(`✓ ${syncedSummary(res)}`, 'ok');
+      done(`✓ Motor City: ${syncedSummary(res)} · ${jd.text}`, jd.ok ? 'ok' : 'err');
     } else {
-      done('Sync is still running in the background — the dashboard will update automatically', '');
+      done(`Motor City sync is still running in the background — the dashboard will update automatically · ${jd.text}`, jd.ok ? '' : 'err');
     }
   } catch (e) {
     done('✗ ' + e.message, 'err');
   }
+}
+
+// Jaddaf's part of the Sync Now message, from /api/refresh's `atlas`.
+function atlasSyncText(a) {
+  if (!a) return { ok: false, text: 'Jaddaf: no answer from the UrbanPiper sync' };
+  if (a.ok) {
+    const parts = [`${a.saved} order${a.saved === 1 ? '' : 's'} checked`];
+    if (a.added) parts.push(`${a.added} new`);
+    if (a.removed) parts.push(`${a.removed} removed`);
+    return { ok: true, text: `✓ Jaddaf: ${parts.join(', ')} (${a.from === a.to ? a.to : a.from + ' → ' + a.to})` };
+  }
+  if (a.needsConnect) return { ok: false, text: '✗ Jaddaf not synced: ' + (a.error || 'connect Atlas') + ' (Data Sources → Update from Atlas)' };
+  return { ok: false, text: '✗ Jaddaf not synced, nothing changed: ' + (a.error || 'unknown error') };
 }
 
 // "Synced — 195 orders (2026-10-26)" for the window the server actually

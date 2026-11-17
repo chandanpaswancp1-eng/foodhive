@@ -1185,3 +1185,38 @@ tbody tr[onclick]:hover, tr.daily-row:hover { filter: brightness(0.95); }
 .kpis--clustered .kpi .kv > div { text-align: left; }
 .kpis--clustered .kpi .ks { justify-content: flex-start; border-top: 0; padding: 2px 0 0; color: #6b7275; font-weight: 500; }
 .kpis--clustered .kpi .kv.kv-neg { color: #b3261e; }
+
+/* ---- Brand ratings by aggregator (Ratings page) ---- */
+.agg-panel { margin-bottom: 10px; height: auto; }
+.agg-ph { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
+.agg-actions { display: flex; gap: 6px; }
+.agg-actions button { padding: 4px 10px; font-size: 11px; }
+.agg-wrap { max-height: 420px; overflow: auto; }
+.agg-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.agg-table th, .agg-table td { padding: 6px 10px; border-bottom: 1px solid var(--line, #e3e7e8); text-align: center; white-space: nowrap; }
+.agg-table th:first-child, .agg-table td:first-child { text-align: left; }
+.agg-table th { font-weight: 700; background: #fafbfb; position: sticky; top: 0; z-index: 1; }
+.agg-table td.agg-cell { cursor: pointer; }
+.agg-table td.agg-cell:hover { outline: 2px solid var(--y, #FDCB3C); outline-offset: -2px; }
+.agg-table .r { font-weight: 700; }
+.agg-table .c { display: block; font-size: 10.5px; color: #777; }
+.agg-table td.good { background: #e7f6ec; }
+.agg-table td.mid { background: #fff5d6; }
+.agg-table td.bad { background: #fde3ea; }
+.agg-table td.bad .r { color: #c4123f; }
+.agg-table tfoot td { font-weight: 700; background: #fafbfb; border-top: 2px solid #d9dfe1; }
+.agg-table tfoot .stale { color: #c4123f; }
+.agg-empty { padding: 18px; text-align: center; color: #777; }
+.agg-form { display: grid; gap: 10px; }
+.agg-form textarea { width: 100%; min-height: 80px; font: 12px ui-monospace, monospace; box-sizing: border-box; }
+.agg-form table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.agg-form th, .agg-form td { padding: 4px 6px; border-bottom: 1px solid #eee; text-align: left; }
+.agg-form input[type=number] { width: 70px; }
+.agg-form tr.unmatched { background: #fde3ea; }
+.agg-bm { display: inline-block; padding: 4px 10px; background: #1d1d1d; color: #FDCB3C; border-radius: 4px; text-decoration: none; font-weight: 600; cursor: grab; }
+.agg-err { color: #c4123f; font-weight: 600; }
+@media (max-width: 720px) { .agg-ph { align-items: flex-start; } }
+
+/* Note inside a KPI value (e.g. Lowest Aggregator Rating: brand · aggregator) */
+.kpi .kv .muted.small { font-size: 11px; font-weight: 500; }
+.agg-actions .btn-yellow { background: #fff; color: #1d1d1d; border: 1px solid #1d1d1d; }

@@ -13,6 +13,9 @@ const zlib = require('zlib');
 const { URL } = require('url');
 const N = require('./public/normalize.js');
 const FHSources = require('./public/sources.js');
+const FHRatings = require('./public/ratings.js');
+const { importCapture: importAtlasCapture } = require('./api/up-import.js');
+const AtlasSync = require('./api/_lib/atlas-sync.js');
 
 // This is a long-running process serving every user -- one unexpected
 // exception (e.g. from a response write on an already-aborted connection)
@@ -342,7 +345,11 @@ const STORE = {
   upOrders: [],
   upOrderItems: [],
   upMeta: { lastWebhookAt: 0, webhookCount: 0, catalogAt: 0 },
-  upCatalog: null
+  upCatalog: null,
+  upItems: [],
+  upConn: null,
+  // Aggregator store ratings captured from partner portals (public/ratings.js).
+  brandRatings: null
 };
 
 // 1. Initial preload from disk
@@ -388,13 +395,18 @@ function preloadData() {
     try { STORE.itemsLastSync = fs.statSync(snapFile).mtimeMs; } catch (_) {}
   }
 
-  for (const [file, key] of [['up_orders.json', 'upOrders'], ['up_order_items.json', 'upOrderItems'], ['up_meta.json', 'upMeta']]) {
+  for (const [file, key] of [['up_orders.json', 'upOrders'], ['up_order_items.json', 'upOrderItems'], ['up_meta.json', 'upMeta'], ['up_catalog.json', 'upCatalog'], ['up_items.json', 'upItems'], ['up_conn.json', 'upConn']]) {
     const f = path.join(__dirname, 'data', file);
     if (fs.existsSync(f)) { try { STORE[key] = JSON.parse(fs.readFileSync(f, 'utf8')); } catch (_) {} }
   }
 
   if (fs.existsSync(orderItemsFile)) {
     try { STORE.orderItemsArray = JSON.parse(fs.readFileSync(orderItemsFile, 'utf8')); } catch (_) {}
+  }
+
+  const ratingsFile = path.join(__dirname, 'data', 'brand_ratings.json');
+  if (fs.existsSync(ratingsFile)) {
+    try { STORE.brandRatings = JSON.parse(fs.readFileSync(ratingsFile, 'utf8')); } catch (_) {}
   }
 
   const zohoFile = path.join(__dirname, 'data', 'zoho_cache.json');
@@ -998,6 +1010,16 @@ setInterval(() => { syncZoho().catch(() => {}); }, SYNC_INTERVAL_MS);
 // ---------- HTTP SERVER ----------
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.png': 'image/png', '.svg': 'image/svg+xml', '.json': 'application/json' };
 
+// Request body as text, capped at 2 MB (ratings captures are a few KB).
+function readRequestBody(req, limit = 2 * 1024 * 1024) {
+  return new Promise((resolve, reject) => {
+    let size = 0; const chunks = [];
+    req.on('data', c => { size += c.length; if (size > limit) { reject(new Error('Body too large')); req.destroy(); } else chunks.push(c); });
+    req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+    req.on('error', reject);
+  });
+}
+
 function sendGzip(req, res, code, obj) {
   const jsonStr = JSON.stringify(obj);
   res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
@@ -1017,6 +1039,30 @@ function sendGzip(req, res, code, obj) {
   }
 }
 
+// ---------- UrbanPiper (Jaddaf) storage: data/ files, same io shape as Vercel's Blob ----------
+const upSave = (file, key) => async v => {
+  STORE[key] = v;
+  const f = path.join(__dirname, 'data', file);
+  if (v == null) { try { fs.unlinkSync(f); } catch (_) {} return; }
+  fs.writeFileSync(f, JSON.stringify(v));
+};
+const upFileIo = {
+  readMeta: async () => STORE.upMeta, writeMeta: upSave('up_meta.json', 'upMeta'),
+  readOrders: async () => STORE.upOrders, writeOrders: upSave('up_orders.json', 'upOrders'),
+  readOrderItems: async () => STORE.upOrderItems, writeOrderItems: upSave('up_order_items.json', 'upOrderItems'),
+  readItems: async () => STORE.upItems, writeItems: upSave('up_items.json', 'upItems'),
+  writeCatalog: upSave('up_catalog.json', 'upCatalog'),
+  readConn: async () => STORE.upConn, writeConn: upSave('up_conn.json', 'upConn')
+};
+const syncAtlas = opts => AtlasSync.syncAtlasOnce(upFileIo, opts).then(r => {
+  if (r.ok) console.log(`[Atlas Sync] ${r.from}..${r.to}: ${r.listed} listed, ${r.added} new, ${r.updated} updated, ${r.removed} removed (${r.ms} ms)`);
+  else if (!r.needsConnect || STORE.upMeta.atlasConnectedAt) console.warn('[Atlas Sync] ' + r.error);
+  return r;
+});
+// Jaddaf on the same 10-minute rhythm as GrubCENTER while connected.
+setInterval(() => { if (AtlasSync.connectionState(STORE.upConn).connected) syncAtlas({ catalog: undefined }).catch(() => {}); }, 10 * 60 * 1000);
+setTimeout(() => { if (AtlasSync.connectionState(STORE.upConn).connected) syncAtlas({}).catch(() => {}); }, 1500);
+
 // ---------- Sources: GrubCENTER (Motor City) + UrbanPiper (Jaddaf) ----------
 // Each source keeps its own store so writers never race; readers merge.
 // Orders cached before `source` existed all came from GrubCENTER.
@@ -1033,11 +1079,44 @@ http.createServer(async (req, res) => {
       const sources = FHSources.describeSources({
         grubcenter: { configured: gcConfigured, lastSync: STORE.lastSync },
         items86: { configured: gcConfigured, lastSync: STORE.itemsLastSync || 0, records: STORE.itemsArray.length },
-        upOrders: { configured: !!process.env.URBANPIPER_WEBHOOK_SECRET, lastSync: STORE.upMeta.lastWebhookAt, records: STORE.upOrders.length, note: STORE.upMeta.lastWebhookAt ? null : 'No webhook received yet (Jaddaf not live)' },
-        upCatalog: { configured: true, lastSync: (STORE.upCatalog && (STORE.upCatalog.receivedAt || STORE.upCatalog.capturedAt)) || 0, records: STORE.upCatalog && STORE.upCatalog.items ? STORE.upCatalog.items.length : null, note: STORE.upCatalog ? null : 'No Atlas snapshot yet' },
+        ...AtlasSync.upFacts(STORE.upMeta, STORE.upOrders.length, STORE.upConn),
+        aggRatings: { configured: true, lastSync: FHRatings.lastCapture(STORE.brandRatings), records: STORE.brandRatings ? FHRatings.cellCount(STORE.brandRatings) : null, note: STORE.brandRatings ? null : 'No ratings imported yet' },
         zoho: { configured: zohoConfigured, lastSync: STORE.zoho && STORE.zoho.lastSync }
       });
       return sendGzip(req, res, 200, { checkedAt: Date.now(), summary: FHSources.summarize(sources), sources });
+    }
+
+    if (u.pathname === '/api/brand-ratings') {
+      if (req.method === 'GET') return sendGzip(req, res, 200, STORE.brandRatings || FHRatings.empty());
+      if (req.method !== 'POST') return sendGzip(req, res, 405, { ok: false, error: 'Method not allowed' });
+      let body;
+      try { body = JSON.parse(await readRequestBody(req) || '{}'); } catch (_) { return sendGzip(req, res, 400, { ok: false, error: 'Body is not valid JSON' }); }
+      const err = FHRatings.validate(body);
+      if (err) return sendGzip(req, res, 400, { ok: false, error: err });
+      STORE.brandRatings = FHRatings.merge(STORE.brandRatings, body);
+      fs.writeFileSync(path.join(__dirname, 'data', 'brand_ratings.json'), JSON.stringify(STORE.brandRatings));
+      return sendGzip(req, res, 200, { ok: true, doc: STORE.brandRatings });
+    }
+
+    if (u.pathname === '/api/up-connect') {
+      if (req.method !== 'POST') return sendGzip(req, res, 405, { ok: false, error: 'Method not allowed' });
+      let body;
+      try { body = JSON.parse(await readRequestBody(req, 64 * 1024) || '{}'); } catch (_) { return sendGzip(req, res, 400, { ok: false, error: 'Body is not valid JSON' }); }
+      try {
+        const r = await AtlasSync.connect(body && body.token, upFileIo);
+        if (r.json.ok) syncAtlas({}).catch(() => {});
+        return sendGzip(req, res, r.status, r.json);
+      } catch (e) { return sendGzip(req, res, 500, { ok: false, error: e.message }); }
+    }
+
+    if (u.pathname === '/api/up-import') {
+      if (req.method !== 'POST') return sendGzip(req, res, 405, { ok: false, error: 'Method not allowed' });
+      let body;
+      try { body = JSON.parse(await readRequestBody(req, 8 * 1024 * 1024) || '{}'); } catch (e) { return sendGzip(req, res, 400, { ok: false, error: e.message === 'Body too large' ? e.message : 'Body is not valid JSON' }); }
+      try {
+        const r = await importAtlasCapture(body, upFileIo);
+        return sendGzip(req, res, r.status, r.json);
+      } catch (e) { return sendGzip(req, res, 500, { ok: false, error: e.message }); }
     }
 
     if (u.pathname === '/api/status') {
@@ -1060,8 +1139,12 @@ http.createServer(async (req, res) => {
     }
 
     if (u.pathname === '/api/refresh') {
+      // Sync Now pulls both kitchens at once. Atlas (Jaddaf) finishes inside
+      // this request and its exact result goes back in `atlas`; GrubCENTER
+      // (Motor City) runs on and the client polls lastSync.
+      const atlasRun = syncAtlas({ catalog: u.searchParams.get('catalog') === '1' ? true : undefined }).catch(e => ({ ok: false, error: e.message }));
       if (!(CFG.email && CFG.password)) {
-        return sendGzip(req, res, 200, { ok: false, configured: false, message: 'GrubCENTER credentials not configured on this server' });
+        return sendGzip(req, res, 200, { ok: false, configured: false, message: 'GrubCENTER credentials not configured on this server', atlas: await atlasRun });
       }
       const full = u.searchParams.get('full') === '1';
       // `full=1` forces a complete 45-day re-sync regardless of cached data,
@@ -1071,7 +1154,8 @@ http.createServer(async (req, res) => {
         syncGrubcenter(daysAgo(45), today()).catch(() => {});
         return sendGzip(req, res, 200, {
           ok: true, configured: true, busy,
-          message: busy ? 'A background sync is already running' : 'Full 45-day re-sync started'
+          message: busy ? 'A background sync is already running' : 'Full 45-day re-sync started',
+          atlas: await atlasRun
         });
       }
       // The button must return quickly. A 14-day pull takes ~6 minutes, and
@@ -1092,7 +1176,8 @@ http.createServer(async (req, res) => {
       return sendGzip(req, res, 200, {
         ok: true, configured: true, busy,
         message: busy ? 'A sync is already running' : 'Sync started',
-        from, to, days: dayChunks(from, to).length
+        from, to, days: dayChunks(from, to).length,
+        atlas: await atlasRun
       });
     }
 
@@ -1174,7 +1259,7 @@ http.createServer(async (req, res) => {
     }
 
     if (u.pathname === '/api/availability') {
-      return sendGzip(req, res, 200, { items: STORE.itemsArray });
+      return sendGzip(req, res, 200, { items: STORE.itemsArray.concat(STORE.upItems || []) });
     }
 
     if (u.pathname === '/api/accounting') {

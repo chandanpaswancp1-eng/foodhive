@@ -65,8 +65,23 @@ const readUpOrders = () => readBlobJson(UP_ORDERS_KEY, []);
 const writeUpOrders = arr => writeBlobJson(UP_ORDERS_KEY, arr);
 const readUpOrderItems = () => readBlobJson(UP_ORDER_ITEMS_KEY, []);
 const writeUpOrderItems = arr => writeBlobJson(UP_ORDER_ITEMS_KEY, arr);
+const UP_CATALOG_KEY = 'up_catalog.json';
+const UP_ITEMS_KEY = 'up_items.json';
+const readUpCatalog = () => readBlobJson(UP_CATALOG_KEY, null);
+const writeUpCatalog = doc => writeBlobJson(UP_CATALOG_KEY, doc);
+const readUpItems = () => readBlobJson(UP_ITEMS_KEY, []);
+const writeUpItems = arr => writeBlobJson(UP_ITEMS_KEY, arr);
+// Atlas session handed over by the bookmarklet. Private; never served.
+const UP_CONN_KEY = 'up_conn.json';
+const readUpConn = () => readBlobJson(UP_CONN_KEY, null);
+const writeUpConn = conn => writeBlobJson(UP_CONN_KEY, conn);
 const readUpMeta = () => readBlobJson(UP_META_KEY, { lastWebhookAt: 0, webhookCount: 0, catalogAt: 0 });
 const writeUpMeta = meta => writeBlobJson(UP_META_KEY, meta);
+
+// Aggregator store ratings, captured from partner portals (public/ratings.js).
+const BRAND_RATINGS_KEY = 'brand_ratings.json';
+const readBrandRatings = () => readBlobJson(BRAND_RATINGS_KEY, null);
+const writeBrandRatings = doc => writeBlobJson(BRAND_RATINGS_KEY, doc);
 
 // Every order carries its source. Orders stored before this field existed
 // all came from GrubCENTER.
@@ -80,4 +95,4 @@ async function readAllOrderItems() {
   return withSource(g, 'grubcenter').concat(withSource(u, 'urbanpiper'));
 }
 
-module.exports = { readOrders, writeOrders, readItems, writeItems, readOrderItems, writeOrderItems, readMeta, writeMeta, readZoho, writeZoho, readZohoMeta, writeZohoMeta, readBlobJson, writeBlobJson, readUpOrders, writeUpOrders, readUpOrderItems, writeUpOrderItems, readUpMeta, writeUpMeta, readAllOrders, readAllOrderItems, withSource };
+module.exports = { readOrders, writeOrders, readItems, writeItems, readOrderItems, writeOrderItems, readMeta, writeMeta, readZoho, writeZoho, readZohoMeta, writeZohoMeta, readBlobJson, writeBlobJson, readUpOrders, writeUpOrders, readUpOrderItems, writeUpOrderItems, readUpMeta, writeUpMeta, readUpCatalog, writeUpCatalog, readUpItems, writeUpItems, readUpConn, writeUpConn, readAllOrders, readAllOrderItems, withSource, readBrandRatings, writeBrandRatings };
