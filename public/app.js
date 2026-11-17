@@ -1885,7 +1885,13 @@ function renderPrep() {
   ]);
   
   // best vs worst outlet
-  const pairs = groupBy(O.filter(x => x.v.recDisp != null), x => `${x.o.brand} - ${x.o.location}`).map(g => ({ k: g.k, v: avg(g.rows.map(x => x.v.recDisp)), n: g.rows.length })).filter(p => p.n >= 1).sort((a, b) => a.v - b.v);
+  // Rank only outlets with enough orders to mean something: with any outlet
+  // allowed, one or three quick orders (a new Jaddaf brand) won "best". If a
+  // narrow filter leaves no outlet with that many, rank them all.
+  const MIN_OUTLET_ORDERS = 10;
+  const allPairs = groupBy(O.filter(x => x.v.recDisp != null), x => `${x.o.brand} - ${x.o.location}`).map(g => ({ k: g.k, v: avg(g.rows.map(x => x.v.recDisp)), n: g.rows.length })).sort((a, b) => a.v - b.v);
+  const qualified = allPairs.filter(p => p.n >= MIN_OUTLET_ORDERS);
+  const pairs = qualified.length >= 2 ? qualified : allPairs;
   const best = pairs[0], worst = pairs[pairs.length - 1];
 
   const bBrand = best ? best.k.split(' - ')[0] : '';
@@ -1895,7 +1901,7 @@ function renderPrep() {
 
   kp.push([
     'Best vs Worst Brand Location',
-    best ? `🏆 Best outlet ${esc(best.k)} – ${best.v.toFixed(1)} min | 🚨 Underperforming: ${esc(worst.k)} – ${worst.v.toFixed(1)} min` : '–',
+    best ? `🏆 Best outlet ${esc(best.k)} – ${best.v.toFixed(1)} min (${cnt(best.n)} order${best.n === 1 ? '' : 's'}) | 🚨 Underperforming: ${esc(worst.k)} – ${worst.v.toFixed(1)} min (${cnt(worst.n)} order${worst.n === 1 ? '' : 's'})` : '–',
     true,
     () => {
       if (!best) return;
@@ -4223,7 +4229,7 @@ function renderTargets() {
     ['Projected % of Target', pctTxt, false, noop, false, 'Projected Net Sales / Net Sales target.', ''],
     ['Gap to Target', gapTxt, false, noop, false, 'Target minus projected Net Sales. Negative means the projection already beats target.', ''],
     ['Target / Day vs Run-rate / Day', hasTarget ? `${money(tgt.sales / totalDays)} / ${money(achievedSel / totalDays)}` : money(achievedSel / totalDays), true, noop, false, 'Net Sales per day the target needs, against the last-30-day run-rate per day.', ''],
-    ['Projected Orders', `${cnt(ordersSel)} / ${cnt(ordAch.target)}`, false, noop, false, 'Projected non-cancelled orders for the month against the orders target.', ''],
+    ['Projected Orders', ordAch.target ? `${cnt(ordersSel)} / ${cnt(ordAch.target)}` : cnt(ordersSel), false, noop, false, 'Projected non-cancelled orders for the month against the orders target.', ''],
     ['Status', ragChip(rag), false, noop, false, 'Projection vs target: On track at 98% or more, At risk 90% to 98%, Off track below 90%.', '']
   ] : [
     targetCell,
