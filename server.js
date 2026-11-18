@@ -16,6 +16,7 @@ const FHSources = require('./public/sources.js');
 const FHRatings = require('./public/ratings.js');
 const { importCapture: importAtlasCapture } = require('./api/up-import.js');
 const AtlasSync = require('./api/_lib/atlas-sync.js');
+const { lineItemsResponse } = require('./api/_lib/line-items-window.js');
 
 // This is a long-running process serving every user -- one unexpected
 // exception (e.g. from a response write on an already-aborted connection)
@@ -1220,22 +1221,10 @@ http.createServer(async (req, res) => {
     }
 
     if (u.pathname === '/api/order-items') {
+      // Same date window as Vercel's api/order-items.js: last 35 days unless
+      // a range is asked for; older history is fetched on demand.
       const from = u.searchParams.get('from'), to = u.searchParams.get('to');
-      const allItems = allOrderItems();
-      let filtered = allItems;
-      if (from || to) {
-        filtered = allItems.filter(x => {
-          if (!x.at) return false;
-          const d = dubaiDateKey(x.at);
-          return (!from || d >= from) && (!to || d <= to);
-        });
-      }
-      return sendGzip(req, res, 200, {
-        count: filtered.length,
-        totalInStore: allItems.length,
-        items: filtered,
-        lastSync: STORE.lastSync
-      });
+      return sendGzip(req, res, 200, { ...lineItemsResponse(allOrderItems(), from, to, dubaiDateKey), lastSync: STORE.lastSync });
     }
 
     if (u.pathname === '/api/cached-exports') {

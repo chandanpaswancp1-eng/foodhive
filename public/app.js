@@ -763,6 +763,7 @@ function dateChanged() {
   if (S.source === 'live' && S.f.from && S.f.to && S.loadedRange && (S.f.from < S.loadedRange[0] || S.f.to > S.loadedRange[1])) {
     clearTimeout(dateTimer); dateTimer = setTimeout(() => loadLive(S.f.from, S.f.to), 500);
   }
+  ensureLineItems();
   render();
 }
 
@@ -4686,7 +4687,7 @@ refreshSources();
 setInterval(() => { if (document.visibilityState !== 'hidden') refreshSources(); }, 60 * 1000);
 
 const RENDER = { sources: renderSources, sales: renderSales, cancel: renderCancel, prep: renderPrep, ratings: renderRatings, items: renderItemsPage, delayed: renderDelayed, commission: renderCommission, ebitda: renderEbitda, targets: renderTargets, comparison: renderComparison, accounting: renderAccounting, export: renderExport };
-function render() { RENDER[S.page](); }
+function render() { ensureLineItems(); RENDER[S.page](); }
 
 function show(page) {
   S.page = page;
@@ -4815,6 +4816,38 @@ function mergeEvents(existing, incoming) {
   return merged;
 }
 
+// Order line items come in date windows (/api/order-items sends the last 35
+// days unless asked for a range; the store holds the full backfilled
+// history). A response replaces only the days it covers (servedFrom to
+// servedTo), so a refresh never drops older days already loaded.
+// S.liFrom is the earliest day held; S.liCoveredFrom the earliest in store.
+function mergeLineItemsByDay(existing, resp) {
+  if (!resp || !Array.isArray(resp.items)) return existing;
+  const f = resp.servedFrom, t = resp.servedTo;
+  if (!f || !t) return mergeEvents(existing, resp.items);
+  if (resp.coveredFrom) S.liCoveredFrom = resp.coveredFrom;
+  if (!S.liFrom || f < S.liFrom) S.liFrom = f;
+  return existing.filter(x => { const d = dkey(x.at); return d < f || d > t; }).concat(resp.items);
+}
+let liFetch = null;
+// Picking dates older than the line items held (Items Detail "items sold",
+// Export, Targets lookbacks): fetch just the missing days, then redraw.
+function ensureLineItems() {
+  const want = S.f.from;
+  if (S.source !== 'live' || !want || !S.liFrom || want >= S.liFrom || liFetch) return;
+  if (S.liCoveredFrom && S.liFrom <= S.liCoveredFrom) return;
+  const from = S.liCoveredFrom && want < S.liCoveredFrom ? S.liCoveredFrom : want;
+  const to = new Date(Date.parse(S.liFrom + 'T00:00:00Z') - 864e5).toISOString().slice(0, 10);
+  if (from > to) return;
+  log(`Loading item sales ${from} → ${to}…`);
+  liFetch = fetch(`/api/order-items?from=${from}&to=${to}`).then(r => r.json()).then(j => {
+    S.lineItems = mergeLineItemsByDay(S.lineItems, j);
+    if (!S.liFrom || from < S.liFrom) S.liFrom = from;
+    log(`Loaded ${j.count} item lines (${from} → ${to}).`);
+    render();
+  }).catch(e => log('✗ Item sales history: ' + e.message)).finally(() => { liFetch = null; });
+}
+
 async function loadLive(from, to) {
   log('Contacting GrubCENTER…');
   try {
@@ -4828,8 +4861,8 @@ async function loadLive(from, to) {
     if (!ordRes.ok) throw new Error(j.error || 'Failed to fetch orders');
     let items = [];
     try { items = (await availRes.json()).items || []; } catch (_) {}
-    let lineItems = [];
-    try { lineItems = (await oiRes.json()).items || []; } catch (_) {}
+    let oiJson = null;
+    try { oiJson = await oiRes.json(); } catch (_) {}
     if (!j.orders.length) { log('GrubCENTER returned 0 orders for that range.'); }
     else log(`Loaded ${j.orders.length} orders.`);
     const keepFrom = from, keepTo = to;
@@ -4843,14 +4876,14 @@ async function loadLive(from, to) {
       // complete dataset, so a plain replace is correct there.
       const mergedOrders = mergeOrdersById(S.orders, j.orders);
       const mergedItems = mergeEvents(S.items, items);
-      const mergedLineItems = mergeEvents(S.lineItems, lineItems);
+      const mergedLineItems = mergeLineItemsByDay(S.lineItems, oiJson);
       setData(mergedOrders, mergedItems, mergedLineItems, 'live', `● Live · GrubCENTER (${mergedOrders.length})`);
       S.loadedRange = [
         S.loadedRange && S.loadedRange[0] && S.loadedRange[0] < from ? S.loadedRange[0] : from,
         S.loadedRange && S.loadedRange[1] && S.loadedRange[1] > to ? S.loadedRange[1] : to
       ];
     } else {
-      setData(j.orders, items.length ? items : S.items, lineItems.length ? lineItems : S.lineItems, 'live', `● Live · GrubCENTER (${j.orders.length})`);
+      setData(j.orders, items.length ? items : S.items, mergeLineItemsByDay(S.lineItems, oiJson), 'live', `● Live · GrubCENTER (${j.orders.length})`);
     }
     if (keepFrom) setDates(keepFrom, keepTo); else setDates(...fullRange());
     render();
@@ -5388,7 +5421,7 @@ async function fetchOrdersAndRender(opts = {}) {
   let items = S.items;
   try { const j = await availRes.json(); if (Array.isArray(j.items) && j.items.length) items = j.items; } catch (_) {}
   let lineItems = S.lineItems;
-  try { const j = await oiRes.json(); if (Array.isArray(j.items) && j.items.length) lineItems = j.items; } catch (_) {}
+  try { lineItems = mergeLineItemsByDay(S.lineItems, await oiRes.json()); } catch (_) {}
 
   // Detect an "All"/"Today" view BEFORE swapping the dataset, so a refresh
   // that lands after midnight can move those ranges forward. Without this,
@@ -5445,7 +5478,13 @@ async function pollForSync(since, opts = {}) {
 async function waitForBackgroundSync(since, opts = {}) {
   if (backgroundWaitActive) return false;
   backgroundWaitActive = true;
-  try { return await pollForSync(since, opts); }
+  try {
+    const done = await pollForSync(since, opts);
+    // Repaint source health now, not on its next 60 s poll, so the
+    // GrubCENTER card leaves "Stale" as soon as the fresh data is in.
+    if (done) refreshSources();
+    return done;
+  }
   finally { backgroundWaitActive = false; }
 }
 

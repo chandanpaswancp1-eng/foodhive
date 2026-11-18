@@ -568,4 +568,4 @@ function liveNormalize(rawSales, rawCancels, official) {
     (!official || (o.brand && official.has(String(o.brand).toLowerCase().trim()))));
 }
 
-module.exports = { CFG, configured, ensureSession, findPartnerId, syncOnce, syncItems, readItemsMeta, liveToday, liveNormalize, readOrders, writeOrders, readItems, readOrderItems, writeOrderItems, readMeta, dubaiDateKey };
+module.exports = { CFG, configured, ensureSession, findPartnerId, fetchPaged, syncOnce, syncItems, readItemsMeta, liveToday, liveNormalize, readOrders, writeOrders, readItems, readOrderItems, writeOrderItems, readMeta, dubaiDateKey };
