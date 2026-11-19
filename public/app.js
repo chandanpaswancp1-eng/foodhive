@@ -4629,7 +4629,7 @@ const ATLAS_ORIGIN = 'https://atlas.urbanpiper.com';
       j = await r.json().catch(() => ({ ok: false, error: 'HTTP ' + r.status }));
     } catch (err) { j = { ok: false, error: err.message }; }
     try { e.source.postMessage({ type: 'fh-atlas-connected', ok: !!j.ok, error: j.error || null, useUntil: j.useUntil || null }, ATLAS_ORIGIN); } catch (_) {}
-    const t = j.ok ? `Atlas connected until ${new Date(j.useUntil).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}. Syncing Jaddaf with Motor City…` : 'Atlas not connected: ' + j.error;
+    const t = j.ok ? `Atlas connected until ${new Date(j.useUntil).toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}. Syncing Jaddaf with Motor City…` : 'Atlas not connected: ' + j.error;
     const m = $('#syncMsg'); if (m) { m.textContent = t; m.className = 'sync-msg' + (j.ok ? ' ok' : ' err'); }
     refreshSources();
     if (j.ok) syncNow(false);
@@ -4642,7 +4642,7 @@ function openAtlasModal(msg) {
   const up = S.sources && S.sources.sources.find(x => x.id === 'upOrders');
   body.innerHTML = `<div class="agg-form">
     <div>1. Drag <a class="agg-bm" id="atlasBookmarklet" href="#" title="Drag me to your bookmarks bar">🍽 FoodHive Atlas</a> to your bookmarks bar (once). The bookmark only works with this dashboard's address.</div>
-    <div>2. <b>Every day:</b> open <a href="https://atlas.urbanpiper.com/orders" target="_blank" rel="noopener">Atlas</a>, sign in, click the bookmark and press <b>Connect dashboard</b>. For the next 24 hours <b>Sync Now</b>, the 10-minute refresh and the nightly sync pull Jaddaf together with Motor City.
+    <div>2. <b>About once a week:</b> open <a href="https://atlas.urbanpiper.com/orders" target="_blank" rel="noopener">Atlas</a>, sign in, click the bookmark and press <b>Connect dashboard</b>. Until Atlas ends that session (about 7 days) <b>Sync Now</b>, the 10-minute refresh and the nightly sync pull Jaddaf together with Motor City. Data Sources turns amber a day before it ends.
       ${up && up.note ? `<div class="muted small" style="margin-top:4px">${esc(up.note)}</div>` : ''}</div>
     <div>Without a connection you can still capture by hand: in the bookmark press <b>Capture orders</b> (or <b>Capture catalogue</b>), then paste here:
       <textarea id="atlasPaste" placeholder='{"kind":"orders","orders":[...]}'></textarea></div>
@@ -4650,7 +4650,7 @@ function openAtlasModal(msg) {
     <div class="row" style="gap:6px"><button class="btn-yellow" id="atlasSave" style="padding:4px 14px;font-size:12px">Save to dashboard</button>
       <span class="muted small">Orders are matched by Atlas order id, so capturing the same days again just updates them. Test orders are skipped.</span></div>
   </div>`;
-  openKpiModal('Update Jaddaf from Atlas', 'UrbanPiper Atlas has no API keys, so the dashboard borrows your signed-in Atlas session for 24 hours at a time. It is stored privately on the server and never shown.');
+  openKpiModal('Update Jaddaf from Atlas', 'UrbanPiper Atlas has no API keys, so the dashboard borrows your signed-in Atlas session until Atlas ends it (about 7 days). It is stored privately on the server and never shown.');
   fetch('atlas-capture.js', { cache: 'no-store' }).then(r => r.text()).then(src => { const a = $('#atlasBookmarklet'); if (a) a.href = 'javascript:' + encodeURIComponent(src.replace(/\/\*[\s\S]*?\*\//g, '').replace('__FH_DASHBOARD__', location.origin).trim()); }).catch(() => {});
   $('#atlasBookmarklet').onclick = e => { e.preventDefault(); };
   const say = (text, err) => { const m = $('#atlasMsg'); m.textContent = text; m.className = err ? 'agg-err' : ''; };

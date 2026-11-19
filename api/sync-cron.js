@@ -27,7 +27,7 @@ module.exports = async (req, res) => {
     // scripts/seed-blob.js) and can be refreshed with /api/refresh?full=1.
     const result = await syncOnce(dubaiDateKey(Date.now() - 14 * 864e5), dubaiDateKey(Date.now()), dubaiDateKey(Date.now() - 7 * 864e5));
     const zohoResult = await syncZohoOnce().catch(e => ({ error: e.message }));
-    // Jaddaf: only while the daily Atlas connection is still live.
+    // Jaddaf: only while the Atlas connection is still live.
     const atlasResult = await syncAtlasOnce(upIo, { from: dubaiDateKey(Date.now() - 6 * 864e5) }).catch(e => ({ ok: false, error: e.message }));
     res.status(200).json({ ...result, zoho: zohoResult, atlas: atlasResult });
   } catch (e) {
