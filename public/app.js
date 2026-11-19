@@ -4568,7 +4568,7 @@ async function refreshSources() {
     const pill = $('#sourcesPill');
     if (pill) {
       const st = j.summary.status;
-      pill.className = 'sources-pill ' + (st === 'ok' ? '' : st);
+      pill.className = 'sources-pill ' + (st === 'ok' ? '' : st === 'renew' ? 'stale' : st);
       pill.textContent = st === 'ok' ? '● Sources: all fresh' : `● ${j.summary.problems.length} source${j.summary.problems.length > 1 ? 's' : ''} need attention`;
       pill.title = st === 'ok' ? 'All data sources are fresh' : 'Needs attention: ' + j.summary.problems.join(', ');
     }
@@ -4583,7 +4583,7 @@ function renderSources() {
   kpis('kpi-sources', [
     ['Sources', String(list.length), false, null, false, 'Data sources feeding the dashboard.', ''],
     ['Fresh', String(n('ok')), false, null, false, 'Sources whose latest data is within their freshness limit.', ''],
-    ['Need Attention', String(n('stale') + n('error')), false, null, false, 'Sources that are stale or whose last attempt failed.', ''],
+    ['Need Attention', String(n('stale') + n('renew') + n('error')), false, null, false, 'Sources that are stale, need reconnecting soon, or whose last attempt failed.', ''],
     ['Waiting', String(n('waiting')), false, null, false, 'Set up, but no data has arrived yet (for example Jaddaf before go-live).', ''],
     ['Not Configured', String(n('off')), false, null, false, 'Sources with no credentials set on this server.', ''],
     ['Checked', agoText(Date.now() - j.checkedAt), false, () => refreshSources(), false, 'When this status was last checked. Click to check again.', 'nav']
@@ -4595,7 +4595,7 @@ function renderSources() {
       <div class="src-k">${esc(s.kitchen)}</div>
       <div class="src-what">${esc(s.what)}</div>
       <dl>
-        <dt>Status</dt><dd><span class="src-status ${s.status}">${esc(s.status === 'off' ? 'not configured' : s.status)}</span></dd>
+        <dt>Status</dt><dd><span class="src-status ${s.status}">${esc(s.status === 'off' ? 'not configured' : s.status === 'renew' ? 'reconnect soon' : s.status)}</span></dd>
         <dt>Last update</dt><dd>${s.lastSync ? esc(agoText(s.ageMs)) : '–'}</dd>
         ${s.records != null ? `<dt>Records</dt><dd>${Number(s.records).toLocaleString()}</dd>` : ''}
         ${s.error ? `<dt>Error</dt><dd>${esc(s.error)}</dd>` : ''}
