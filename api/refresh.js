@@ -1,5 +1,7 @@
 const { waitUntil } = require('@vercel/functions');
 const { configured, syncOnce, dubaiDateKey } = require('./_lib/grubcenter');
+const { syncAtlasOnce } = require('./_lib/atlas-sync');
+const upIo = require('./_lib/up-blob-io');
 
 // Keep on-demand refreshes inside the function's maxDuration (60s on
 // Vercel). A 14-day pull takes ~6 minutes locally -- far past that limit --
@@ -19,25 +21,34 @@ function clampFrom(from, to) {
   return from < minFrom || from > to ? to : from;
 }
 
+// Sync Now pulls both kitchens at once: GrubCENTER (Motor City) runs after
+// the response (the client polls lastSync), UrbanPiper Atlas (Jaddaf) is
+// small enough to finish inside this request, so its exact result goes back
+// in `atlas`. Each side succeeds or fails on its own.
 module.exports = async (req, res) => {
   res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  const url = new URL(req.url, 'http://x');
+  const atlasRun = syncAtlasOnce(upIo, { catalog: url.searchParams.get('catalog') === '1' ? true : undefined })
+    .catch(e => ({ ok: false, error: e.message }));
   if (!configured()) {
-    res.status(200).json({ ok: false, configured: false, message: 'GrubCENTER credentials not configured on this deployment' });
+    const atlas = await atlasRun;
+    res.status(200).json({ ok: false, configured: false, message: 'GrubCENTER credentials not configured on this deployment', atlas });
     return;
   }
-  const url = new URL(req.url, 'http://x');
   const full = url.searchParams.get('full') === '1';
   // `full=1` forces a complete 45-day re-sync regardless of cached data.
   // This can exceed maxDuration on Vercel; it is meant for a local run or a
   // deployment with a longer limit.
   if (full) {
     waitUntil(syncOnce(dubaiDateKey(Date.now() - 45 * 864e5), dubaiDateKey(Date.now())).catch(() => {}));
-    res.status(200).json({ ok: true, configured: true, message: 'Full 45-day re-sync started' });
+    const atlas = await atlasRun;
+    res.status(200).json({ ok: true, configured: true, message: 'Full 45-day re-sync started', atlas });
     return;
   }
 
   const to = url.searchParams.get('to') || dubaiDateKey(Date.now());
   const from = clampFrom(url.searchParams.get('from'), to);
   waitUntil(syncOnce(from, to, from).catch(() => {}));
-  res.status(200).json({ ok: true, configured: true, message: 'Sync started', from, to });
+  const atlas = await atlasRun;
+  res.status(200).json({ ok: true, configured: true, message: 'Sync started', from, to, atlas });
 };

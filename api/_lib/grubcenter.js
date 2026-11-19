@@ -367,7 +367,7 @@ async function syncOnce(from, to, itemsFrom) {
     };
   });
 
-  const normLive = N.normalizeOrders(mergedLive);
+  const normLive = N.normalizeOrders(mergedLive).map(o => ({ ...o, source: 'grubcenter' }));
 
   const official = await (async () => {
     const list = await readBlobOfficialBrands().catch(() => null);
@@ -563,9 +563,9 @@ function liveNormalize(rawSales, rawCancels, official) {
       reason: reopened ? (s.cancellationReason || s.reason || '') : (cl.reason || s.cancellationReason || s.reason || '')
     };
   });
-  return N.normalizeOrders(merged).filter(o =>
+  return N.normalizeOrders(merged).map(o => ({ ...o, source: 'grubcenter' })).filter(o =>
     o.brand !== 'TEST BRAND' && o.channel !== 'Grubtech Test' &&
     (!official || (o.brand && official.has(String(o.brand).toLowerCase().trim()))));
 }
 
-module.exports = { CFG, configured, ensureSession, findPartnerId, syncOnce, syncItems, readItemsMeta, liveToday, liveNormalize, readOrders, writeOrders, readItems, readOrderItems, writeOrderItems, readMeta, dubaiDateKey };
+module.exports = { CFG, configured, ensureSession, findPartnerId, fetchPaged, syncOnce, syncItems, readItemsMeta, liveToday, liveNormalize, readOrders, writeOrders, readItems, readOrderItems, writeOrderItems, readMeta, dubaiDateKey };

@@ -56,4 +56,43 @@ const writeZoho = data => writeBlobJson(ZOHO_KEY, data);
 const readZohoMeta = () => readBlobJson(ZOHO_META_KEY, { session: null });
 const writeZohoMeta = meta => writeBlobJson(ZOHO_META_KEY, meta);
 
-module.exports = { readOrders, writeOrders, readItems, writeItems, readOrderItems, writeOrderItems, readMeta, writeMeta, readZoho, writeZoho, readZohoMeta, writeZohoMeta, readBlobJson, writeBlobJson };
+// UrbanPiper (Jaddaf) data lives in its own files so its webhook writer never
+// races the GrubCENTER sync writing orders.json. Readers merge at read time.
+const UP_ORDERS_KEY = 'up_orders.json';
+const UP_ORDER_ITEMS_KEY = 'up_order_items.json';
+const UP_META_KEY = 'up_meta.json';
+const readUpOrders = () => readBlobJson(UP_ORDERS_KEY, []);
+const writeUpOrders = arr => writeBlobJson(UP_ORDERS_KEY, arr);
+const readUpOrderItems = () => readBlobJson(UP_ORDER_ITEMS_KEY, []);
+const writeUpOrderItems = arr => writeBlobJson(UP_ORDER_ITEMS_KEY, arr);
+const UP_CATALOG_KEY = 'up_catalog.json';
+const UP_ITEMS_KEY = 'up_items.json';
+const readUpCatalog = () => readBlobJson(UP_CATALOG_KEY, null);
+const writeUpCatalog = doc => writeBlobJson(UP_CATALOG_KEY, doc);
+const readUpItems = () => readBlobJson(UP_ITEMS_KEY, []);
+const writeUpItems = arr => writeBlobJson(UP_ITEMS_KEY, arr);
+// Atlas session handed over by the bookmarklet. Private; never served.
+const UP_CONN_KEY = 'up_conn.json';
+const readUpConn = () => readBlobJson(UP_CONN_KEY, null);
+const writeUpConn = conn => writeBlobJson(UP_CONN_KEY, conn);
+const readUpMeta = () => readBlobJson(UP_META_KEY, { lastWebhookAt: 0, webhookCount: 0, catalogAt: 0 });
+const writeUpMeta = meta => writeBlobJson(UP_META_KEY, meta);
+
+// Aggregator store ratings, captured from partner portals (public/ratings.js).
+const BRAND_RATINGS_KEY = 'brand_ratings.json';
+const readBrandRatings = () => readBlobJson(BRAND_RATINGS_KEY, null);
+const writeBrandRatings = doc => writeBlobJson(BRAND_RATINGS_KEY, doc);
+
+// Every order carries its source. Orders stored before this field existed
+// all came from GrubCENTER.
+const withSource = (arr, source) => (arr || []).map(o => (o && !o.source ? { ...o, source } : o));
+async function readAllOrders() {
+  const [g, u] = await Promise.all([readOrders(), readUpOrders().catch(() => [])]);
+  return withSource(g, 'grubcenter').concat(withSource(u, 'urbanpiper'));
+}
+async function readAllOrderItems() {
+  const [g, u] = await Promise.all([readOrderItems(), readUpOrderItems().catch(() => [])]);
+  return withSource(g, 'grubcenter').concat(withSource(u, 'urbanpiper'));
+}
+
+module.exports = { readOrders, writeOrders, readItems, writeItems, readOrderItems, writeOrderItems, readMeta, writeMeta, readZoho, writeZoho, readZohoMeta, writeZohoMeta, readBlobJson, writeBlobJson, readUpOrders, writeUpOrders, readUpOrderItems, writeUpOrderItems, readUpMeta, writeUpMeta, readUpCatalog, writeUpCatalog, readUpItems, writeUpItems, readUpConn, writeUpConn, readAllOrders, readAllOrderItems, withSource, readBrandRatings, writeBrandRatings };

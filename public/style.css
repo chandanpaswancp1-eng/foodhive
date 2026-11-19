@@ -1104,3 +1104,122 @@ tbody tr[onclick]:hover, tr.daily-row:hover { filter: brightness(0.95); }
 .a-reqs .tbl-wrap { overflow-x: auto; }
 .cp-campaign { border-left: 3px solid var(--blue); background: #f4f6ff; border-radius: 6px; padding: 8px 10px; font-size: 12px; cursor: pointer; }
 .cp-campaign:hover { background: #e8ecff; }
+
+/* ---------- v2: kitchen switcher, nav sections, data sources ---------- */
+.nav-sec { margin-bottom: 4px; }
+.nav-sec-h { display: flex; align-items: center; justify-content: space-between; width: 100%; border: 0; background: transparent; font: 800 9.5px/1 inherit; letter-spacing: .08em; text-transform: uppercase; color: rgba(29,29,29,.62); padding: 8px 4px 5px; cursor: pointer; }
+.nav-sec-h::after { content: '▾'; font-size: 10px; transition: transform .15s; }
+.nav-sec.closed .nav-sec-h::after { transform: rotate(-90deg); }
+.nav-sec.closed a { display: none; }
+.nav-sec.closed a.on { display: flex; }
+.sources-pill { display: block; width: 100%; border: 0; border-radius: 10px; padding: 4px 8px; margin-bottom: 6px; font: 700 11px inherit; text-align: left; cursor: pointer; background: #d7f5df; color: #17692f; }
+.sources-pill.stale { background: #fff1c7; color: #8a5a00; }
+.sources-pill.error { background: #fde0dd; color: #9a1c10; }
+.src-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; margin-bottom: 12px; }
+.src-card { background: var(--card); border-radius: 8px; padding: 14px; border-top: 4px solid #cfd8dc; box-shadow: 0 1px 2px rgba(0,0,0,.06); }
+.src-card.ok { border-top-color: #2e9d55; } .src-card.stale { border-top-color: #e0a800; } .src-card.error { border-top-color: #d93025; } .src-card.waiting { border-top-color: #5c7cfa; }
+.src-card h3 { margin: 0 0 2px; font-size: 14px; }
+.src-card .src-k { font-size: 11px; color: var(--g); margin-bottom: 8px; }
+.src-card .src-what { font-size: 11.5px; color: #444; margin-bottom: 10px; }
+.src-card dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 10px; margin: 0; font-size: 12px; }
+.src-card dt { color: var(--g); } .src-card dd { margin: 0; font-weight: 600; }
+.src-status { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 11px; font-weight: 700; text-transform: capitalize; }
+.src-status.ok { background: #e3f6e8; color: #1b7a3a; } .src-status.stale { background: #fff4d6; color: #8a5a00; } .src-status.error { background: #fde5e3; color: #b3261e; } .src-status.waiting { background: #e8edff; color: #2f47b5; } .src-status.off { background: #eceff1; color: #555; }
+.src-help-body { font-size: 12.5px; line-height: 1.55; padding: 4px 14px 12px; }
+.src-help-body p { margin: 8px 0; }
+
+/* ---------- v2: KPI layout for two kitchens ---------- */
+/* KPI clusters: each page's tiles sit in labelled groups side by side in one
+   band, separated by a thin divider. A cluster grows with its tile count. */
+.kpis.kpis--clustered { gap: 10px 0; align-items: stretch; }
+/* min-width stays auto (= its tiles' minimum): a cluster never squeezes
+   narrower than its tiles; the band wraps to a new line instead. */
+.kpi-cluster { display: flex; flex-direction: column; gap: 5px; flex: 1 1 auto; padding: 0 10px; border-left: 1px solid #d9dfe1; }
+.kpi-cluster:first-child { padding-left: 0; border-left: 0; }
+.kpi-cluster:last-child { padding-right: 0; }
+.kpi-cluster-h { font: 800 10px/1.2 inherit; letter-spacing: .09em; text-transform: uppercase; color: #5f5f5f; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.kpi-cluster-row { display: flex; gap: 6px; flex: 1; }
+.kpi-cluster-row > .kpi { flex: 1 1 0; min-width: 124px; }
+.kpi-cluster-row > .kpi.wide { flex: 2.2 1 0; min-width: 190px; }
+.kpi-cluster-row > .kpi .kv { white-space: nowrap; font-size: clamp(20px, 1.9vw, 28px); }
+.kpi-cluster-row > .kpi.wide .kv { white-space: normal; font-size: 17px; }
+.kpi .ks { display: flex; justify-content: center; gap: 6px; flex-wrap: wrap; font-size: 10.5px; font-weight: 600; color: #555; border-top: 1px dashed #e3e7e8; padding: 4px 6px 5px; font-variant-numeric: tabular-nums; }
+.kpi .ks i { font-style: normal; color: #c3c9cb; }
+.kc-wrap { max-height: none; overflow: auto; padding: 0 6px 6px; }
+.kc-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.kc-table th, .kc-table td { padding: 7px 10px; border-bottom: 1px solid var(--line, #e3e7e8); text-align: left; }
+.kc-table th { font-weight: 700; color: var(--k); background: #fafbfb; position: sticky; top: 0; }
+.kc-table th.kc-h { cursor: pointer; }
+.kc-table th.kc-h:hover { text-decoration: underline; }
+.kc-table th.kc-h.on { background: var(--y); }
+.kc-table .num { text-align: right; font-variant-numeric: tabular-nums; }
+@media (max-width: 900px) { .kpi-cluster { flex-basis: 100%; padding: 0; border-left: 0; } .kpi-cluster-row { flex-wrap: wrap; } .kpi-cluster-row > .kpi, .kpi-cluster-row > .kpi.wide { flex: 1 1 calc(50% - 6px); min-width: 0; } }
+
+/* Beside the filters (Cancellations, Ratings, Items, Delayed) the band keeps its natural width. */
+.top-row-flex .kpi-cluster { flex-grow: 0 !important; }
+.top-row-flex .kpi-cluster-row > .kpi { min-width: 118px; }
+.kpi-cluster-row > .kpi .kv > div { white-space: normal; }
+
+/* ---------- KPI cards (v2 restyle) ----------
+   Each cluster is one white card; its figures sit side by side, split by
+   hairlines. Label top-left, value large and left-aligned, kitchen split
+   underneath. The selected figure gets a FoodHive-yellow tint and underline.
+   Scoped to .kpis--clustered, so only the KPI bands change. */
+.kpis.kpis--clustered { gap: 10px; }
+.kpis--clustered .kpi-cluster { background: #fff; border: 1px solid #d9dfe1; border-radius: 10px; padding: 10px 0 0; gap: 4px; box-shadow: 0 1px 2px rgba(16, 24, 40, .04); overflow: hidden; }
+.kpis--clustered .kpi-cluster:first-child, .kpis--clustered .kpi-cluster:last-child { padding-left: 0; padding-right: 0; border-left: 1px solid #d9dfe1; }
+.kpis--clustered .kpi-cluster-h { display: flex; align-items: center; gap: 6px; padding: 0 14px; font: 700 10.5px/1.2 inherit; letter-spacing: .08em; color: #5f5f5f; }
+.kpis--clustered .kpi-cluster-h::before { content: ''; width: 6px; height: 6px; border-radius: 2px; background: #FDCB3C; flex: none; }
+.kpis--clustered .kpi-cluster-row { gap: 0; }
+.kpis--clustered .kpi { background: transparent; border: 0; border-left: 1px solid #eef1f2; border-radius: 0; box-shadow: none; padding: 6px 14px 11px; display: flex; flex-direction: column; gap: 2px; transform: none; }
+.kpis--clustered .kpi:first-child { border-left: 0; }
+.kpis--clustered .kpi:hover { background: #fffbea; transform: none; box-shadow: none; }
+.kpis--clustered .kpi:active { transform: none; }
+.kpis--clustered .kpi:focus-visible { outline: 2px solid #1d1d1d; outline-offset: -2px; }
+.kpis--clustered .kpi.active { background: #fff6d6; border: 0; border-left: 1px solid #eef1f2; box-shadow: inset 0 -3px 0 #FDCB3C; }
+.kpis--clustered .kpi:first-child.active { border-left: 0; }
+/* When any title in a band wraps onto two lines, every title in that band
+   keeps two lines (fitKpiTitles in app.js), so the values line up. */
+.kpis--clustered.kh2 .kpi .kh { min-height: 2.6em; }
+.kpis--clustered .kpi .kh, .kpis--clustered .kpi.active .kh { background: none; color: #5f5f5f; text-align: left; padding: 0 14px 0 0; font-size: 11.5px; font-weight: 600; line-height: 1.3; }
+.kpis--clustered .kpi--drill .kh::after, .kpis--clustered .kpi--download .kh::after, .kpis--clustered .kpi--nav .kh::after { right: 0; top: 0; }
+.kpis--clustered .kpi .kv { text-align: left; padding: 0; font-weight: 700; color: #1d1d1d; font-variant-numeric: tabular-nums; letter-spacing: -.01em; }
+.kpis--clustered .kpi.wide .kv { justify-content: flex-start; text-align: left; font-size: 15px; font-weight: 600; min-height: 0; padding-top: 6px; line-height: 1.35; }
+.kpis--clustered .kpi .kv > div { text-align: left; }
+.kpis--clustered .kpi .ks { justify-content: flex-start; border-top: 0; padding: 2px 0 0; color: #6b7275; font-weight: 500; }
+.kpis--clustered .kpi .kv.kv-neg { color: #b3261e; }
+
+/* ---- Brand ratings by aggregator (Ratings page) ---- */
+.agg-panel { margin-bottom: 10px; height: auto; }
+.agg-ph { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
+.agg-actions { display: flex; gap: 6px; }
+.agg-actions button { padding: 4px 10px; font-size: 11px; }
+.agg-wrap { max-height: 420px; overflow: auto; }
+.agg-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.agg-table th, .agg-table td { padding: 6px 10px; border-bottom: 1px solid var(--line, #e3e7e8); text-align: center; white-space: nowrap; }
+.agg-table th:first-child, .agg-table td:first-child { text-align: left; }
+.agg-table th { font-weight: 700; background: #fafbfb; position: sticky; top: 0; z-index: 1; }
+.agg-table td.agg-cell { cursor: pointer; }
+.agg-table td.agg-cell:hover { outline: 2px solid var(--y, #FDCB3C); outline-offset: -2px; }
+.agg-table .r { font-weight: 700; }
+.agg-table .c { display: block; font-size: 10.5px; color: #777; }
+.agg-table td.good { background: #e7f6ec; }
+.agg-table td.mid { background: #fff5d6; }
+.agg-table td.bad { background: #fde3ea; }
+.agg-table td.bad .r { color: #c4123f; }
+.agg-table tfoot td { font-weight: 700; background: #fafbfb; border-top: 2px solid #d9dfe1; }
+.agg-table tfoot .stale { color: #c4123f; }
+.agg-empty { padding: 18px; text-align: center; color: #777; }
+.agg-form { display: grid; gap: 10px; }
+.agg-form textarea { width: 100%; min-height: 80px; font: 12px ui-monospace, monospace; box-sizing: border-box; }
+.agg-form table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.agg-form th, .agg-form td { padding: 4px 6px; border-bottom: 1px solid #eee; text-align: left; }
+.agg-form input[type=number] { width: 70px; }
+.agg-form tr.unmatched { background: #fde3ea; }
+.agg-bm { display: inline-block; padding: 4px 10px; background: #1d1d1d; color: #FDCB3C; border-radius: 4px; text-decoration: none; font-weight: 600; cursor: grab; }
+.agg-err { color: #c4123f; font-weight: 600; }
+@media (max-width: 720px) { .agg-ph { align-items: flex-start; } }
+
+/* Note inside a KPI value (e.g. Lowest Aggregator Rating: brand · aggregator) */
+.kpi .kv .muted.small { font-size: 11px; font-weight: 500; }
+.agg-actions .btn-yellow { background: #fff; color: #1d1d1d; border: 1px solid #1d1d1d; }

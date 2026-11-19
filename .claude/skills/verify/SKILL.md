@@ -22,6 +22,11 @@ description: Run and drive the FoodHive dashboard (local server and Vercel deplo
 - `/api/availability`: the newest `at`, `source` counts, and no duplicate item+brand+location+at.
 - Sales page polling: `/api/live` requested every 10 s; remove an order from `S.orders` and it returns on the next poll.
 
+## Kitchens and sources (v2)
+- Sweep every page under each kitchen: `FoodHive.show(page)` then select a branch with the Branch filter on Order Details (`.msel[data-k="location"]`), or a `.kc-table th.kc-h[data-k]` header, counting `error` events. Jaddaf has no orders before go-live, so it exercises every empty-data path.
+- `/api/sources` returns one status per source; `waiting` and `off` are not problems.
+- The browser tab may be used by the person at the same time; log trusted clicks (`e.isTrusted`) before blaming page jumps on the code.
+
 ## Gotchas
 - GrubCENTER order line items can take 20+ s for one day, so anything added to `syncOnce` risks the 60 s limit.
 - Item-availability snapshot: about 24,000 rows. Paging stops only on an empty page (identical rows are real).

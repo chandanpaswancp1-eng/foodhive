@@ -1,5 +1,8 @@
 const { waitUntil } = require('@vercel/functions');
-const { configured, syncOnce, readOrders, readMeta, dubaiDateKey } = require('./_lib/grubcenter');
+const { configured, syncOnce, readMeta, dubaiDateKey } = require('./_lib/grubcenter');
+const { readAllOrders, readUpMeta, readUpConn } = require('./_lib/store');
+const { syncAtlasOnce, connectionState } = require('./_lib/atlas-sync');
+const upIo = require('./_lib/up-blob-io');
 
 const SYNC_INTERVAL_MS = 10 * 60 * 1000;
 
@@ -7,7 +10,8 @@ module.exports = async (req, res) => {
   const url = new URL(req.url, 'http://x');
   const from = url.searchParams.get('from'), to = url.searchParams.get('to');
 
-  const [ordersArray, meta] = await Promise.all([readOrders(), readMeta()]);
+  // GrubCENTER (Motor City) + UrbanPiper (Jaddaf) orders, each tagged with `source`.
+  const [ordersArray, meta, upMeta, upConn] = await Promise.all([readAllOrders(), readMeta(), readUpMeta().catch(() => ({})), readUpConn().catch(() => null)]);
   let filtered = ordersArray;
   if (from || to) {
     filtered = ordersArray.filter(o => {
@@ -26,8 +30,11 @@ module.exports = async (req, res) => {
   // completed at all. Settled older orders rarely change -- the daily cron
   // (api/sync-cron.js) and the explicit "Sync Now" button cover the rest.
   //
-  // Order-items uses the same narrow window: it has far more rows per day
-  // than orders and was the main reason a wider pull timed out.
+  // Order line items cover TODAY only: they take ~20 s per day from
+  // GrubCENTER, and yesterday + today of both orders and line items ran past
+  // the 60 s limit in production (2026-11-15), so the first visit after a
+  // quiet spell never saved its sync. Yesterday's line items are refreshed by
+  // the daily cron and Sync Now.
   const stale = configured() && Date.now() - (meta.lastSync || 0) > SYNC_INTERVAL_MS;
   if (stale) {
     const bgTo = to || dubaiDateKey(Date.now());
@@ -35,8 +42,12 @@ module.exports = async (req, res) => {
     // Honour a short explicit range (a specific day the client opened), but
     // never fan out to a wide selection.
     const bgFrom = from && from >= earliest && from <= bgTo ? from : dubaiDateKey(Date.now() - 864e5);
-    waitUntil(syncOnce(bgFrom, bgTo, bgFrom).catch(() => {}));
+    waitUntil(syncOnce(bgFrom, bgTo, bgTo).catch(() => {}));
   }
+  // Jaddaf (Atlas) on the same 10-minute rhythm while a connection is live.
+  // Orders only; the catalogue is refreshed by Sync Now and the cron.
+  const upStale = connectionState(upConn).connected && Date.now() - ((upMeta && upMeta.lastCaptureAt) || 0) > SYNC_INTERVAL_MS;
+  if (upStale) waitUntil(syncAtlasOnce(upIo, { catalog: false }).catch(() => {}));
 
   res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
   res.status(200).json({
