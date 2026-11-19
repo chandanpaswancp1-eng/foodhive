@@ -10,7 +10,8 @@
    Catalogue: every item (items), 100 per page.
    Connect dashboard: opens the dashboard (DASH, filled in when the
    dashboard builds the bookmarklet) and hands it this tab's Atlas session by
-   postMessage, so Sync Now can pull Jaddaf for the next 24 hours. The
+   postMessage, so Sync Now can pull Jaddaf until Atlas ends the session
+   (about 7 days). The
    session goes only to that exact origin, never into a URL.
 
    Comments are stripped when the bookmarklet is built, so keep code lines
@@ -46,7 +47,7 @@
   var today = new Date();
   box.innerHTML = '<b>FoodHive: capture from Atlas</b>' +
     '<div style="margin:8px 0 4px">Orders from <input type="date" id="fhA-from" value="' + ymd(new Date(today - 30 * 864e5)) + '"> to <input type="date" id="fhA-to" value="' + ymd(today) + '"></div>' +
-    (DASH.indexOf('__') === 0 ? '' : '<div style="margin:4px 0 8px"><button id="fhA-connect" style="' + btn + ';background:#FDCB3C;color:#1d1d1d;font-weight:600">Connect dashboard (daily)</button><div style="font-size:11px;color:#555">Lets Sync Now pull Jaddaf for 24 hours.</div></div><div style="font-size:11px;color:#555">Or capture by hand and paste:</div>') +
+    (DASH.indexOf('__') === 0 ? '' : '<div style="margin:4px 0 8px"><button id="fhA-connect" style="' + btn + ';background:#FDCB3C;color:#1d1d1d;font-weight:600">Connect dashboard</button><div style="font-size:11px;color:#555">Lets the dashboard sync Jaddaf by itself for about 7 days.</div></div><div style="font-size:11px;color:#555">Or capture by hand and paste:</div>') +
     '<button id="fhA-orders" style="' + btn + '">Capture orders</button><button id="fhA-cat" style="' + btn + '">Capture catalogue</button><button id="fhA-close" style="' + btn + ';background:#d9dfe1;color:#1d1d1d">Close</button>' +
     '<div id="fhA-msg" style="margin-top:8px"></div>';
   document.body.appendChild(box);
@@ -79,7 +80,7 @@
       if (e.data.type === 'fh-atlas-ready') { w.postMessage({ type: 'fh-atlas-token', token: t }, DASH); return; }
       if (e.data.type === 'fh-atlas-connected') {
         finished = true; clearTimeout(timer); window.removeEventListener('message', onMsg);
-        say(e.data.ok ? '<b style="color:#1e8e3e">Connected.</b> The dashboard now syncs Jaddaf with Motor City until ' + esc(new Date(e.data.useUntil).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })) + '. Connect again tomorrow.' : '<span style="color:#c0392b">Not connected: ' + esc(e.data.error || 'unknown error') + '</span>');
+        say(e.data.ok ? '<b style="color:#1e8e3e">Connected.</b> The dashboard now syncs Jaddaf with Motor City until ' + esc(new Date(e.data.useUntil).toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })) + '. Data Sources reminds you a day before it ends.' : '<span style="color:#c0392b">Not connected: ' + esc(e.data.error || 'unknown error') + '</span>');
       }
     }
     window.addEventListener('message', onMsg);

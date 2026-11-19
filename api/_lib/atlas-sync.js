@@ -3,8 +3,9 @@
 
    Atlas has no API keys. The dashboard holds the Atlas session token that
    the Atlas bookmarklet hands over (Connect dashboard). It is kept private,
-   never returned by any endpoint, and used for at most CONNECT_TTL_MS after
-   connecting (the user reconnects daily), or until Atlas expires it.
+   never returned by any endpoint, and used until Atlas itself expires it
+   (about 7 days), capped at CONNECT_TTL_MS after connecting. Data Sources
+   warns RENEW_WARN_MS before that so the user can reconnect in time.
 
    Accuracy rules for an orders sync:
    - Every page of the order list is read (a repeated cursor is an error).
@@ -15,7 +16,8 @@
      listed non-test orders exactly; otherwise nothing is written. */
 const FHAtlas = require('../../public/atlas.js');
 
-const CONNECT_TTL_MS = 24 * 60 * 60 * 1000;
+const CONNECT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const RENEW_WARN_MS = 24 * 60 * 60 * 1000;
 const EXPECTED_BIZ_ID = String(process.env.ATLAS_BIZ_ID || '37055789');
 const DEFAULT_BACKFILL_DAYS = 30;
 const MAX_WINDOW_DAYS = 45;
@@ -47,8 +49,8 @@ function claimTime(v) {
 function connectionState(conn, now = Date.now()) {
   if (!conn || !conn.token) return { connected: false, reason: 'Not connected. Click the Atlas bookmark, then Connect dashboard.' };
   const useUntil = Math.min(conn.connectedAt + CONNECT_TTL_MS, conn.expiresAt || Infinity);
-  if (now >= useUntil) return { connected: false, expired: true, connectedAt: conn.connectedAt, useUntil, reason: 'Atlas connection expired. Reconnect with the Atlas bookmark (daily).' };
-  return { connected: true, connectedAt: conn.connectedAt, useUntil };
+  if (now >= useUntil) return { connected: false, expired: true, connectedAt: conn.connectedAt, useUntil, reason: 'Atlas connection expired. Reconnect with the Atlas bookmark.' };
+  return { connected: true, connectedAt: conn.connectedAt, useUntil, expiresSoon: useUntil - now <= RENEW_WARN_MS };
 }
 
 async function gql(token, query, variables, attempts = 3) {
@@ -220,10 +222,14 @@ async function syncAtlas(io, opts = {}) {
 function upFacts(meta, orderCount, conn, now = Date.now()) {
   const m = meta && !meta.__error ? meta : {};
   const st = connectionState(conn, now);
-  const hhmm = ms => new Date(ms + 4 * 3600e3).toISOString().slice(11, 16);
+  const when = ms => {
+    const d = new Date(ms + 4 * 3600e3);
+    return ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][d.getUTCDay()] + ' ' + d.getUTCDate() + ' ' + ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][d.getUTCMonth()] + ' ' + d.toISOString().slice(11, 16);
+  };
   const recentError = m.atlasError && (m.atlasErrorAt || 0) > (m.lastCaptureAt || 0) ? m.atlasError : null;
   let note;
-  if (st.connected) note = `Atlas connected. Syncs automatically until ${hhmm(st.useUntil)} (Dubai); reconnect daily.`;
+  if (st.connected && st.expiresSoon) note = `Atlas session ends ${when(st.useUntil)} (Dubai). Reconnect with the Atlas bookmark before then to keep Jaddaf syncing.`;
+  else if (st.connected) note = `Atlas connected. Syncs automatically until ${when(st.useUntil)} (Dubai).`;
   else if (m.atlasConnectedAt) note = 'Atlas connection expired, so Jaddaf is not syncing. Reconnect with the Atlas bookmark.';
   else note = 'Not connected. Use Update from Atlas → Connect dashboard.';
   return {
@@ -231,7 +237,8 @@ function upFacts(meta, orderCount, conn, now = Date.now()) {
       configured: true,
       lastSync: m.lastCaptureAt || 0,
       records: orderCount,
-      error: (meta && meta.__error) || recentError || (!st.connected && m.atlasConnectedAt ? 'Reconnect Atlas: the daily connection has expired' : null),
+      error: (meta && meta.__error) || recentError || (!st.connected && m.atlasConnectedAt ? 'Reconnect Atlas: the connection has expired' : null),
+      warn: st.connected && st.expiresSoon ? 'Atlas session ends within a day' : null,
       note: m.capturedRange && m.capturedRange[0] ? `${note} Last sync covered ${m.capturedRange[0]} to ${m.capturedRange[1]}.` : note
     },
     upCatalog: { configured: true, lastSync: m.catalogAt || 0, records: m.catalogItems || null, note: m.catalogAt ? null : 'No Atlas catalogue yet.' }
@@ -246,4 +253,4 @@ function syncAtlasOnce(io, opts) {
   return inflight;
 }
 
-module.exports = { syncAtlas, syncAtlasOnce, upFacts, syncCatalog, connect, connectionState, syncWindow, tokenClaims, claimTime, CONNECT_TTL_MS, EXPECTED_BIZ_ID };
+module.exports = { syncAtlas, syncAtlasOnce, upFacts, syncCatalog, connect, connectionState, syncWindow, tokenClaims, claimTime, CONNECT_TTL_MS, RENEW_WARN_MS, EXPECTED_BIZ_ID };

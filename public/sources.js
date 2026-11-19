@@ -4,7 +4,8 @@
    Each source reports facts ({configured, lastSync, records, error, ...});
    describeSources() turns them into one status per source:
      ok       fresh data
-     stale    data older than the source's limit
+     stale    data older than the source's limit, or about to stop
+              (a `warn` fact, e.g. the Atlas session ends within a day)
      waiting  set up, but nothing has arrived yet (e.g. Jaddaf not live)
      error    the last attempt failed
      off      not configured */
@@ -31,7 +32,7 @@
       if (!f.configured) status = 'off';
       else if (f.error) status = 'error';
       else if (!f.lastSync) status = 'waiting';
-      else if (def.staleAfter && age > def.staleAfter) status = 'stale';
+      else if (f.warn || (def.staleAfter && age > def.staleAfter)) status = 'stale';
       else status = 'ok';
       return { ...def, configured: !!f.configured, lastSync: f.lastSync || 0, ageMs: age, records: f.records == null ? null : f.records, error: f.error || null, note: f.note || null, status };
     });
