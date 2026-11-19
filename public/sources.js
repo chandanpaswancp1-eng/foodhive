@@ -4,8 +4,9 @@
    Each source reports facts ({configured, lastSync, records, error, ...});
    describeSources() turns them into one status per source:
      ok       fresh data
-     stale    data older than the source's limit, or about to stop
-              (a `warn` fact, e.g. the Atlas session ends within a day)
+     stale    data older than the source's limit
+     renew    data is fresh, but the source stops soon unless the user acts
+              (a `warn` fact: the Atlas session ends within a day)
      waiting  set up, but nothing has arrived yet (e.g. Jaddaf not live)
      error    the last attempt failed
      off      not configured */
@@ -32,7 +33,8 @@
       if (!f.configured) status = 'off';
       else if (f.error) status = 'error';
       else if (!f.lastSync) status = 'waiting';
-      else if (f.warn || (def.staleAfter && age > def.staleAfter)) status = 'stale';
+      else if (def.staleAfter && age > def.staleAfter) status = 'stale';
+      else if (f.warn) status = 'renew';
       else status = 'ok';
       return { ...def, configured: !!f.configured, lastSync: f.lastSync || 0, ageMs: age, records: f.records == null ? null : f.records, error: f.error || null, note: f.note || null, status };
     });
@@ -40,7 +42,7 @@
 
   // Worst status wins for the summary pill. 'waiting' and 'off' are not
   // problems on their own (Jaddaf not live yet, optional sources).
-  const RANK = { error: 3, stale: 2, ok: 0, waiting: 0, off: 0 };
+  const RANK = { error: 3, stale: 2, renew: 2, ok: 0, waiting: 0, off: 0 };
   function summarize(list) {
     const worst = list.reduce((w, s) => (RANK[s.status] > RANK[w.status] ? s : w), { status: 'ok' });
     const problems = list.filter(s => RANK[s.status] > 0);
