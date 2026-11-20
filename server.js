@@ -1125,6 +1125,10 @@ http.createServer(async (req, res) => {
       } catch (e) { return sendGzip(req, res, 500, { ok: false, error: e.message }); }
     }
 
+    // Line items sync inside runSync locally; the Vercel-only background
+    // endpoint has nothing to do here.
+    if (u.pathname === '/api/sync-line-items') return sendGzip(req, res, 200, { ok: true, local: true });
+
     if (u.pathname === '/api/up-webhook') {
       if (req.method !== 'POST') return sendGzip(req, res, 405, { ok: false, error: 'Method not allowed' });
       let body;

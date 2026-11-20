@@ -4861,10 +4861,16 @@ function ensureLineItems() {
   }).catch(e => log('✗ Item sales history: ' + e.message)).finally(() => { liFetch = null; });
 }
 
+// GrubCENTER line items sync in their own function call (api/sync-line-items),
+// started in the background on load and refresh; the server runs it at most
+// every 10 minutes. Nothing waits on it.
+function kickLineItemSync() { fetch('/api/sync-line-items').catch(() => {}); }
+
 async function loadLive(from, to) {
   log('Contacting GrubCENTER…');
   try {
     const q = from && to ? `?from=${from}&to=${to}` : '';
+    kickLineItemSync();
     const [ordRes, availRes, oiRes] = await Promise.all([
       fetch('/api/orders' + q),
       fetch('/api/availability' + q),
@@ -5424,6 +5430,7 @@ let backgroundWaitActive = false;
 
 async function fetchOrdersAndRender(opts = {}) {
   const { initial = false, force = false } = opts;
+  kickLineItemSync();
   const [ordRes, availRes, oiRes] = await Promise.all([
     fetch('/api/orders'),
     fetch('/api/availability'),
