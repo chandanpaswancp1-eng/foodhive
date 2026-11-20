@@ -281,4 +281,15 @@ function syncAtlasOnce(io, opts) {
   return inflight;
 }
 
-module.exports = { syncAtlas, syncAtlasOnce, upFacts, syncCatalog, connect, connectionState, syncWindow, tokenClaims, claimTime, CONNECT_TTL_MS, RENEW_WARN_MS, EXPECTED_BIZ_ID };
+// One order's Atlas record through the connected session, or null (no
+// session, or Atlas refused). Used to verify a webhook key (tryAdopt).
+async function fetchOrderDetail(io, id) {
+  const conn = await io.readConn();
+  if (!connectionState(conn).connected) return null;
+  try {
+    const d = await gql(conn.token, FHAtlas.QUERIES.order, { id: +id }, 2);
+    return d && d.order ? FHAtlas.fromDetail(d.order) : null;
+  } catch (_) { return null; }
+}
+
+module.exports = { fetchOrderDetail, syncAtlas, syncAtlasOnce, upFacts, syncCatalog, connect, connectionState, syncWindow, tokenClaims, claimTime, CONNECT_TTL_MS, RENEW_WARN_MS, EXPECTED_BIZ_ID };

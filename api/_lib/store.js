@@ -102,6 +102,9 @@ const readUpWh = () => readBlobJson(UP_WH_KEY, {});
 const writeUpWh = doc => writeBlobJson(UP_WH_KEY, doc);
 const readUpWhPending = () => readBlobJson(UP_WH_PENDING_KEY, { at: 0 });
 const writeUpWhPending = doc => writeBlobJson(UP_WH_PENDING_KEY, doc);
+// SHA-256 of the webhook key Atlas sends, once verified (up-webhooks tryAdopt).
+const readUpWhKey = () => readBlobJson('up_wh_key.json', null);
+const writeUpWhKey = doc => writeBlobJson('up_wh_key.json', doc);
 
 // Lock across function instances: creating a blob that already exists
 // fails, so only one holder at a time. A lock older than ttlMs belongs to a
@@ -141,4 +144,4 @@ async function readAllOrderItems() {
   return withSource(g, 'grubcenter').concat(withSource(u, 'urbanpiper'));
 }
 
-module.exports = { readOrders, writeOrders, readItems, writeItems, readOrderItems, writeOrderItems, readMeta, writeMeta, readZoho, writeZoho, readZohoMeta, writeZohoMeta, readBlobJson, writeBlobJson, readUpOrders, writeUpOrders, readUpOrderItems, writeUpOrderItems, readUpMeta, writeUpMeta, readUpCatalog, writeUpCatalog, readUpItems, writeUpItems, readUpConn, writeUpConn, readAllOrders, readAllOrderItems, withSource, readBrandRatings, writeBrandRatings, putUpEvent, listUpEvents, readUpEvent, delUpEvents, readUpWh, writeUpWh, readUpWhPending, writeUpWhPending, withBlobLock };
+module.exports = { readOrders, writeOrders, readItems, writeItems, readOrderItems, writeOrderItems, readMeta, writeMeta, readZoho, writeZoho, readZohoMeta, writeZohoMeta, readBlobJson, writeBlobJson, readUpOrders, writeUpOrders, readUpOrderItems, writeUpOrderItems, readUpMeta, writeUpMeta, readUpCatalog, writeUpCatalog, readUpItems, writeUpItems, readUpConn, writeUpConn, readAllOrders, readAllOrderItems, withSource, readBrandRatings, writeBrandRatings, putUpEvent, listUpEvents, readUpEvent, delUpEvents, readUpWh, writeUpWh, readUpWhPending, writeUpWhPending, readUpWhKey, writeUpWhKey, withBlobLock };

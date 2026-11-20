@@ -21,11 +21,45 @@ const OPEN_FROM_H = 11, OPEN_TO_H = 2;
 const STALE_OPEN_MS = 6 * 3600e3;
 const dubaiDay = ms => new Date(ms + 4 * 3600e3).toISOString().slice(0, 10);
 
-function keyOk(given) {
+const sha = v => crypto.createHash('sha256').update(String(v)).digest('hex');
+const sameHex = (x, y) => x.length === y.length && crypto.timingSafeEqual(Buffer.from(x), Buffer.from(y));
+// The key in UP_WEBHOOK_SECRET, or the key Atlas actually sends once it has
+// been verified against Atlas (tryAdopt; only its SHA-256 is stored).
+function keyOk(given, adopted) {
   const want = process.env.UP_WEBHOOK_SECRET || '';
-  if (!want || typeof given !== 'string') return false;
-  const a = Buffer.from(given), b = Buffer.from(want);
-  return a.length === b.length && crypto.timingSafeEqual(a, b);
+  if (typeof given !== 'string' || !given) return false;
+  if (want) {
+    const a = Buffer.from(given), b = Buffer.from(want);
+    if (a.length === b.length && crypto.timingSafeEqual(a, b)) return true;
+  }
+  return !!(adopted && adopted.hash && sameHex(sha(given), adopted.hash));
+}
+
+// Atlas sends a key we do not know (it was typed differently in Atlas).
+// Trust it only when the delivery is proven real: a status update for this
+// business whose exact status change (order, status, time within 2 minutes)
+// Atlas's own record confirms through the connected session. Then keep the
+// key's SHA-256, so later deliveries pass without the session. At most one
+// check per key per minute per instance.
+const adoptTried = new Map();
+async function tryAdopt(io, given, body, fetchDetail, now = Date.now()) {
+  if (typeof given !== 'string' || given.length < 12 || !io.readWhKey || !io.writeWhKey) return { adopted: false, reason: 'not possible' };
+  const st = body && body.order_id != null && body.new_state ? FHAtlas.statusFromWebhook(body) : null;
+  if (!st || st.bizId !== EXPECTED_BIZ_ID || !st.created) return { adopted: false, reason: 'not a status update for this business' };
+  const hash = sha(given);
+  const cur = await io.readWhKey();
+  if (cur && cur.hash === hash) return { adopted: true, already: true };
+  if (now - (adoptTried.get(hash) || 0) < 60e3) return { adopted: false, reason: 'checked recently' };
+  adoptTried.set(hash, now);
+  const detail = await fetchDetail(st.orderId).catch(() => null);
+  if (!detail) return { adopted: false, reason: 'Atlas record not available' };
+  const at = FHAtlas.atlasTime(st.created);
+  const match = String(detail.id) === String(st.orderId) && (detail.statusUpdates || []).some(u =>
+    FHAtlas.statusName(u.status) === st.status && Math.abs((FHAtlas.atlasTime(u.created) || 0) - at) <= 120e3);
+  if (!match) return { adopted: false, reason: 'Atlas does not confirm this status change' };
+  await io.writeWhKey({ hash, adoptedAt: now, verifiedBy: { order: st.orderId, status: st.status, at: st.created } });
+  console.warn(`[up-webhook] Atlas key verified against order ${st.orderId} (${st.status}) and adopted`);
+  return { adopted: true };
 }
 
 // A delivery to the event we store, or { ignore } for payloads that are not
@@ -216,4 +250,4 @@ function shape(b) {
   return `{${top}}${det}`;
 }
 
-module.exports = { shape, keyOk, parseEvent, fold, foldOnce, rebuild, reconcile, retryFailed, webhookFacts, EXPECTED_BIZ_ID };
+module.exports = { shape, keyOk, tryAdopt, sha, parseEvent, fold, foldOnce, rebuild, reconcile, retryFailed, webhookFacts, EXPECTED_BIZ_ID };
