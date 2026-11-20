@@ -19,16 +19,19 @@ module.exports = async (req, res) => {
     }
   }
   try {
-    // Explicit recent window rather than syncOnce()'s 45-day default: on
-    // Vercel the 45-day pull can exceed the function's maxDuration (and a
-    // killed function persists nothing), while a 14-day window completes
-    // reliably and is more than enough to pick up late cancellations/ops
-    // updates. Older history is already in the Blob store (seeded once via
-    // scripts/seed-blob.js) and can be refreshed with /api/refresh?full=1.
-    const result = await syncOnce(dubaiDateKey(Date.now() - 14 * 864e5), dubaiDateKey(Date.now()), dubaiDateKey(Date.now() - 7 * 864e5));
-    const zohoResult = await syncZohoOnce().catch(e => ({ error: e.message }));
-    // Jaddaf: only while the Atlas connection is still live.
-    const atlasResult = await syncAtlasOnce(upIo, { from: dubaiDateKey(Date.now() - 6 * 864e5) }).catch(e => ({ ok: false, error: e.message }));
+    // Must finish inside 60 s, or nothing is saved. 14 days of orders plus
+    // 8 days of line items timed out every night (18-20 Nov 2026), so the
+    // cron saved nothing. Now: 7 days of orders (late cancellations and
+    // timings) and only yesterday's line items (~20 s; it closes the day
+    // for api/orders.js). Zoho and Atlas are separate services, so they run
+    // alongside GrubCENTER instead of after it.
+    const yesterday = dubaiDateKey(Date.now() - 864e5);
+    const [result, zohoResult, atlasResult] = await Promise.all([
+      syncOnce(dubaiDateKey(Date.now() - 7 * 864e5), dubaiDateKey(Date.now()), yesterday, yesterday),
+      syncZohoOnce().catch(e => ({ error: e.message })),
+      // Jaddaf: only while the Atlas connection is still live.
+      syncAtlasOnce(upIo, { from: dubaiDateKey(Date.now() - 6 * 864e5) }).catch(e => ({ ok: false, error: e.message }))
+    ]);
     res.status(200).json({ ...result, zoho: zohoResult, atlas: atlasResult });
   } catch (e) {
     res.status(500).json({ error: e.message });

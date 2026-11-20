@@ -578,15 +578,17 @@ async function runSync(from, to, itemsFrom) {
     // merge-by-guessed-key) whatever this sync's days already held in the
     // store, then keep anything older untouched -- a deeper local backfill
     // must not be wiped out just because this sync only covers oiFrom..t.
+    // A day GrubCENTER did not return keeps the lines already stored for it.
     const normOrderItems = N.normalizeOrderItems(rawOrderItems);
-    const touchedDays = new Set(dayChunks(oiFrom, t));
+    const oiFailed = rawOrderItems.failedDays || [];
+    const touchedDays = new Set(dayChunks(oiFrom, t).filter(d => !oiFailed.includes(d)));
     // An invalid/missing `at` makes dubaiDateKey() return "NaN-NaN-NaN", which
     // never matches touchedDays -- drop such rows instead of letting them
     // silently survive every future resync forever.
     const hasValidDate = x => !dubaiDateKey(x.at).includes('NaN');
     STORE.orderItemsArray = STORE.orderItemsArray
       .filter(x => hasValidDate(x) && !touchedDays.has(dubaiDateKey(x.at)))
-      .concat(normOrderItems.filter(hasValidDate));
+      .concat(normOrderItems.filter(x => hasValidDate(x) && touchedDays.has(dubaiDateKey(x.at))));
     console.log(`[GrubCENTER Sync Complete] ${STORE.orderItemsArray.length} order line items in store (${normOrderItems.length} refreshed for this window)`);
 
     // Atomic cache persist: write to a temp file then rename over the real

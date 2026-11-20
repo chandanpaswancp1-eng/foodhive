@@ -4770,10 +4770,20 @@ $('#btnPrev').onclick = () => {
 };
 
 // ---------------- data loading ----------------
+// GrubCENTER sometimes labels an order's item lines with an old or misspelt
+// brand ("Manakeesh Corner duplicate", "healthy cartel"). The order's brand
+// is the one the filters and brand charts use, so lines take it from their
+// order; lines whose order is not loaded keep their own.
+function alignLineBrands(lines) {
+  const brandOf = new Map(S.orders.map(o => [o.id, o.brand]));
+  lines.forEach(x => { const b = brandOf.get(x.orderId) || brandOf.get('up_' + x.orderId); if (b && x.brand !== b) x.brand = b; });
+  return lines;
+}
 function setData(orders, items, lineItems, source, label, opts = {}) {
   if (orders) S.orders = orders;
   if (items) S.items = items;
   if (lineItems) S.lineItems = lineItems;
+  if (orders || lineItems) alignLineBrands(S.lineItems);
   S.source = source;
   const badge = $('#srcBadge');
   if (badge) {
@@ -4841,7 +4851,7 @@ function ensureLineItems() {
   if (from > to) return;
   log(`Loading item sales ${from} → ${to}…`);
   liFetch = fetch(`/api/order-items?from=${from}&to=${to}`).then(r => r.json()).then(j => {
-    S.lineItems = mergeLineItemsByDay(S.lineItems, j);
+    S.lineItems = alignLineBrands(mergeLineItemsByDay(S.lineItems, j));
     if (!S.liFrom || from < S.liFrom) S.liFrom = from;
     log(`Loaded ${j.count} item lines (${from} → ${to}).`);
     render();

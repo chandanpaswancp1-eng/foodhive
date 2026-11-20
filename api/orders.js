@@ -42,7 +42,13 @@ module.exports = async (req, res) => {
     // Honour a short explicit range (a specific day the client opened), but
     // never fan out to a wide selection.
     const bgFrom = from && from >= earliest && from <= bgTo ? from : dubaiDateKey(Date.now() - 864e5);
-    waitUntil(syncOnce(bgFrom, bgTo, bgTo).catch(() => {}));
+    // Until yesterday's lines have been pulled whole after midnight, spend
+    // this run's line-item budget on yesterday instead of today, so orders
+    // placed after the last sync of the evening get their item lines. The
+    // next run (10 minutes later) goes back to today.
+    const yesterday = dubaiDateKey(Date.now() - 864e5);
+    const itemsDay = !to && (meta.liClosedThrough || '') < yesterday ? yesterday : bgTo;
+    waitUntil(syncOnce(bgFrom, bgTo, itemsDay, itemsDay).catch(() => {}));
   }
   // Jaddaf (Atlas) on the same 10-minute rhythm while a connection is live.
   // Orders only; the catalogue is refreshed by Sync Now and the cron.
