@@ -5272,6 +5272,10 @@ async function syncNow(full = false) {
 // Jaddaf's part of the Sync Now message, from /api/refresh's `atlas`.
 function atlasSyncText(a) {
   if (!a) return { ok: false, text: 'Jaddaf: no answer from the UrbanPiper sync' };
+  if (a.ok && a.via === 'webhook') {
+    const at = a.lastWebhookAt ? new Date(a.lastWebhookAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : null;
+    return { ok: true, text: `✓ Jaddaf: live via UrbanPiper webhook${at ? ` (last order event ${at})` : ''}` };
+  }
   if (a.ok) {
     const parts = [`${a.saved} order${a.saved === 1 ? '' : 's'} checked`];
     if (a.added) parts.push(`${a.added} new`);
