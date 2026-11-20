@@ -147,6 +147,16 @@ const status = (id, state, at, msg) => ({ order_id: id, new_state: state, prev_s
   const io4 = memIo(); await handleWebhook(H, relay(6001), io4); await W.fold(io4);
   assert(io4.st.meta.firstRelayAt > 0); ok('first Order placed delivery recorded');
 
+  // Prime Net Revenue: paid after discount less delivery charges
+  const pr = relay(7001, { details: { order_subtotal: 80, discount: 30, total_charges: 10.9, payable_amount: 60.9, charges: [{ title: 'Service charge', value: 4 }, { title: 'Delivery charge', value: 6.9 }] }, items: [{ id: 1, title: 'Classic Margherita Pizza', price: 40, quantity: 2, total: 80 }] });
+  const io5 = memIo(); await handleWebhook(H, pr, io5); await W.fold(io5);
+  o = io5.st.orders[0];
+  assert.deepStrictEqual([o.receiptTotal, o.discount, o.charges, o.deliveryCharges, o.primeRevenue, o.netSales], [90.9, 30, 10.9, 6.9, 54, 58]); ok('Prime Net Revenue = 60.90 paid − 6.90 delivery = 54.00 (Prime order 4733429183)');
+  const noLines = relay(7002, { details: { order_subtotal: 80, discount: 30, total_charges: 10.9, payable_amount: 60.9 }, items: [{ id: 1, title: 'X', price: 80, quantity: 1, total: 80 }] });
+  await handleWebhook(H, noLines, io5); await W.fold(io5);
+  o = io5.st.orders.find(x => x.id === 'up_7002');
+  assert.deepStrictEqual([o.deliveryCharges, o.primeRevenue], [null, null]); ok('no charge breakdown: Prime Net Revenue left empty, not guessed');
+
   // 12. Unknown payloads are acknowledged and ignored
   r = await handleWebhook(H, { reference_id: 'x', num_webhooks_retried: 2 }, io2);
   assert.deepStrictEqual([r.status, r.json.ignored], [200, true]); ok('retry summary callback ignored');

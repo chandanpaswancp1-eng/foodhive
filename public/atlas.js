@@ -97,6 +97,9 @@
     const discount = num(o.discount) + hidden;
     const receipt = subtotal + hidden + charges + (taxes > 0 ? taxes : 0);
     const net = taxes > 0 ? num(o.payableAmount) - taxes : (receipt - discount) / (1 + VAT_RATE);
+    const lines = Array.isArray(o.charges) ? o.charges : null;
+    const deliveryCharges = lines && Math.abs(lines.reduce((t, c) => t + num(c.value), 0) - charges) <= 0.01
+      ? lines.filter(c => /deliver/i.test(String(c.title || ''))).reduce((t, c) => t + num(c.value), 0) : null;
     const acceptedAt = first('ACKNOWLEDGED');
     const deliveredAt = first('COMPLETED');
     const brand = String(o.brand || '').trim() || 'Unknown';
@@ -119,6 +122,13 @@
       receiptTotal: round2(receipt),
       discount: round2(discount),
       charges: round2(charges),
+      // Delivery charge lines ("Delivery charge"), when Atlas sent the charge
+      // breakdown; null when only the total is known.
+      deliveryCharges: deliveryCharges == null ? null : round2(deliveryCharges),
+      // Prime's day-summary Net Revenue for this order: what the customer
+      // paid after discount (VAT included) less delivery charges. Matches
+      // Prime → Day Summary (checked 20 Nov 2026: 1,805.50 vs AED 1,806).
+      primeRevenue: deliveryCharges == null ? null : round2(receipt - discount - deliveryCharges),
       cancelled,
       postCancelled: cancelled && !!acceptedAt,
       reason: cancelled ? (cancelReason(cancelUpd && cancelUpd.message) || 'Unspecified') : '',
@@ -231,7 +241,9 @@
   const API = 'https://atlas-backend.svc.urbanpiper.com/graphql';
   const QUERIES = {
     list: 'query($limit:Int,$sort:SortInput,$filters:[ListFilterArgument],$brand:String,$cursor:String){ordersV2(limit:$limit,sort:$sort,filters:$filters,brand:$brand,cursor:$cursor){hasNext nextCursor objects{id created channel status store{title brand{name}}}}}',
-    order: 'query($id:Int){order(id:$id){id type created status channel paymentMode subtotal discount totalCharges totalTaxes payableAmount customer{fullName} store{title brand{name}} statusUpdates{status created message} items{id title price quantity total discount}}}',
+    order: 'query($id:Int){order(id:$id){id type created status channel paymentMode subtotal discount totalCharges totalTaxes payableAmount charges{title value} customer{fullName} store{title brand{name}} statusUpdates{status created message} items{id title price quantity total discount}}}',
+    // Same without the charge lines, for when Atlas does not offer them.
+    orderBasic: 'query($id:Int){order(id:$id){id type created status channel paymentMode subtotal discount totalCharges totalTaxes payableAmount customer{fullName} store{title brand{name}} statusUpdates{status created message} items{id title price quantity total discount}}}',
     items: 'query($limit:Int,$offset:Int,$filters:[ListFilterArgument],$brand:String){items(limit:$limit,offset:$offset,filters:$filters,brand:$brand){count objects{id itemTitle itemPrice isEnabled merchantRefId category itemDiscreteCategory{name} brandsData{name}}}}'
   };
 
@@ -244,6 +256,7 @@
       brand: o.store && o.store.brand ? o.store.brand.name : null, store: o.store ? o.store.title : null,
       paymentMode: o.paymentMode, status: o.status, subtotal: o.subtotal, discount: o.discount,
       totalCharges: o.totalCharges, totalTaxes: o.totalTaxes, payableAmount: o.payableAmount,
+      charges: Array.isArray(o.charges) ? o.charges.map(c => ({ title: c.title, value: c.value })) : null,
       test: /test\s*order/i.test(name),
       statusUpdates: (o.statusUpdates || []).map(s => ({ status: s.status, created: s.created, message: s.message })),
       items: (o.items || []).map(t => ({ id: t.id, title: t.title, price: t.price, quantity: t.quantity, total: t.total, discount: t.discount }))
@@ -290,6 +303,7 @@
       status: statusName(d.order_state || d.state || 'PLACED'),
       subtotal: d.order_subtotal, discount: d.discount, totalCharges: d.total_charges, totalTaxes: d.total_taxes, payableAmount: d.payable_amount,
       externalDiscount: d.total_external_discount != null ? num(d.total_external_discount) : null,
+      charges: Array.isArray(d.charges) ? d.charges.map(c => ({ title: c.title, value: c.value })) : null,
       bizId: d.biz_id != null ? String(d.biz_id) : null,
       test: /test\s*order/i.test(cust), via: 'webhook',
       statusUpdates: [{ status: 'PLACED', created, message: '' }],
