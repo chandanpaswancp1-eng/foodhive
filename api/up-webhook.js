@@ -18,10 +18,16 @@ async function readJsonBody(req) {
 // Shared with server.js (which passes its own io and runs the fold itself).
 async function handleWebhook(headers, body, io) {
   if (!process.env.UP_WEBHOOK_SECRET) return { status: 503, json: { ok: false, error: 'Webhook not configured on this deployment' } };
-  if (!W.keyOk(headers['x-fh-webhook-key'])) return { status: 401, json: { ok: false, error: 'Unauthorized' } };
+  if (!W.keyOk(headers['x-fh-webhook-key'])) {
+    // Why a delivery was refused, without logging the key or the payload.
+    const given = headers['x-fh-webhook-key'];
+    const names = Object.keys(headers).filter(h => /key|auth|token|secret|fh/i.test(h));
+    console.warn(`[up-webhook] 401 key: ${given == null ? 'header missing' : `given ${String(given).length} chars, expected ${String(process.env.UP_WEBHOOK_SECRET).length}`}; key-like headers: ${names.join(', ') || 'none'}; shape: ${W.shape(body)}`);
+    return { status: 401, json: { ok: false, error: 'Unauthorized' } };
+  }
   const p = W.parseEvent(body);
-  if (p.ignore) return { status: 200, json: { ok: true, ignored: true } };
-  if (p.error) return { status: p.forbidden ? 401 : 400, json: { ok: false, error: p.error } };
+  if (p.ignore) { console.warn(`[up-webhook] ignored payload, shape: ${W.shape(body)}`); return { status: 200, json: { ok: true, ignored: true } }; }
+  if (p.error) { console.warn(`[up-webhook] ${p.forbidden ? 401 : 400}: ${p.error}`); return { status: p.forbidden ? 401 : 400, json: { ok: false, error: p.error } }; }
   await io.putEvent(p.name, p.event);
   if (io.writeWhPending) await io.writeWhPending({ at: Date.now() }).catch(() => {});
   return { status: 200, json: { ok: true, kind: p.event.kind, order: p.event.orderId }, fold: true };

@@ -208,4 +208,12 @@ function webhookFacts(m, now = Date.now()) {
   };
 }
 
-module.exports = { keyOk, parseEvent, fold, foldOnce, rebuild, reconcile, retryFailed, webhookFacts, EXPECTED_BIZ_ID };
+// Top-level keys of a payload (and of order.details), for logs. No values.
+function shape(b) {
+  if (!b || typeof b !== 'object') return typeof b;
+  const top = Object.keys(b).slice(0, 15).join(',');
+  const det = b.order && b.order.details ? ' order.details:' + Object.keys(b.order.details).slice(0, 25).join(',') : '';
+  return `{${top}}${det}`;
+}
+
+module.exports = { shape, keyOk, parseEvent, fold, foldOnce, rebuild, reconcile, retryFailed, webhookFacts, EXPECTED_BIZ_ID };
