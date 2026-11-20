@@ -56,10 +56,13 @@ const r2 = n => Math.round(n * 100) / 100;
   const brandOff = L.filter(l => ordById.has(String(l.orderId)) && l.brand !== ordById.get(String(l.orderId)).brand);
   info('Item lines labelled with another brand by the source', `${brandOff.length} (the dashboard shows them under the order's brand)`);
   const jdLineOff = jd.filter(o => !o.cancelled && byOrder.has(o.id)).filter(o => {
+    // Line totals are after any item-level discount (Atlas item `total`).
     const s = byOrder.get(o.id).reduce((t, l) => t + l.lineTotal, 0);
-    return Math.abs(s - (o.receiptTotal - (o.charges || 0))) > 0.01;
+    const itemDisc = byOrder.get(o.id).reduce((t, l) => t + (l.discount || 0), 0);
+    const want = o.receiptTotal - (o.charges || 0);
+    return Math.abs(s - want) > 0.01 && Math.abs(s + itemDisc - want) > 0.01;
   });
-  check('Jaddaf item lines = gross − charges', jdLineOff.length === 0, jdLineOff.length ? `${jdLineOff.length} differ, e.g. ${jdLineOff.slice(0, 3).map(o => o.id).join(', ')}` : '');
+  check('Jaddaf item lines = gross − charges (before item discounts)', jdLineOff.length === 0, jdLineOff.length ? `${jdLineOff.length} differ, e.g. ${jdLineOff.slice(0, 3).map(o => o.id).join(', ')}` : '');
 
   // 86 events
   const avKey = new Set(); let avDup = 0; AV.forEach(a => { const k = [a.item, a.brand, a.location, a.at].join('|'); if (avKey.has(k)) avDup++; avKey.add(k); });

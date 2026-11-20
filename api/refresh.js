@@ -3,6 +3,7 @@ const { configured, syncOnce, dubaiDateKey } = require('./_lib/grubcenter');
 const { syncAtlasOnce } = require('./_lib/atlas-sync');
 const upIo = require('./_lib/up-blob-io');
 const { foldOnce } = require('./_lib/up-webhooks');
+const { readUpMeta } = require('./_lib/store');
 
 // Keep on-demand refreshes inside the function's maxDuration (60s on
 // Vercel). A 14-day pull takes ~6 minutes locally -- far past that limit --
@@ -26,6 +27,17 @@ function clampFrom(from, to) {
 // the response (the client polls lastSync), UrbanPiper Atlas (Jaddaf) is
 // small enough to finish inside this request, so its exact result goes back
 // in `atlas`. Each side succeeds or fails on its own.
+// Jaddaf orders come by UrbanPiper webhook once it is live; the Atlas
+// session is then optional (catalogue, cross-check), so a missing or expired
+// session is not a Jaddaf sync failure: report the webhook instead.
+async function jaddafResult(r) {
+  if (r && !r.ok && r.needsConnect) {
+    const m = (await readUpMeta().catch(() => null)) || {};
+    if (m.firstWebhookAt) return { ok: true, via: 'webhook', lastWebhookAt: m.lastWebhookAt || null, session: r.error || null };
+  }
+  return r;
+}
+
 module.exports = async (req, res) => {
   res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
   const url = new URL(req.url, 'http://x');
@@ -34,6 +46,7 @@ module.exports = async (req, res) => {
   const af = url.searchParams.get('atlasFrom');
   const atlasFrom = /^\d{4}-\d{2}-\d{2}$/.test(af || '') && af >= dubaiDateKey(Date.now() - 44 * 864e5) ? af : undefined;
   const atlasRun = foldOnce(upIo).then(() => syncAtlasOnce(upIo, { catalog: url.searchParams.get('catalog') === '1' ? true : undefined, from: atlasFrom }))
+    .then(jaddafResult)
     .catch(e => ({ ok: false, error: e.message }));
   if (!configured()) {
     const atlas = await atlasRun;

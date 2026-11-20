@@ -49,6 +49,9 @@
     },
     "api/up-webhook.js": {
       "maxDuration": 30
+    },
+    "api/sync-line-items.js": {
+      "maxDuration": 60
     }
   }
 }

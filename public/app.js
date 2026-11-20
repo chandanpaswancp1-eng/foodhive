@@ -4861,10 +4861,16 @@ function ensureLineItems() {
   }).catch(e => log('✗ Item sales history: ' + e.message)).finally(() => { liFetch = null; });
 }
 
+// GrubCENTER line items sync in their own function call (api/sync-line-items),
+// started in the background on load and refresh; the server runs it at most
+// every 10 minutes. Nothing waits on it.
+function kickLineItemSync() { fetch('/api/sync-line-items').catch(() => {}); }
+
 async function loadLive(from, to) {
   log('Contacting GrubCENTER…');
   try {
     const q = from && to ? `?from=${from}&to=${to}` : '';
+    kickLineItemSync();
     const [ordRes, availRes, oiRes] = await Promise.all([
       fetch('/api/orders' + q),
       fetch('/api/availability' + q),
@@ -5266,6 +5272,10 @@ async function syncNow(full = false) {
 // Jaddaf's part of the Sync Now message, from /api/refresh's `atlas`.
 function atlasSyncText(a) {
   if (!a) return { ok: false, text: 'Jaddaf: no answer from the UrbanPiper sync' };
+  if (a.ok && a.via === 'webhook') {
+    const at = a.lastWebhookAt ? new Date(a.lastWebhookAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : null;
+    return { ok: true, text: `✓ Jaddaf: live via UrbanPiper webhook${at ? ` (last order event ${at})` : ''}` };
+  }
   if (a.ok) {
     const parts = [`${a.saved} order${a.saved === 1 ? '' : 's'} checked`];
     if (a.added) parts.push(`${a.added} new`);
@@ -5424,6 +5434,7 @@ let backgroundWaitActive = false;
 
 async function fetchOrdersAndRender(opts = {}) {
   const { initial = false, force = false } = opts;
+  kickLineItemSync();
   const [ordRes, availRes, oiRes] = await Promise.all([
     fetch('/api/orders'),
     fetch('/api/availability'),
