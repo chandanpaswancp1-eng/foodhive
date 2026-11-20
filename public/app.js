@@ -949,14 +949,7 @@ const KITCHEN_CALC = {
       'Total Discount': { v: disc, f: money, add: true }, 'Discount %': { v: rec ? disc / rec : null, f: x => pc(x, 1) },
       // Delivery/packaging charges inside Gross and Net Sales. Only Jaddaf
       // (UrbanPiper) reports them; GrubCENTER's figures include them unseen.
-      'Charges in Gross': { v: O.some(o => o.charges != null) ? sum(O, o => o.charges || 0) : null, f: money },
-      // Jaddaf only, as Prime → Day Summary shows it: paid after discount
-      // (VAT included) less delivery charges. Shown only when every Jaddaf
-      // order in view has its charge breakdown, never as a partial sum.
-      'Prime Net Revenue (Jaddaf)': (() => {
-        const J = O.filter(o => o.source === 'urbanpiper');
-        return { v: J.length && J.every(o => o.primeRevenue != null) ? sum(J, o => o.primeRevenue) : null, f: money };
-      })()
+      'Charges in Gross': { v: O.some(o => o.charges != null) ? sum(O, o => o.charges || 0) : null, f: money }
     };
   },
   cancel: loc => {
@@ -5038,7 +5031,7 @@ function downloadPlXlsx(filename, pl) {
   XLSX.writeFile(wb, filename);
 }
 
-const ORDER_COLUMNS = ['Order ID', 'Received At', 'Accepted At', 'Started At', 'Prepared At', 'Sent to Dispatcher At', 'Dispatched At', 'Delivered At', 'Brand', 'Cuisine', 'Location', 'Channel', 'Payment Method', 'Delivery Partner', 'Net Sales (AED)', 'Receipt Total (AED)', 'Discount (AED)', 'Charges (AED)', 'Delivery Charges (AED)', 'Prime Net Revenue (AED)', 'Cancelled', 'Cancelled After Accept', 'Cancellation Reason', 'Rating', 'Estimated Prep Time (min)'];
+const ORDER_COLUMNS = ['Order ID', 'Received At', 'Accepted At', 'Started At', 'Prepared At', 'Sent to Dispatcher At', 'Dispatched At', 'Delivered At', 'Brand', 'Cuisine', 'Location', 'Channel', 'Payment Method', 'Delivery Partner', 'Net Sales (AED)', 'Receipt Total (AED)', 'Discount (AED)', 'Charges (AED)', 'Delivery Charges (AED)', 'Cancelled', 'Cancelled After Accept', 'Cancellation Reason', 'Rating', 'Estimated Prep Time (min)'];
 const round2 = n => Math.round((n || 0) * 100) / 100;
 function mapOrderRow(o) {
   return {
@@ -5049,7 +5042,6 @@ function mapOrderRow(o) {
     'Net Sales (AED)': round2(o.netSales), 'Receipt Total (AED)': round2(o.receiptTotal), 'Discount (AED)': round2(o.discount),
     'Charges (AED)': o.charges == null ? '' : round2(o.charges),
     'Delivery Charges (AED)': o.deliveryCharges == null ? '' : round2(o.deliveryCharges),
-    'Prime Net Revenue (AED)': o.primeRevenue == null ? '' : round2(o.primeRevenue),
     Cancelled: o.cancelled, 'Cancelled After Accept': o.postCancelled, 'Cancellation Reason': o.reason,
     Rating: o.rating == null ? '' : o.rating, 'Estimated Prep Time (min)': o.estPrep == null ? '' : o.estPrep
   };
@@ -5139,7 +5131,7 @@ function renderExport() {
   $('#expPLSummary').textContent = pl ? `Net Sales ${money(pl.net)} · EBITDA ${money(pl.eb)} in range` : 'No data for range';
 }
 
-const ORDER_MONEY_COLS = ['Net Sales (AED)', 'Receipt Total (AED)', 'Discount (AED)', 'Charges (AED)', 'Delivery Charges (AED)', 'Prime Net Revenue (AED)'];
+const ORDER_MONEY_COLS = ['Net Sales (AED)', 'Receipt Total (AED)', 'Discount (AED)', 'Charges (AED)', 'Delivery Charges (AED)'];
 const LINE_ITEM_MONEY_COLS = ['Unit Price (AED)', 'Line Total (AED)', 'Item Discount (AED)'];
 
 function wireExportButtons() {

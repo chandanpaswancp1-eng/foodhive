@@ -125,10 +125,6 @@
       // Delivery charge lines ("Delivery charge"), when Atlas sent the charge
       // breakdown; null when only the total is known.
       deliveryCharges: deliveryCharges == null ? null : round2(deliveryCharges),
-      // Prime's day-summary Net Revenue for this order: what the customer
-      // paid after discount (VAT included) less delivery charges. Matches
-      // Prime → Day Summary (checked 20 Nov 2026: 1,805.50 vs AED 1,806).
-      primeRevenue: deliveryCharges == null ? null : round2(receipt - discount - deliveryCharges),
       cancelled,
       postCancelled: cancelled && !!acceptedAt,
       reason: cancelled ? (cancelReason(cancelUpd && cancelUpd.message) || 'Unspecified') : '',
