@@ -4,7 +4,7 @@
  * authenticated SDK rather than a bare fetch of a public URL). Replaces
  * server.js's in-memory STORE + local-disk JSON files, since serverless
  * functions share no memory and have no durable local disk. */
-const { put, get } = require('@vercel/blob');
+const { put, get, list, del, head } = require('@vercel/blob');
 
 const ORDERS_KEY = 'orders.json';
 const ITEMS_KEY = 'items.json';
@@ -78,6 +78,52 @@ const writeUpConn = conn => writeBlobJson(UP_CONN_KEY, conn);
 const readUpMeta = () => readBlobJson(UP_META_KEY, { lastWebhookAt: 0, webhookCount: 0, catalogAt: 0 });
 const writeUpMeta = meta => writeBlobJson(UP_META_KEY, meta);
 
+// UrbanPiper webhooks (api/up-webhook.js). Each delivery is its own blob, so
+// deliveries arriving together never overwrite each other; the fold step
+// (api/_lib/up-webhooks.js) merges them into up_orders.json under a lock.
+const UP_EVENTS_PREFIX = 'up_events/';
+const UP_WH_KEY = 'up_wh.json';
+const UP_WH_PENDING_KEY = 'up_wh_pending.json';
+const putUpEvent = (name, obj) => writeBlobJson(UP_EVENTS_PREFIX + name, obj);
+async function listUpEvents() {
+  const out = [];
+  let cursor;
+  for (let i = 0; i < 50; i++) {
+    const r = await list({ prefix: UP_EVENTS_PREFIX, cursor, limit: 1000 });
+    r.blobs.forEach(b => out.push({ name: b.pathname.slice(UP_EVENTS_PREFIX.length), uploadedAt: +new Date(b.uploadedAt) }));
+    if (!r.hasMore) return out;
+    cursor = r.cursor;
+  }
+  return out;
+}
+const readUpEvent = name => readBlobJson(UP_EVENTS_PREFIX + name, null);
+const delUpEvents = names => (names.length ? del(names.map(n => UP_EVENTS_PREFIX + n)) : Promise.resolve());
+const readUpWh = () => readBlobJson(UP_WH_KEY, {});
+const writeUpWh = doc => writeBlobJson(UP_WH_KEY, doc);
+const readUpWhPending = () => readBlobJson(UP_WH_PENDING_KEY, { at: 0 });
+const writeUpWhPending = doc => writeBlobJson(UP_WH_PENDING_KEY, doc);
+
+// Lock across function instances: creating a blob that already exists
+// fails, so only one holder at a time. A lock older than ttlMs belongs to a
+// function that died and is taken over.
+async function withBlobLock(name, fn, { ttlMs = 90 * 1000, waitMs = 20 * 1000 } = {}) {
+  const key = 'locks/' + name + '.json';
+  const t0 = Date.now();
+  for (;;) {
+    try {
+      await put(key, JSON.stringify({ at: Date.now() }), { access: 'private', addRandomSuffix: false, allowOverwrite: false, contentType: 'application/json' });
+      break;
+    } catch (e) {
+      if (Date.now() - t0 > waitMs) throw new Error('Jaddaf data is being updated by another request; try again in a minute');
+      let stale = false;
+      try { const h = await head(key); stale = Date.now() - +new Date(h.uploadedAt) > ttlMs; } catch (_) { stale = false; }
+      if (stale) { await del(key).catch(() => {}); continue; }
+      await new Promise(r => setTimeout(r, 1000));
+    }
+  }
+  try { return await fn(); } finally { await del(key).catch(() => {}); }
+}
+
 // Aggregator store ratings, captured from partner portals (public/ratings.js).
 const BRAND_RATINGS_KEY = 'brand_ratings.json';
 const readBrandRatings = () => readBlobJson(BRAND_RATINGS_KEY, null);
@@ -95,4 +141,4 @@ async function readAllOrderItems() {
   return withSource(g, 'grubcenter').concat(withSource(u, 'urbanpiper'));
 }
 
-module.exports = { readOrders, writeOrders, readItems, writeItems, readOrderItems, writeOrderItems, readMeta, writeMeta, readZoho, writeZoho, readZohoMeta, writeZohoMeta, readBlobJson, writeBlobJson, readUpOrders, writeUpOrders, readUpOrderItems, writeUpOrderItems, readUpMeta, writeUpMeta, readUpCatalog, writeUpCatalog, readUpItems, writeUpItems, readUpConn, writeUpConn, readAllOrders, readAllOrderItems, withSource, readBrandRatings, writeBrandRatings };
+module.exports = { readOrders, writeOrders, readItems, writeItems, readOrderItems, writeOrderItems, readMeta, writeMeta, readZoho, writeZoho, readZohoMeta, writeZohoMeta, readBlobJson, writeBlobJson, readUpOrders, writeUpOrders, readUpOrderItems, writeUpOrderItems, readUpMeta, writeUpMeta, readUpCatalog, writeUpCatalog, readUpItems, writeUpItems, readUpConn, writeUpConn, readAllOrders, readAllOrderItems, withSource, readBrandRatings, writeBrandRatings, putUpEvent, listUpEvents, readUpEvent, delUpEvents, readUpWh, writeUpWh, readUpWhPending, writeUpWhPending, withBlobLock };

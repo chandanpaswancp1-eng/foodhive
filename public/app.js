@@ -946,7 +946,10 @@ const KITCHEN_CALC = {
     return {
       'Net Sales': { v: net, f: money, add: true }, 'Gross Sales': { v: rec, f: money, add: true },
       'Total Orders': { v: n, f: cnt, add: true }, 'AOV': { v: n ? net / n : null, f: x => x.toFixed(2) },
-      'Total Discount': { v: disc, f: money, add: true }, 'Discount %': { v: rec ? disc / rec : null, f: x => pc(x, 1) }
+      'Total Discount': { v: disc, f: money, add: true }, 'Discount %': { v: rec ? disc / rec : null, f: x => pc(x, 1) },
+      // Delivery/packaging charges inside Gross and Net Sales. Only Jaddaf
+      // (UrbanPiper) reports them; GrubCENTER's figures include them unseen.
+      'Charges in Gross': { v: O.some(o => o.charges != null) ? sum(O, o => o.charges || 0) : null, f: money }
     };
   },
   cancel: loc => {
@@ -4641,16 +4644,16 @@ function openAtlasModal(msg) {
   const body = $('#kpiModalBody');
   const up = S.sources && S.sources.sources.find(x => x.id === 'upOrders');
   body.innerHTML = `<div class="agg-form">
-    <div>1. Drag <a class="agg-bm" id="atlasBookmarklet" href="#" title="Drag me to your bookmarks bar">🍽 FoodHive Atlas</a> to your bookmarks bar (once). The bookmark only works with this dashboard's address.</div>
-    <div>2. <b>About once a week:</b> open <a href="https://atlas.urbanpiper.com/orders" target="_blank" rel="noopener">Atlas</a>, sign in, click the bookmark and press <b>Connect dashboard</b>. Until Atlas ends that session (about 7 days) <b>Sync Now</b>, the 10-minute refresh and the nightly sync pull Jaddaf together with Motor City. Data Sources turns amber a day before it ends.
+    <div><b>Live orders (set up once):</b> in Atlas open <b>Settings → Webhooks → Add Webhook</b>, URL <code>${esc(location.origin)}/api/up-webhook</code>, events <b>Order Relay</b> and <b>Order Status Update</b>, retry on. Under <b>Headers</b> add <code>X-FH-Webhook-Key</code> with the key from your Vercel setting <code>UP_WEBHOOK_SECRET</code>, for both events. Jaddaf orders then arrive by themselves, with no reconnecting.
       ${up && up.note ? `<div class="muted small" style="margin-top:4px">${esc(up.note)}</div>` : ''}</div>
+    <div><b>Optional, for the menu catalogue and the daily cross-check:</b> drag <a class="agg-bm" id="atlasBookmarklet" href="#" title="Drag me to your bookmarks bar">🍽 FoodHive Atlas</a> to your bookmarks bar (once), then in a signed-in <a href="https://atlas.urbanpiper.com/orders" target="_blank" rel="noopener">Atlas</a> tab click it and press <b>Connect dashboard</b>. The session lasts about 7 days.</div>
     <div>Without a connection you can still capture by hand: in the bookmark press <b>Capture orders</b> (or <b>Capture catalogue</b>), then paste here:
       <textarea id="atlasPaste" placeholder='{"kind":"orders","orders":[...]}'></textarea></div>
     <div id="atlasMsg" class="${msg && msg.err ? 'agg-err' : ''}">${msg ? esc(msg.text) : ''}</div>
     <div class="row" style="gap:6px"><button class="btn-yellow" id="atlasSave" style="padding:4px 14px;font-size:12px">Save to dashboard</button>
       <span class="muted small">Orders are matched by Atlas order id, so capturing the same days again just updates them. Test orders are skipped.</span></div>
   </div>`;
-  openKpiModal('Update Jaddaf from Atlas', 'UrbanPiper Atlas has no API keys, so the dashboard borrows your signed-in Atlas session until Atlas ends it (about 7 days). It is stored privately on the server and never shown.');
+  openKpiModal('Update Jaddaf from Atlas', 'Orders arrive by UrbanPiper webhook. The optional Atlas session (about 7 days) is stored privately on the server and never shown.');
   fetch('atlas-capture.js', { cache: 'no-store' }).then(r => r.text()).then(src => { const a = $('#atlasBookmarklet'); if (a) a.href = 'javascript:' + encodeURIComponent(src.replace(/\/\*[\s\S]*?\*\//g, '').replace('__FH_DASHBOARD__', location.origin).trim()); }).catch(() => {});
   $('#atlasBookmarklet').onclick = e => { e.preventDefault(); };
   const say = (text, err) => { const m = $('#atlasMsg'); m.textContent = text; m.className = err ? 'agg-err' : ''; };
@@ -5028,7 +5031,7 @@ function downloadPlXlsx(filename, pl) {
   XLSX.writeFile(wb, filename);
 }
 
-const ORDER_COLUMNS = ['Order ID', 'Received At', 'Accepted At', 'Started At', 'Prepared At', 'Sent to Dispatcher At', 'Dispatched At', 'Delivered At', 'Brand', 'Cuisine', 'Location', 'Channel', 'Payment Method', 'Delivery Partner', 'Net Sales (AED)', 'Receipt Total (AED)', 'Discount (AED)', 'Cancelled', 'Cancelled After Accept', 'Cancellation Reason', 'Rating', 'Estimated Prep Time (min)'];
+const ORDER_COLUMNS = ['Order ID', 'Received At', 'Accepted At', 'Started At', 'Prepared At', 'Sent to Dispatcher At', 'Dispatched At', 'Delivered At', 'Brand', 'Cuisine', 'Location', 'Channel', 'Payment Method', 'Delivery Partner', 'Net Sales (AED)', 'Receipt Total (AED)', 'Discount (AED)', 'Charges (AED)', 'Cancelled', 'Cancelled After Accept', 'Cancellation Reason', 'Rating', 'Estimated Prep Time (min)'];
 const round2 = n => Math.round((n || 0) * 100) / 100;
 function mapOrderRow(o) {
   return {
@@ -5037,6 +5040,7 @@ function mapOrderRow(o) {
     'Dispatched At': fmtDubaiTs(o.dispatchedAt), 'Delivered At': fmtDubaiTs(o.deliveredAt),
     Brand: o.brand, Cuisine: o.cuisine, Location: o.location, Channel: o.channel, 'Payment Method': o.payment, 'Delivery Partner': o.partner,
     'Net Sales (AED)': round2(o.netSales), 'Receipt Total (AED)': round2(o.receiptTotal), 'Discount (AED)': round2(o.discount),
+    'Charges (AED)': o.charges == null ? '' : round2(o.charges),
     Cancelled: o.cancelled, 'Cancelled After Accept': o.postCancelled, 'Cancellation Reason': o.reason,
     Rating: o.rating == null ? '' : o.rating, 'Estimated Prep Time (min)': o.estPrep == null ? '' : o.estPrep
   };
@@ -5126,7 +5130,7 @@ function renderExport() {
   $('#expPLSummary').textContent = pl ? `Net Sales ${money(pl.net)} · EBITDA ${money(pl.eb)} in range` : 'No data for range';
 }
 
-const ORDER_MONEY_COLS = ['Net Sales (AED)', 'Receipt Total (AED)', 'Discount (AED)'];
+const ORDER_MONEY_COLS = ['Net Sales (AED)', 'Receipt Total (AED)', 'Discount (AED)', 'Charges (AED)'];
 const LINE_ITEM_MONEY_COLS = ['Unit Price (AED)', 'Line Total (AED)', 'Item Discount (AED)'];
 
 function wireExportButtons() {

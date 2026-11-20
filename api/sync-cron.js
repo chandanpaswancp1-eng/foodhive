@@ -9,6 +9,7 @@ const { syncOnce, dubaiDateKey } = require('./_lib/grubcenter');
 const { syncOnce: syncZohoOnce } = require('./_lib/zoho');
 const { syncAtlasOnce } = require('./_lib/atlas-sync');
 const upIo = require('./_lib/up-blob-io');
+const { foldOnce, retryFailed } = require('./_lib/up-webhooks');
 
 module.exports = async (req, res) => {
   if (process.env.CRON_SECRET) {
@@ -29,8 +30,14 @@ module.exports = async (req, res) => {
     const [result, zohoResult, atlasResult] = await Promise.all([
       syncOnce(dubaiDateKey(Date.now() - 7 * 864e5), dubaiDateKey(Date.now()), yesterday, yesterday),
       syncZohoOnce().catch(e => ({ error: e.message })),
-      // Jaddaf: only while the Atlas connection is still live.
-      syncAtlasOnce(upIo, { from: dubaiDateKey(Date.now() - 6 * 864e5) }).catch(e => ({ ok: false, error: e.message }))
+      // Jaddaf: ask UrbanPiper to resend failed webhook deliveries, fold
+      // what arrived, then the Atlas sync (only while a session is live).
+      (async () => {
+        const retry = await retryFailed(upIo).catch(e => ({ error: e.message }));
+        const fold = await foldOnce(upIo);
+        const sync = await syncAtlasOnce(upIo, { from: dubaiDateKey(Date.now() - 6 * 864e5) }).catch(e => ({ ok: false, error: e.message }));
+        return { ...sync, webhookRetry: retry, fold };
+      })()
     ]);
     res.status(200).json({ ...result, zoho: zohoResult, atlas: atlasResult });
   } catch (e) {

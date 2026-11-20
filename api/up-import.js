@@ -21,18 +21,22 @@ async function importCapture(body, io) {
   const meta = (await io.readMeta()) || {};
   const now = Date.now();
   if (body.kind === 'orders') {
-    const [orders, lines] = await Promise.all([io.readOrders(), io.readOrderItems()]);
-    const r = FHAtlas.mergeOrders(orders, lines, body);
-    await Promise.all([io.writeOrders(r.orders), io.writeOrderItems(r.lines)]);
-    const m = { ...meta, lastCaptureAt: now, capturedRange: [body.from || null, body.to || null], orderCount: r.orders.length };
-    await io.writeMeta(m);
-    return { status: 200, json: { ok: true, kind: 'orders', added: r.added, updated: r.updated, skippedTests: r.tests, total: r.orders.length } };
+    // Same lock as the webhook fold and the Atlas sync.
+    const locked = io.withLock || (fn => fn());
+    return locked(async () => {
+      const [orders, lines] = await Promise.all([io.readOrders(), io.readOrderItems()]);
+      const r = FHAtlas.mergeOrders(orders, lines, body);
+      await Promise.all([io.writeOrders(r.orders), io.writeOrderItems(r.lines)]);
+      const fresh = (await io.readMeta()) || {};
+      await io.writeMeta({ ...fresh, lastCaptureAt: now, capturedRange: [body.from || null, body.to || null], orderCount: r.orders.length, purgedPreLive: (fresh.purgedPreLive || 0) + (r.purgedPreLive || 0) });
+      return { status: 200, json: { ok: true, kind: 'orders', added: r.added, updated: r.updated, skippedTests: r.tests, total: r.orders.length } };
+    });
   }
   const items = FHAtlas.normalizeCatalog(body);
   const capturedAt = body.capturedAt || now;
   const events = FHAtlas.catalogEvents(await io.readItems(), items, capturedAt);
   await Promise.all([io.writeCatalog({ capturedAt, receivedAt: now, items }), io.writeItems(events)]);
-  await io.writeMeta({ ...meta, catalogAt: capturedAt, catalogItems: items.length });
+  await io.writeMeta({ ...((await io.readMeta()) || meta), catalogAt: capturedAt, catalogItems: items.length });
   return { status: 200, json: { ok: true, kind: 'catalog', items: items.length, disabled: items.filter(i => !i.enabled).length } };
 }
 

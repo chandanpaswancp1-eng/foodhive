@@ -15,6 +15,7 @@
    - After merging, the stored Jaddaf orders in the window must equal the
      listed non-test orders exactly; otherwise nothing is written. */
 const FHAtlas = require('../../public/atlas.js');
+const UpWebhooks = require('./up-webhooks');
 
 const CONNECT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const RENEW_WARN_MS = 24 * 60 * 60 * 1000;
@@ -190,6 +191,14 @@ async function syncAtlas(io, opts = {}) {
     const capture = { kind: 'orders', from: win.from, to: win.to, orders };
     const bad = FHAtlas.validate(capture);
     if (bad) throw new Error('Atlas data failed validation: ' + bad);
+    let catalog = null;
+    if (opts.catalog !== false && (opts.catalog === true || !meta.catalogAt || now - meta.catalogAt > CATALOG_MAX_AGE_MS)) {
+      try { catalog = await syncCatalog(conn.token, io, now); } catch (e) { catalog = { error: e.message }; }
+    }
+    // Read, merge and write under the same lock the webhook fold uses, so
+    // neither overwrites the other's orders or meta.
+    const locked = io.withLock || (fn => fn());
+    return await locked(async () => {
     const [stored, lines] = await Promise.all([io.readOrders(), io.readOrderItems()]);
     const r = FHAtlas.mergeOrders(stored, lines, capture);
     // Reconcile: stored Jaddaf orders in the window == listed non-test orders.
@@ -203,17 +212,24 @@ async function syncAtlas(io, opts = {}) {
     const finalOrders = extra.length ? r.orders.filter(o => !extra.some(x => x.id === o.id)) : r.orders;
     const finalLines = extra.length ? r.lines.filter(l => !extra.some(x => x.id === l.orderId)) : r.lines;
     await Promise.all([io.writeOrders(finalOrders), io.writeOrderItems(finalLines)]);
-    const result = { ok: true, from: win.from, to: win.to, listed: ids.length, saved: expected.size, added: r.added, updated: r.updated, removed: extra.length, skippedTests: r.tests, total: finalOrders.length, ms: Date.now() - t0 };
-    let catalog = null;
-    if (opts.catalog !== false && (opts.catalog === true || !meta.catalogAt || now - meta.catalogAt > CATALOG_MAX_AGE_MS)) {
-      try { catalog = await syncCatalog(conn.token, io, now); } catch (e) { catalog = { error: e.message }; }
+    const result = { ok: true, from: win.from, to: win.to, listed: ids.length, saved: expected.size, added: r.added, updated: r.updated, removed: extra.length, skippedTests: r.tests, purgedPreLive: r.purgedPreLive || 0, total: finalOrders.length, ms: Date.now() - t0 };
+    const fresh = (await io.readMeta()) || {};
+    // Cross-check webhook copies against these Atlas records.
+    let reconcile = fresh.reconcile || null;
+    if (fresh.firstWebhookAt && io.readWh) {
+      const inWin = finalOrders.filter(o => { const d = dubaiDay(o.receivedAt); return d >= win.from && d <= win.to; });
+      reconcile = { at: now, ...UpWebhooks.reconcile(inWin, (await io.readWh()) || {}, fresh.firstWebhookAt, win.from, win.to) };
+      result.reconcile = { compared: reconcile.compared, diffs: reconcile.diffCount, missingInWebhook: reconcile.missingInWebhook.length, extraInWebhook: reconcile.extraInWebhook.length };
     }
-    await io.writeMeta({ ...meta, lastCaptureAt: now, atlasSyncTo: win.to, capturedRange: [win.from, win.to], orderCount: finalOrders.length, atlasError: null, atlasLast: result,
+    await io.writeMeta({ ...fresh, lastCaptureAt: now, atlasSyncTo: win.to, capturedRange: [win.from, win.to], orderCount: finalOrders.length, atlasError: null, atlasLast: result, reconcile,
+      purgedPreLive: (fresh.purgedPreLive || 0) + (r.purgedPreLive || 0),
       ...(catalog && !catalog.error ? { catalogAt: now, catalogItems: catalog.items } : {}) });
     return { ...result, catalog };
+    });
   } catch (e) {
     if (e instanceof AtlasAuthError) await io.writeConn(null).catch(() => {});
-    await io.writeMeta({ ...meta, atlasError: e.message, atlasErrorAt: now }).catch(() => {});
+    const fresh = (await io.readMeta().catch(() => null)) || meta;
+    await io.writeMeta({ ...fresh, atlasError: e.message, atlasErrorAt: now }).catch(() => {});
     return { ok: false, needsConnect: e instanceof AtlasAuthError, error: e.message, from: win.from, to: win.to };
   }
 }
@@ -232,6 +248,18 @@ function upFacts(meta, orderCount, conn, now = Date.now()) {
   else if (st.connected) note = `Atlas connected. Syncs automatically until ${when(st.useUntil)} (Dubai).`;
   else if (m.atlasConnectedAt) note = 'Atlas connection expired, so Jaddaf is not syncing. Reconnect with the Atlas bookmark.';
   else note = 'Not connected. Use Update from Atlas → Connect dashboard.';
+  // Webhooks live: they are the source of Jaddaf orders, and the Atlas
+  // session is optional (catalogue and cross-check), so its expiry is a note.
+  const wf = UpWebhooks.webhookFacts(m, now);
+  if (wf) {
+    const sess = st.connected ? `Atlas session (catalogue and cross-check) until ${when(st.useUntil)} (Dubai).`
+      : 'Atlas session not connected (optional: catalogue and cross-check).';
+    const atlasErr = recentError && st.connected ? ` Last Atlas sync failed: ${recentError}` : '';
+    return {
+      upOrders: { configured: true, lastSync: wf.lastSync, staleAfter: wf.staleAfter, records: orderCount, error: (meta && meta.__error) || wf.error, note: `${wf.note} ${sess}${atlasErr}` },
+      upCatalog: { configured: true, lastSync: m.catalogAt || 0, records: m.catalogItems || null, note: m.catalogAt ? null : 'No Atlas catalogue yet.' }
+    };
+  }
   return {
     upOrders: {
       configured: true,

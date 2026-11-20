@@ -482,7 +482,7 @@
         <div class="ph">How each kitchen's data arrives</div>
         <div class="pb src-help-body">
           <p><b>Motor City</b> runs on Grubtech. The dashboard signs in to GrubCENTER and syncs orders, prep timings, cancellations and line items every 10 minutes, with today's orders refreshed every 10 seconds. The 86 list refreshes from GrubCENTER's item-availability snapshot.</p>
-          <p><b>Jaddaf</b> runs on UrbanPiper. Atlas has no API keys, so about once a week you open a signed-in Atlas tab, click the FoodHive Atlas bookmark (<b>Update from Atlas</b> above) and press <b>Connect dashboard</b>. Until Atlas ends that session (about 7 days), the dashboard syncs Jaddaf orders and the menu catalogue by itself with Motor City. The card shows <b>Reconnect soon</b> a day before it ends. Without a connection you can still capture orders by hand and paste them; capturing the same days again only updates them.</p>
+          <p><b>Jaddaf</b> runs on UrbanPiper. Every new order and status change arrives by UrbanPiper webhook (set up once in Atlas → Settings → Webhooks; steps under <b>Update from Atlas</b> above), so no reconnecting is needed. Each night UrbanPiper is asked to resend anything that failed. An optional Atlas session (the FoodHive Atlas bookmark → <b>Connect dashboard</b>, about 7 days) adds the menu catalogue and a daily cross-check of every order's figures against Atlas.</p>
           <p><b>Zoho Books</b> supplies the accounting figures for the whole group.</p>
         </div>
       </div>
@@ -599,10 +599,10 @@
 
 <script src="normalize.js?v=3.13"></script>
 <script src="commission.js?v=3.12"></script>
-<script src="sources.js?v=1.4"></script>
+<script src="sources.js?v=1.6"></script>
 <script src="ratings.js?v=1.0"></script>
-<script src="atlas.js?v=1.2"></script>
+<script src="atlas.js?v=1.3"></script>
 <script src="growth.js?v=1.5"></script>
-<script src="app.js?v=3.65"></script>
+<script src="app.js?v=3.66"></script>
 </body>
 </html>

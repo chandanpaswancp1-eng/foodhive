@@ -2,6 +2,7 @@ const { waitUntil } = require('@vercel/functions');
 const { configured, syncOnce, dubaiDateKey } = require('./_lib/grubcenter');
 const { syncAtlasOnce } = require('./_lib/atlas-sync');
 const upIo = require('./_lib/up-blob-io');
+const { foldOnce } = require('./_lib/up-webhooks');
 
 // Keep on-demand refreshes inside the function's maxDuration (60s on
 // Vercel). A 14-day pull takes ~6 minutes locally -- far past that limit --
@@ -28,7 +29,11 @@ function clampFrom(from, to) {
 module.exports = async (req, res) => {
   res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
   const url = new URL(req.url, 'http://x');
-  const atlasRun = syncAtlasOnce(upIo, { catalog: url.searchParams.get('catalog') === '1' ? true : undefined })
+  // atlasFrom=YYYY-MM-DD re-reads Jaddaf from that day (at most 44 days
+  // back), e.g. to rebuild history after a change to the Atlas rules.
+  const af = url.searchParams.get('atlasFrom');
+  const atlasFrom = /^\d{4}-\d{2}-\d{2}$/.test(af || '') && af >= dubaiDateKey(Date.now() - 44 * 864e5) ? af : undefined;
+  const atlasRun = foldOnce(upIo).then(() => syncAtlasOnce(upIo, { catalog: url.searchParams.get('catalog') === '1' ? true : undefined, from: atlasFrom }))
     .catch(e => ({ ok: false, error: e.message }));
   if (!configured()) {
     const atlas = await atlasRun;

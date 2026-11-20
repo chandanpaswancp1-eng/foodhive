@@ -15,6 +15,8 @@ const N = require('./public/normalize.js');
 const FHSources = require('./public/sources.js');
 const FHRatings = require('./public/ratings.js');
 const { importCapture: importAtlasCapture } = require('./api/up-import.js');
+const { handleWebhook: handleUpWebhook } = require('./api/up-webhook.js');
+const UpWebhooks = require('./api/_lib/up-webhooks');
 const AtlasSync = require('./api/_lib/atlas-sync.js');
 const { lineItemsResponse } = require('./api/_lib/line-items-window.js');
 
@@ -342,13 +344,14 @@ const STORE = {
   liveOpsCount: 0,
   liveCancelCount: 0,
   zoho: null,
-  // UrbanPiper (Jaddaf): orders arrive by Atlas webhook; catalogue by snapshot.
+  // UrbanPiper (Jaddaf): orders by webhook (api/up-webhook.js) or Atlas sync.
   upOrders: [],
   upOrderItems: [],
   upMeta: { lastWebhookAt: 0, webhookCount: 0, catalogAt: 0 },
   upCatalog: null,
   upItems: [],
   upConn: null,
+  upWh: {},
   // Aggregator store ratings captured from partner portals (public/ratings.js).
   brandRatings: null
 };
@@ -396,7 +399,7 @@ function preloadData() {
     try { STORE.itemsLastSync = fs.statSync(snapFile).mtimeMs; } catch (_) {}
   }
 
-  for (const [file, key] of [['up_orders.json', 'upOrders'], ['up_order_items.json', 'upOrderItems'], ['up_meta.json', 'upMeta'], ['up_catalog.json', 'upCatalog'], ['up_items.json', 'upItems'], ['up_conn.json', 'upConn']]) {
+  for (const [file, key] of [['up_orders.json', 'upOrders'], ['up_order_items.json', 'upOrderItems'], ['up_meta.json', 'upMeta'], ['up_catalog.json', 'upCatalog'], ['up_items.json', 'upItems'], ['up_conn.json', 'upConn'], ['up_wh.json', 'upWh']]) {
     const f = path.join(__dirname, 'data', file);
     if (fs.existsSync(f)) { try { STORE[key] = JSON.parse(fs.readFileSync(f, 'utf8')); } catch (_) {} }
   }
@@ -1043,6 +1046,8 @@ function sendGzip(req, res, code, obj) {
 }
 
 // ---------- UrbanPiper (Jaddaf) storage: data/ files, same io shape as Vercel's Blob ----------
+const UP_EVENTS_DIR = path.join(__dirname, 'data', 'up_events');
+let upLockChain = Promise.resolve();
 const upSave = (file, key) => async v => {
   STORE[key] = v;
   const f = path.join(__dirname, 'data', file);
@@ -1055,7 +1060,15 @@ const upFileIo = {
   readOrderItems: async () => STORE.upOrderItems, writeOrderItems: upSave('up_order_items.json', 'upOrderItems'),
   readItems: async () => STORE.upItems, writeItems: upSave('up_items.json', 'upItems'),
   writeCatalog: upSave('up_catalog.json', 'upCatalog'),
-  readConn: async () => STORE.upConn, writeConn: upSave('up_conn.json', 'upConn')
+  readConn: async () => STORE.upConn, writeConn: upSave('up_conn.json', 'upConn'),
+  // Webhook events: one file each in data/up_events/ (gitignored with data/).
+  putEvent: async (name, obj) => { fs.mkdirSync(UP_EVENTS_DIR, { recursive: true }); fs.writeFileSync(path.join(UP_EVENTS_DIR, path.basename(name)), JSON.stringify(obj)); },
+  listEvents: async () => { try { return fs.readdirSync(UP_EVENTS_DIR).filter(n => n.endsWith('.json')).map(n => ({ name: n, uploadedAt: fs.statSync(path.join(UP_EVENTS_DIR, n)).mtimeMs })); } catch (_) { return []; } },
+  readEvent: async name => { try { return JSON.parse(fs.readFileSync(path.join(UP_EVENTS_DIR, path.basename(name)), 'utf8')); } catch (_) { return null; } },
+  delEvents: async names => { names.forEach(n => { try { fs.unlinkSync(path.join(UP_EVENTS_DIR, path.basename(n))); } catch (_) {} }); },
+  readWh: async () => STORE.upWh || {}, writeWh: upSave('up_wh.json', 'upWh'),
+  // One writer of up_orders at a time inside this process.
+  withLock: fn => { const run = upLockChain.then(fn, fn); upLockChain = run.catch(() => {}); return run; }
 };
 const syncAtlas = opts => AtlasSync.syncAtlasOnce(upFileIo, opts).then(r => {
   if (r.ok) console.log(`[Atlas Sync] ${r.from}..${r.to}: ${r.listed} listed, ${r.added} new, ${r.updated} updated, ${r.removed} removed (${r.ms} ms)`);
@@ -1112,6 +1125,17 @@ http.createServer(async (req, res) => {
       } catch (e) { return sendGzip(req, res, 500, { ok: false, error: e.message }); }
     }
 
+    if (u.pathname === '/api/up-webhook') {
+      if (req.method !== 'POST') return sendGzip(req, res, 405, { ok: false, error: 'Method not allowed' });
+      let body;
+      try { body = JSON.parse(await readRequestBody(req, 2 * 1024 * 1024) || '{}'); } catch (_) { return sendGzip(req, res, 400, { ok: false, error: 'Body is not valid JSON' }); }
+      try {
+        const r = await handleUpWebhook(req.headers, body, upFileIo);
+        if (r.fold) UpWebhooks.foldOnce(upFileIo).then(f => { if (f && f.folded) console.log(`[UrbanPiper Webhook] folded ${f.folded} event(s)`); });
+        return sendGzip(req, res, r.status, r.json);
+      } catch (e) { return sendGzip(req, res, 500, { ok: false, error: 'Could not save the event' }); }
+    }
+
     if (u.pathname === '/api/up-import') {
       if (req.method !== 'POST') return sendGzip(req, res, 405, { ok: false, error: 'Method not allowed' });
       let body;
@@ -1145,7 +1169,7 @@ http.createServer(async (req, res) => {
       // Sync Now pulls both kitchens at once. Atlas (Jaddaf) finishes inside
       // this request and its exact result goes back in `atlas`; GrubCENTER
       // (Motor City) runs on and the client polls lastSync.
-      const atlasRun = syncAtlas({ catalog: u.searchParams.get('catalog') === '1' ? true : undefined }).catch(e => ({ ok: false, error: e.message }));
+      const atlasRun = UpWebhooks.foldOnce(upFileIo).then(() => syncAtlas({ catalog: u.searchParams.get('catalog') === '1' ? true : undefined })).catch(e => ({ ok: false, error: e.message }));
       if (!(CFG.email && CFG.password)) {
         return sendGzip(req, res, 200, { ok: false, configured: false, message: 'GrubCENTER credentials not configured on this server', atlas: await atlasRun });
       }
