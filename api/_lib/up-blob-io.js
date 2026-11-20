@@ -12,6 +12,7 @@ module.exports = {
   readConn: store.readUpConn, writeConn: store.writeUpConn,
   putEvent: store.putUpEvent, listEvents: store.listUpEvents, readEvent: store.readUpEvent, delEvents: store.delUpEvents,
   readWh: store.readUpWh, writeWh: store.writeUpWh, readWhPending: store.readUpWhPending, writeWhPending: store.writeUpWhPending,
+  readWhKey: store.readUpWhKey, writeWhKey: store.writeUpWhKey,
   // Every writer of up_orders.json (webhook fold, Atlas sync, pasted
   // capture) runs inside this lock.
   withLock: fn => store.withBlobLock('up_orders', fn)

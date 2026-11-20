@@ -144,5 +144,33 @@ const status = (id, state, at, msg) => ({ order_id: id, new_state: state, prev_s
   r = await handleWebhook(H, { reference_id: 'x', num_webhooks_retried: 2 }, io2);
   assert.deepStrictEqual([r.status, r.json.ignored], [200, true]); ok('retry summary callback ignored');
 
+  // 13. Adopting the key Atlas actually sends, only when Atlas confirms it
+  const io3 = memIo(); let ws = null;
+  io3.readWhKey = async () => ws; io3.writeWhKey = async v => { ws = v; };
+  const atlasKey = 'AtlasTyped16char';
+  const H3 = { 'x-fh-webhook-key': atlasKey };
+  const real = status(5001, 'Acknowledged', '2026-11-20 14:10:00');
+  const detail = { id: 5001, statusUpdates: [{ status: 'ACKNOWLEDGED', created: '2026-11-20 14:10:20' }] };
+  r = await handleWebhook(H3, real, io3);
+  assert.deepStrictEqual([r.status, !!r.adopt], [401, true]); ok('unknown key: 401 and flagged for checking');
+  let ad = await W.tryAdopt(io3, atlasKey, { ...real, biz_id: 111 }, async () => detail);
+  assert(!ad.adopted && !ws); ok('other business: never adopted');
+  ad = await W.tryAdopt(io3, atlasKey, real, async () => null);
+  assert(!ad.adopted && !ws); ok('no Atlas session: not adopted');
+  ad = await W.tryAdopt(io3, 'ForgedKey1234567', status(5001, 'Completed', '2026-11-20 14:10:00'), async () => detail);
+  assert(!ad.adopted && !ws); ok('status Atlas does not confirm: not adopted');
+  ad = await W.tryAdopt(io3, 'OtherKey12345678', status(5001, 'Acknowledged', '2026-11-20 14:20:00'), async () => detail);
+  assert(!ad.adopted && !ws); ok('time 10 minutes off: not adopted');
+  ad = await W.tryAdopt(io3, atlasKey, real, async () => detail);
+  assert.strictEqual(ad.reason, 'checked recently'); ok('same key not re-checked within a minute');
+  ad = await W.tryAdopt(io3, atlasKey, real, async () => detail, Date.now() + 61e3);
+  assert(ad.adopted && ws && ws.hash === W.sha(atlasKey) && !JSON.stringify(ws).includes(atlasKey)); ok('confirmed by Atlas: adopted, only its SHA-256 stored');
+  r = await handleWebhook(H3, relay(5002), io3);
+  assert.strictEqual(r.status, 200); ok('adopted key now accepted without the session');
+  r = await handleWebhook({ 'x-fh-webhook-key': 'AtlasTyped16chaX' }, relay(5003), io3);
+  assert.strictEqual(r.status, 401); ok('a different key is still refused');
+  r = await handleWebhook(H, relay(5004), io3);
+  assert.strictEqual(r.status, 200); ok('the Vercel key keeps working too');
+
   console.log(`\nAll ${n} checks passed.`);
 })().catch(e => { console.error('FAILED:', e.message); process.exit(1); });
