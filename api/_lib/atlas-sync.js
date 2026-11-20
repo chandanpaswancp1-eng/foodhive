@@ -218,7 +218,7 @@ async function syncAtlas(io, opts = {}) {
     let reconcile = fresh.reconcile || null;
     if (fresh.firstWebhookAt && io.readWh) {
       const inWin = finalOrders.filter(o => { const d = dubaiDay(o.receivedAt); return d >= win.from && d <= win.to; });
-      reconcile = { at: now, ...UpWebhooks.reconcile(inWin, (await io.readWh()) || {}, fresh.firstWebhookAt, win.from, win.to) };
+      reconcile = { at: now, ...UpWebhooks.reconcile(inWin, (await io.readWh()) || {}, fresh.firstRelayAt || null, win.from, win.to) };
       result.reconcile = { compared: reconcile.compared, diffs: reconcile.diffCount, missingInWebhook: reconcile.missingInWebhook.length, extraInWebhook: reconcile.extraInWebhook.length };
     }
     await io.writeMeta({ ...fresh, lastCaptureAt: now, atlasSyncTo: win.to, capturedRange: [win.from, win.to], orderCount: finalOrders.length, atlasError: null, atlasLast: result, reconcile,
