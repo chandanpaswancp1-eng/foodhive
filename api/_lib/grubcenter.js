@@ -294,7 +294,7 @@ const REOPENED_RE = /\breopen(ed)?\b/i;
 /** Fetch new GrubCENTER data and merge it into the persisted orders blob.
  * Mirrors server.js's syncGrubcenter(), but reads/writes the Blob store
  * instead of an in-memory STORE + local disk. Returns a short summary. */
-async function syncOnce(from, to, itemsFrom) {
+async function syncOnce(from, to, itemsFrom, itemsTo) {
   if (!configured()) return { skipped: true, reason: 'not configured' };
   const meta = await readMeta();
   const session = await ensureSession(meta.session);
@@ -312,6 +312,7 @@ async function syncOnce(from, to, itemsFrom) {
   // replaces these recent days, so older order-items history already in
   // the blob (e.g. backfilled locally) is left alone, not truncated.
   const orderItemsFrom = itemsFrom || from || daysAgo(7);
+  const orderItemsTo = itemsTo && itemsTo >= orderItemsFrom ? itemsTo : t;
 
   // Sequential, not parallel: each of these already fans out multiple
   // concurrent day-chunked requests internally (see fetchPaged), and
@@ -323,12 +324,12 @@ async function syncOnce(from, to, itemsFrom) {
   const rawSales = await fetchPaged(CFG.ordersPath, f, t, 25, session);
   const rawOps = await fetchPaged(CFG.opsPath, f, t, 20, session).catch(() => []);
   const rawCancels = await fetchPaged(CFG.cancelPath, f, t, 10, session).catch(() => []);
-  const rawOrderItems = await fetchPaged(CFG.orderItemsPath, orderItemsFrom, t, 25, session).catch(() => []);
+  const rawOrderItems = await fetchPaged(CFG.orderItemsPath, orderItemsFrom, orderItemsTo, 25, session).catch(() => null);
   const failedDays = {
     orders: rawSales.failedDays || [],
     ops: rawOps.failedDays || [],
     cancel: rawCancels.failedDays || [],
-    orderItems: rawOrderItems.failedDays || []
+    orderItems: rawOrderItems ? rawOrderItems.failedDays || [] : dayChunks(orderItemsFrom, orderItemsTo)
   };
 
   const opsMap = new Map();
@@ -426,8 +427,11 @@ async function syncOnce(from, to, itemsFrom) {
   // than merge-by-guessed-key, and leave anything older untouched (e.g. a
   // deeper local backfill already sitting in the blob must not be wiped out
   // just because this sync only covers the recent window).
-  const normOrderItems = N.normalizeOrderItems(rawOrderItems);
-  const touchedDays = new Set(dayChunks(orderItemsFrom, t));
+  // A day GrubCENTER did not return keeps the lines already stored for it:
+  // replacing it with nothing wiped whole days of item sales.
+  const normOrderItems = N.normalizeOrderItems(rawOrderItems || []);
+  const fetchedDays = dayChunks(orderItemsFrom, orderItemsTo).filter(d => !failedDays.orderItems.includes(d));
+  const touchedDays = new Set(fetchedDays);
   // An invalid/missing `at` makes dubaiDateKey() return "NaN-NaN-NaN", which
   // never matches touchedDays -- drop such rows instead of letting them
   // silently survive every future resync forever.
@@ -435,14 +439,21 @@ async function syncOnce(from, to, itemsFrom) {
   const existingOrderItems = await readOrderItems();
   const orderItemsArray = existingOrderItems
     .filter(x => hasValidDate(x) && !touchedDays.has(dubaiDateKey(x.at)))
-    .concat(normOrderItems.filter(hasValidDate));
+    .concat(normOrderItems.filter(x => hasValidDate(x) && touchedDays.has(dubaiDateKey(x.at))));
+  // The latest day whose lines were pulled whole after that day had ended.
+  // Until yesterday is closed, api/orders.js spends its next sync on it, so
+  // late-evening orders get their item lines (see liClosedThrough).
+  const todayKey = today();
+  const closedNow = fetchedDays.filter(d => d < todayKey).sort().pop();
+  const liClosedThrough = closedNow && closedNow > (meta.liClosedThrough || '') ? closedNow : meta.liClosedThrough;
   await writeOrderItems(orderItemsArray);
 
   await writeMeta({
     lastSync: allDaysFailed ? (meta.lastSync || 0) : Date.now(),
     session,
     liveOpsCount: rawOps.length,
-    liveCancelCount: rawCancels.length
+    liveCancelCount: rawCancels.length,
+    liClosedThrough: liClosedThrough || null
   });
 
   return {
