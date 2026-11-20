@@ -46,6 +46,9 @@
     },
     "api/up-connect.js": {
       "maxDuration": 30
+    },
+    "api/up-webhook.js": {
+      "maxDuration": 30
     }
   }
 }

@@ -2,6 +2,8 @@
    in server.js) and the browser, exactly like normalize.js.
 
    Each source reports facts ({configured, lastSync, records, error, ...});
+   a fact `staleAfter` overrides the source's limit (Jaddaf webhooks: 6 h
+   during opening hours);
    describeSources() turns them into one status per source:
      ok       fresh data
      stale    data older than the source's limit
@@ -19,7 +21,7 @@
   const SOURCES = [
     { id: 'grubcenter', name: 'GrubCENTER orders', kitchen: 'Motor City', staleAfter: 30 * MIN, what: 'Orders, ops timings, cancellations, line items' },
     { id: 'items86', name: 'GrubCENTER 86 items', kitchen: 'Motor City', staleAfter: 2 * HOUR, what: 'Item availability snapshot' },
-    { id: 'upOrders', name: 'UrbanPiper orders', kitchen: 'Jaddaf', staleAfter: DAY, what: 'Orders captured from Atlas with the bookmarklet', atlas: true },
+    { id: 'upOrders', name: 'UrbanPiper orders', kitchen: 'Jaddaf', staleAfter: DAY, what: 'Orders by UrbanPiper webhook, cross-checked with Atlas', atlas: true },
     { id: 'upCatalog', name: 'UrbanPiper catalogue', kitchen: 'Jaddaf', staleAfter: 7 * DAY, what: 'Items, prices, switched-off (86) items', atlas: true },
     { id: 'aggRatings', name: 'Aggregator ratings', kitchen: 'Group', staleAfter: 7 * DAY, what: 'Brand store ratings captured from partner portals' },
     { id: 'zoho', name: 'Zoho Books', kitchen: 'Group', staleAfter: 30 * MIN, what: 'Accounting: income, expenses, bills, invoices' }
@@ -33,7 +35,7 @@
       if (!f.configured) status = 'off';
       else if (f.error) status = 'error';
       else if (!f.lastSync) status = 'waiting';
-      else if (def.staleAfter && age > def.staleAfter) status = 'stale';
+      else if ((f.staleAfter || def.staleAfter) && age > (f.staleAfter || def.staleAfter)) status = 'stale';
       else if (f.warn) status = 'renew';
       else status = 'ok';
       return { ...def, configured: !!f.configured, lastSync: f.lastSync || 0, ageMs: age, records: f.records == null ? null : f.records, error: f.error || null, note: f.note || null, status };
