@@ -132,6 +132,21 @@ async function listIds(token, from, to) {
   throw new Error('Atlas order list has more than 50,000 orders in this window');
 }
 
+// Order detail with its charge lines (delivery vs service, for Prime Net
+// Revenue). If Atlas rejects the charges field, use the query without it
+// from then on in this instance; orders then keep deliveryCharges null.
+let chargesUnsupported = false;
+async function orderDetail(token, id, attempts) {
+  if (!chargesUnsupported) {
+    try { return await gql(token, FHAtlas.QUERIES.order, { id: +id }, attempts); } catch (e) {
+      if (e instanceof AtlasAuthError || !/charges|cannot query field|unknown field/i.test(e.message)) throw e;
+      chargesUnsupported = true;
+      console.warn('[Atlas] order charges not available: ' + e.message);
+    }
+  }
+  return gql(token, FHAtlas.QUERIES.orderBasic, { id: +id }, attempts);
+}
+
 async function fetchDetails(token, ids, from, to) {
   const out = new Array(ids.length), failed = [];
   let next = 0;
@@ -139,7 +154,7 @@ async function fetchDetails(token, ids, from, to) {
     while (next < ids.length) {
       const i = next++, id = ids[i];
       try {
-        const d = await gql(token, FHAtlas.QUERIES.order, { id: +id }, 4);
+        const d = await orderDetail(token, id, 4);
         const o = d && d.order;
         if (!o || String(o.id) !== String(id)) throw new Error('detail for another order');
         const day = String(o.created).slice(0, 10);
@@ -287,7 +302,7 @@ async function fetchOrderDetail(io, id) {
   const conn = await io.readConn();
   if (!connectionState(conn).connected) return null;
   try {
-    const d = await gql(conn.token, FHAtlas.QUERIES.order, { id: +id }, 2);
+    const d = await orderDetail(conn.token, id, 2);
     return d && d.order ? FHAtlas.fromDetail(d.order) : null;
   } catch (_) { return null; }
 }
