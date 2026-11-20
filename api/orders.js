@@ -31,11 +31,9 @@ module.exports = async (req, res) => {
   // completed at all. Settled older orders rarely change -- the daily cron
   // (api/sync-cron.js) and the explicit "Sync Now" button cover the rest.
   //
-  // Order line items cover TODAY only: they take ~20 s per day from
-  // GrubCENTER, and yesterday + today of both orders and line items ran past
-  // the 60 s limit in production (2026-11-15), so the first visit after a
-  // quiet spell never saved its sync. Yesterday's line items are refreshed by
-  // the daily cron and Sync Now.
+  // Order line items are not synced here: they run in api/order-items.js,
+  // in their own invocation, so a slow item pull can never stop new orders
+  // being saved (it did on 20 Nov 2026: syncs timed out at 60 s).
   const stale = configured() && Date.now() - (meta.lastSync || 0) > SYNC_INTERVAL_MS;
   if (stale) {
     const bgTo = to || dubaiDateKey(Date.now());
@@ -43,13 +41,8 @@ module.exports = async (req, res) => {
     // Honour a short explicit range (a specific day the client opened), but
     // never fan out to a wide selection.
     const bgFrom = from && from >= earliest && from <= bgTo ? from : dubaiDateKey(Date.now() - 864e5);
-    // Until yesterday's lines have been pulled whole after midnight, spend
-    // this run's line-item budget on yesterday instead of today, so orders
-    // placed after the last sync of the evening get their item lines. The
-    // next run (10 minutes later) goes back to today.
-    const yesterday = dubaiDateKey(Date.now() - 864e5);
-    const itemsDay = !to && (meta.liClosedThrough || '') < yesterday ? yesterday : bgTo;
-    waitUntil(syncOnce(bgFrom, bgTo, itemsDay, itemsDay).catch(() => {}));
+    // Orders only; line items sync in api/order-items.js (own invocation).
+    waitUntil(syncOnce(bgFrom, bgTo).catch(() => {}));
   }
   // Jaddaf (Atlas) on the same 10-minute rhythm while a connection is live.
   // Orders only; the catalogue is refreshed by Sync Now and the cron.

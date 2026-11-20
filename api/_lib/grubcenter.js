@@ -294,25 +294,16 @@ const REOPENED_RE = /\breopen(ed)?\b/i;
 /** Fetch new GrubCENTER data and merge it into the persisted orders blob.
  * Mirrors server.js's syncGrubcenter(), but reads/writes the Blob store
  * instead of an in-memory STORE + local disk. Returns a short summary. */
-async function syncOnce(from, to, itemsFrom, itemsTo) {
+// Orders, ops timings and cancellations only. Order line items are synced
+// by syncLineItems() in their own function invocation (api/order-items.js),
+// because one day of line items can take 20-40 s: inside this sync they
+// pushed it past the 60 s limit and the killed run saved nothing, so new
+// orders went unsaved for half an hour (production, 20 Nov 2026).
+async function syncOnce(from, to) {
   if (!configured()) return { skipped: true, reason: 'not configured' };
   const meta = await readMeta();
   const session = await ensureSession(meta.session);
   const f = from || daysAgo(45), t = to || today();
-  // order-items has far more rows per day than orders (several lines per
-  // order) and needs proportionally more pages/requests per day -- fetching
-  // the full 45-day window for it here blew past Vercel's function duration
-  // limit ("Task timed out after 300 seconds", confirmed in production
-  // runtime logs) and, worse, did so *silently*: fetchDayWithRetry swallows
-  // per-day failures and returns [], so the sync "succeeded" while quietly
-  // writing only a couple of days of order-items instead of the requested
-  // 45 -- orders/ops/cancel stayed complete because they're much lighter.
-  // A shorter, reliably-completable window keeps whatever IS synced
-  // trustworthy; the per-day merge-by-touched-days logic below only
-  // replaces these recent days, so older order-items history already in
-  // the blob (e.g. backfilled locally) is left alone, not truncated.
-  const orderItemsFrom = itemsFrom || from || daysAgo(7);
-  const orderItemsTo = itemsTo && itemsTo >= orderItemsFrom ? itemsTo : t;
 
   // Sequential, not parallel: each of these already fans out multiple
   // concurrent day-chunked requests internally (see fetchPaged), and
@@ -324,12 +315,10 @@ async function syncOnce(from, to, itemsFrom, itemsTo) {
   const rawSales = await fetchPaged(CFG.ordersPath, f, t, 25, session);
   const rawOps = await fetchPaged(CFG.opsPath, f, t, 20, session).catch(() => []);
   const rawCancels = await fetchPaged(CFG.cancelPath, f, t, 10, session).catch(() => []);
-  const rawOrderItems = await fetchPaged(CFG.orderItemsPath, orderItemsFrom, orderItemsTo, 25, session).catch(() => null);
   const failedDays = {
     orders: rawSales.failedDays || [],
     ops: rawOps.failedDays || [],
-    cancel: rawCancels.failedDays || [],
-    orderItems: rawOrderItems ? rawOrderItems.failedDays || [] : dayChunks(orderItemsFrom, orderItemsTo)
+    cancel: rawCancels.failedDays || []
   };
 
   const opsMap = new Map();
@@ -421,39 +410,13 @@ async function syncOnce(from, to, itemsFrom, itemsTo) {
   const allDaysFailed = rawSales.length === 0 && (rawSales.failedDays || []).length === rangeDays;
   if (allDaysFailed) console.warn(`[sync] order-details failed for every day in ${f}..${t}; leaving lastSync untouched so the next request retries`);
 
-  // Line items: [orderItemsFrom, t] (not the wider [f, t]) is re-fetched in
-  // full each sync, so it's the authoritative set for every day in THAT
-  // window -- replace whatever the store already held for those days rather
-  // than merge-by-guessed-key, and leave anything older untouched (e.g. a
-  // deeper local backfill already sitting in the blob must not be wiped out
-  // just because this sync only covers the recent window).
-  // A day GrubCENTER did not return keeps the lines already stored for it:
-  // replacing it with nothing wiped whole days of item sales.
-  const normOrderItems = N.normalizeOrderItems(rawOrderItems || []);
-  const fetchedDays = dayChunks(orderItemsFrom, orderItemsTo).filter(d => !failedDays.orderItems.includes(d));
-  const touchedDays = new Set(fetchedDays);
-  // An invalid/missing `at` makes dubaiDateKey() return "NaN-NaN-NaN", which
-  // never matches touchedDays -- drop such rows instead of letting them
-  // silently survive every future resync forever.
-  const hasValidDate = x => !dubaiDateKey(x.at).includes('NaN');
-  const existingOrderItems = await readOrderItems();
-  const orderItemsArray = existingOrderItems
-    .filter(x => hasValidDate(x) && !touchedDays.has(dubaiDateKey(x.at)))
-    .concat(normOrderItems.filter(x => hasValidDate(x) && touchedDays.has(dubaiDateKey(x.at))));
-  // The latest day whose lines were pulled whole after that day had ended.
-  // Until yesterday is closed, api/orders.js spends its next sync on it, so
-  // late-evening orders get their item lines (see liClosedThrough).
-  const todayKey = today();
-  const closedNow = fetchedDays.filter(d => d < todayKey).sort().pop();
-  const liClosedThrough = closedNow && closedNow > (meta.liClosedThrough || '') ? closedNow : meta.liClosedThrough;
-  await writeOrderItems(orderItemsArray);
 
   await writeMeta({
+    ...(await readMeta()),
     lastSync: allDaysFailed ? (meta.lastSync || 0) : Date.now(),
     session,
     liveOpsCount: rawOps.length,
-    liveCancelCount: rawCancels.length,
-    liClosedThrough: liClosedThrough || null
+    liveCancelCount: rawCancels.length
   });
 
   return {
@@ -462,9 +425,41 @@ async function syncOnce(from, to, itemsFrom, itemsTo) {
     newCount,
     opsCount: rawOps.length,
     cancelCount: rawCancels.length,
-    orderItemsCount: orderItemsArray.length,
     failedDays
   };
+}
+
+// Order line items, one day per call, in its own function invocation
+// (api/order-items.js, the cron). Until yesterday's lines have been pulled
+// whole after midnight (liClosedThrough), the day is yesterday, so orders
+// placed after the evening's last sync get their lines; otherwise today.
+// A day GrubCENTER does not return keeps its stored lines. State lives in
+// li_meta.json, apart from meta.json, so this and syncOnce never overwrite
+// each other's fields.
+const LI_META_KEY = 'li_meta.json';
+const readLiMeta = () => readBlobJson(LI_META_KEY, { lastSync: 0, liClosedThrough: null });
+async function syncLineItems(opts = {}) {
+  if (!configured()) return { skipped: true, reason: 'not configured' };
+  const li = await readLiMeta();
+  const todayKey = today(), yesterday = daysAgo(1);
+  const day = opts.day || ((li.liClosedThrough || '') < yesterday ? yesterday : todayKey);
+  // Claim the run first: other instances skip it for 10 minutes, and a run
+  // that dies is not retried on every page load.
+  await writeBlobJson(LI_META_KEY, { ...li, lastAttempt: Date.now() });
+  const session = await ensureSession((await readMeta()).session);
+  const raw = await fetchPaged(CFG.orderItemsPath, day, day, 25, session);
+  if ((raw.failedDays || []).includes(day)) {
+    await writeBlobJson(LI_META_KEY, { ...li, lastAttempt: Date.now(), lastError: `GrubCENTER did not return ${day}` });
+    return { ok: false, day, error: `GrubCENTER did not return ${day}; stored lines kept` };
+  }
+  const hasValidDate = x => !dubaiDateKey(x.at).includes('NaN');
+  const fresh = N.normalizeOrderItems(raw).filter(x => hasValidDate(x) && dubaiDateKey(x.at) === day);
+  const existing = await readOrderItems();
+  const next = existing.filter(x => hasValidDate(x) && dubaiDateKey(x.at) !== day).concat(fresh);
+  await writeOrderItems(next);
+  const closed = day < todayKey && day > (li.liClosedThrough || '') ? day : li.liClosedThrough;
+  await writeBlobJson(LI_META_KEY, { lastSync: Date.now(), lastAttempt: Date.now(), lastDay: day, lines: fresh.length, liClosedThrough: closed || null, lastError: null });
+  return { ok: true, day, lines: fresh.length, total: next.length };
 }
 
 // 86 items, run in its OWN function invocation (see api/availability.js),
@@ -579,4 +574,4 @@ function liveNormalize(rawSales, rawCancels, official) {
     (!official || (o.brand && official.has(String(o.brand).toLowerCase().trim()))));
 }
 
-module.exports = { CFG, configured, ensureSession, findPartnerId, fetchPaged, syncOnce, syncItems, readItemsMeta, liveToday, liveNormalize, readOrders, writeOrders, readItems, readOrderItems, writeOrderItems, readMeta, dubaiDateKey };
+module.exports = { CFG, configured, ensureSession, findPartnerId, fetchPaged, syncOnce, syncLineItems, readLiMeta, syncItems, readItemsMeta, liveToday, liveNormalize, readOrders, writeOrders, readItems, readOrderItems, writeOrderItems, readMeta, dubaiDateKey };

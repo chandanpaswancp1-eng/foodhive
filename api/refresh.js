@@ -53,7 +53,9 @@ module.exports = async (req, res) => {
 
   const to = url.searchParams.get('to') || dubaiDateKey(Date.now());
   const from = clampFrom(url.searchParams.get('from'), to);
-  waitUntil(syncOnce(from, to, from).catch(() => {}));
+  // Orders now; line items for today (or yesterday until it is closed) in
+  // their own run, started by the client's next /api/order-items call.
+  waitUntil(syncOnce(from, to).catch(() => {}));
   const atlas = await atlasRun;
   res.status(200).json({ ok: true, configured: true, message: 'Sync started', from, to, atlas });
 };

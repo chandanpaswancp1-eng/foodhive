@@ -5,7 +5,7 @@
  * whenever the cache is stale on a normal page load, so this is just a daily
  * baseline refresh (both GrubCENTER and Zoho) even if the dashboard sits
  * unopened for a while. */
-const { syncOnce, dubaiDateKey } = require('./_lib/grubcenter');
+const { syncOnce, syncLineItems, dubaiDateKey } = require('./_lib/grubcenter');
 const { syncOnce: syncZohoOnce } = require('./_lib/zoho');
 const { syncAtlasOnce } = require('./_lib/atlas-sync');
 const upIo = require('./_lib/up-blob-io');
@@ -21,14 +21,13 @@ module.exports = async (req, res) => {
   }
   try {
     // Must finish inside 60 s, or nothing is saved. 14 days of orders plus
-    // 8 days of line items timed out every night (18-20 Nov 2026), so the
-    // cron saved nothing. Now: 7 days of orders (late cancellations and
-    // timings) and only yesterday's line items (~20 s; it closes the day
-    // for api/orders.js). Zoho and Atlas are separate services, so they run
-    // alongside GrubCENTER instead of after it.
+    // 8 days of line items timed out every night (18-20 Nov 2026). Now, all
+    // side by side: 7 days of orders (late cancellations and timings),
+    // yesterday's line items (closes the day), Zoho and Atlas.
     const yesterday = dubaiDateKey(Date.now() - 864e5);
-    const [result, zohoResult, atlasResult] = await Promise.all([
-      syncOnce(dubaiDateKey(Date.now() - 7 * 864e5), dubaiDateKey(Date.now()), yesterday, yesterday),
+    const [result, lineItems, zohoResult, atlasResult] = await Promise.all([
+      syncOnce(dubaiDateKey(Date.now() - 7 * 864e5), dubaiDateKey(Date.now())),
+      syncLineItems({ day: yesterday }).catch(e => ({ ok: false, error: e.message })),
       syncZohoOnce().catch(e => ({ error: e.message })),
       // Jaddaf: ask UrbanPiper to resend failed webhook deliveries, fold
       // what arrived, then the Atlas sync (only while a session is live).
@@ -39,7 +38,7 @@ module.exports = async (req, res) => {
         return { ...sync, webhookRetry: retry, fold };
       })()
     ]);
-    res.status(200).json({ ...result, zoho: zohoResult, atlas: atlasResult });
+    res.status(200).json({ ...result, lineItems, zoho: zohoResult, atlas: atlasResult });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
