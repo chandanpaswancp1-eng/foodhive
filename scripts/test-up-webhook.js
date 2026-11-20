@@ -140,6 +140,13 @@ const status = (id, state, at, msg) => ({ order_id: id, new_state: state, prev_s
   rc = W.reconcile([{ ...wo, discount: 30 }], io.st.wh, 1, '2026-11-20', '2026-11-20');
   assert.deepStrictEqual([rc.diffCount, rc.diffs[0].field], [1, 'discount']); ok('cross-check: a 3.50 discount difference is reported');
 
+  rc = W.reconcile([{ ...wo, id: 'up_9999', receivedAt: Date.now() }], {}, null, '2026-11-20', '2026-11-20');
+  assert.strictEqual(rc.missingInWebhook.length, 0); ok('cross-check: no order expected by webhook before the first Order placed delivery');
+  rc = W.reconcile([{ ...wo, id: 'up_9999', receivedAt: Date.now() }], {}, Date.now() - 3600e3, '2026-11-20', '2026-11-20');
+  assert.strictEqual(rc.missingInWebhook.length, 1); ok('cross-check: an order after it with no webhook copy is reported');
+  const io4 = memIo(); await handleWebhook(H, relay(6001), io4); await W.fold(io4);
+  assert(io4.st.meta.firstRelayAt > 0); ok('first Order placed delivery recorded');
+
   // 12. Unknown payloads are acknowledged and ignored
   r = await handleWebhook(H, { reference_id: 'x', num_webhooks_retried: 2 }, io2);
   assert.deepStrictEqual([r.status, r.json.ignored], [200, true]); ok('retry summary callback ignored');

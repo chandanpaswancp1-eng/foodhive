@@ -148,7 +148,11 @@ async function fold(io, now = Date.now()) {
     for (const [id, v] of Object.entries(whDoc)) if ((FHAtlas.atlasTime(v.raw && v.raw.created) || 0) < cutoff) delete whDoc[id];
     await Promise.all([io.writeOrders(outOrders), io.writeOrderItems(r.lines), io.writeWh(whDoc)]);
     const lastEvent = evs.reduce((m, e) => Math.max(m, e.at || 0), meta.lastWebhookAt || 0);
+    const relayed = evs.some(e => e.kind === 'relay' && done.includes(e._name));
     await io.writeMeta({ ...meta, lastWebhookAt: lastEvent, lastFoldAt: now, firstWebhookAt: meta.firstWebhookAt || now,
+      // Orders are expected by webhook only from the first Order placed
+      // delivery on (status updates may start earlier); see reconcile().
+      firstRelayAt: meta.firstRelayAt || (relayed ? now : null),
       webhookCount: (meta.webhookCount || 0) + done.length, webhookOrphans: (meta.webhookOrphans || 0) + orphans,
       orderCount: outOrders.length, purgedPreLive: (meta.purgedPreLive || 0) + (r.purgedPreLive || 0), webhookError: null });
     await io.delEvents(done);
@@ -168,8 +172,9 @@ function foldOnce(io) {
 }
 
 // Cross-check: the Atlas order records (authoritative) against the webhook
-// copies of the same orders, to the fils. Orders created before the first
-// webhook are not expected to have a copy.
+// copies of the same orders, to the fils. An order is expected to have a
+// copy only if it was created after the first Order placed delivery
+// (firstRelayAt); before that, none are.
 const FIELDS = ['status', 'cancelled', 'brand', 'channel', 'receiptTotal', 'discount', 'netSales', 'charges'];
 function reconcile(atlasOrders, whDoc, firstWebhookAt, from, to) {
   const diffs = [], missing = [], extra = [];
