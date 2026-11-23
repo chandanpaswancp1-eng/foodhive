@@ -170,7 +170,10 @@ nav a.on { background: #fff; border-color: var(--k); }
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  align-items: stretch;
+  /* Boxes keep their natural height; stretching left Channel, Brand etc.
+     ~110px tall with empty space under each dropdown. */
+  align-items: flex-start;
+  align-content: flex-start;
   margin-bottom: 10px;
 }
 .fbox {
@@ -181,6 +184,9 @@ nav a.on { background: #fff; border-color: var(--k); }
   min-width: 120px;
   box-shadow: 0 1px 2px rgba(0,0,0,0.03);
 }
+/* A long option (e.g. a cancellation reason) no longer widens its box
+   across the whole filter row; the select truncates it instead. */
+.fbox:not(.dates) { max-width: 240px; }
 .fbox label {
   display: flex;
   justify-content: space-between;
@@ -265,7 +271,7 @@ nav a.on { background: #fff; border-color: var(--k); }
 .msel-list li.on { background: var(--y); font-weight: 700; }
 .msel-list li input { pointer-events: none; }
 .fbox.dates {
-  min-width: 340px;
+  min-width: min(340px, 100%);
   padding: 8px 12px 10px;
   display: flex;
   flex-direction: column;
@@ -382,12 +388,15 @@ nav a.on { background: #fff; border-color: var(--k); }
 /* Top flex row (KPIs on left, Filters on right) */
 .top-row-flex {
   display: flex;
+  /* When the KPI band leaves the filters too little room, they move to
+     their own row instead of being squeezed and spilling off the page. */
+  flex-wrap: wrap;
   gap: 12px;
   align-items: flex-start;
   margin-bottom: 10px;
 }
 .top-row-flex .kpis { flex: 0 0 auto; margin-bottom: 0; }
-.top-row-flex .filters { flex: 1; margin-bottom: 0; justify-content: flex-end; }
+.top-row-flex .filters { flex: 1 1 420px; min-width: 0; margin-bottom: 0; justify-content: flex-end; }
 
 /* ================= KPIS ================= */
 .kpis { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
@@ -928,22 +937,17 @@ td:first-child { text-align: left; font-weight: 700; }
   from { opacity: 0; transform: translateY(12px); }
   to { opacity: 1; transform: none; }
 }
-.panel { transition: transform 0.18s ease, box-shadow 0.18s ease; }
-.panel:hover { transform: translateY(-2px); box-shadow: 0 8px 18px rgba(0,0,0,0.08); }
-.pb canvas { transition: filter 0.15s ease; }
-.panel:hover .pb canvas { filter: brightness(1.02); }
+/* Panels stay still on hover: moving a chart while the user aims at a bar
+   or tooltip makes it harder to read. */
 
 /* Sidebar nav motion */
-nav a { transition: background 0.2s ease, transform 0.15s ease, box-shadow 0.2s ease; }
-nav a:hover { transform: translateX(3px); }
+nav a { transition: background 0.2s ease, box-shadow 0.2s ease; }
 nav a.on { animation: navPop 0.28s ease; box-shadow: 0 2px 6px rgba(0,0,0,0.12); }
 @keyframes navPop {
   0% { transform: scale(.93); }
   55% { transform: scale(1.03); }
   100% { transform: scale(1); }
 }
-nav a img { transition: transform 0.2s ease; }
-nav a:hover img { transform: scale(1.08) rotate(-2deg); }
 
 /* Buttons: press + hover feedback */
 .btn-dark, .btn-yellow { transition: transform 0.12s ease, box-shadow 0.12s ease; }
@@ -1077,11 +1081,7 @@ tbody tr[onclick]:hover, tr.daily-row:hover { filter: brightness(0.95); }
 .cal-table td { text-align: left; }
 .cal-table td.num { text-align: right; }
 
-/* KPI row on the Targets page: equal tiles, same 10px gap as the panels below. */
-#kpi-targets { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
-#kpi-targets .kpi { flex: none; min-width: 0; }
-#kpi-targets .kpi.wide { flex: none; }
-#kpi-targets .kpi .kv { font-size: 24px; overflow-wrap: anywhere; }
+/* Targets KPIs use the shared clustered band (KPI_CLUSTERS.targets in app.js). */
 #kpi-targets .kpi .kv .muted { font-size: 11px; }
 
 /* Click-to-detail: clickable items show a pointer, hover and focus state. */
@@ -1171,6 +1171,11 @@ tbody tr[onclick]:hover, tr.daily-row:hover { filter: brightness(0.95); }
 .kpis--clustered .kpi-cluster-h { display: flex; align-items: center; gap: 6px; padding: 0 14px; font: 700 10.5px/1.2 inherit; letter-spacing: .08em; color: #5f5f5f; }
 .kpis--clustered .kpi-cluster-h::before { content: ''; width: 6px; height: 6px; border-radius: 2px; background: #FDCB3C; flex: none; }
 .kpis--clustered .kpi-cluster-row { gap: 0; }
+/* Full-width bands share the row by tile weight (flex-grow set in app.js).
+   With an auto basis a long note (Projected Month-End) pushed a cluster to
+   its own row at ~1400px even though every cluster fitted side by side. */
+.page > .kpis--clustered .kpi-cluster { flex-basis: 0; min-width: min-content; }
+@media (max-width: 900px) { .page > .kpis--clustered .kpi-cluster { flex-basis: 100%; min-width: 0; } }
 .kpis--clustered .kpi { background: transparent; border: 0; border-left: 1px solid #eef1f2; border-radius: 0; box-shadow: none; padding: 6px 14px 11px; display: flex; flex-direction: column; gap: 2px; transform: none; }
 .kpis--clustered .kpi:first-child { border-left: 0; }
 .kpis--clustered .kpi:hover { background: #fffbea; transform: none; box-shadow: none; }
@@ -1223,3 +1228,35 @@ tbody tr[onclick]:hover, tr.daily-row:hover { filter: brightness(0.95); }
 /* Note inside a KPI value (e.g. Lowest Aggregator Rating: brand · aggregator) */
 .kpi .kv .muted.small { font-size: 11px; font-weight: 500; }
 .agg-actions .btn-yellow { background: #fff; color: #1d1d1d; border: 1px solid #1d1d1d; }
+
+/* ---------- Keyboard focus ---------- */
+nav a:focus-visible, .nav-sec-h:focus-visible, .tg:focus-visible, .pp-btn:focus-visible,
+.seg button:focus-visible, .btn-sync:focus-visible, .btn-dark:focus-visible, .btn-yellow:focus-visible,
+.ico-btn:focus-visible, .sources-pill:focus-visible, .msel-btn:focus-visible {
+  outline: 2px solid var(--k); outline-offset: 2px;
+}
+.btn-dark:focus-visible, .tg.on:focus-visible, .pp-btn.on:focus-visible, .seg button.on:focus-visible { outline-color: var(--blue); }
+
+/* ---------- Small screens: sidebar on top, content full width ---------- */
+@media (max-width: 760px) {
+  .app { flex-direction: column; }
+  .side { width: auto; height: auto; position: static; overflow: visible; padding: 10px 16px; }
+  .logo-card { max-width: 170px; }
+  .side-icons { justify-content: flex-start; }
+  .nav-sec { display: flex; flex-wrap: wrap; gap: 4px 6px; }
+  .nav-sec-h { flex-basis: 100%; }
+  nav a { margin-bottom: 0; padding: 3px 8px 3px 4px; }
+  nav a img { width: 28px; height: 28px; }
+  .side-foot { margin-top: 10px; }
+  .main { padding: 12px 16px 24px; }
+  .top-row-flex { flex-direction: column; align-items: stretch; }
+  .top-row-flex .filters { justify-content: flex-start; }
+  .fbox { flex: 1 1 140px; }
+  .prep-wrap, .rt-wrap { flex-direction: column; }
+  .range-col, .lists { width: auto; }
+  .lists { flex-direction: row; }
+  .lists .listbox { flex: 1; min-width: 0; }
+  .g-prep, .g-prep2, .g-delayed, .g-ratings, .g-export, .g-targets { grid-template-columns: 1fr; }
+  .g-ratings .panel.wide, .g-targets > .panel { grid-column: auto; }
+  .tbl-wrap { overflow-x: auto; }
+}

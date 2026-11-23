@@ -12,6 +12,8 @@ Chart.register(ChartDataLabels);
 Chart.defaults.font.family = "'Segoe UI', Inter, Arial, sans-serif";
 Chart.defaults.font.size = 11;
 Chart.defaults.plugins.datalabels.display = false;
+// A bar never grows into a full-width slab when only 1-3 categories exist.
+Chart.defaults.datasets.bar.maxBarThickness = 64;
 // Animations off: Chart.js only builds its per-property Animation object when
 // duration is truthy (see Animations._createAnimations); with it on, any
 // property whose from/to/current value resolves to `undefined` (e.g. an
@@ -167,8 +169,11 @@ const baseOpts = (extra = {}) => {
   return Object.assign(base, rest);
 };
 
-const lbl = (fmt, o = {}) => Object.assign({ display: true, anchor: 'end', align: 'end', font: { size: 10, weight: '600' }, color: K, formatter: fmt, clamp: true }, o);
-const pctLbl = () => ({ display: true, align: 'bottom', offset: 6, backgroundColor: 'rgba(255,255,255,.9)', borderRadius: 3, padding: 1, color: K, font: { size: 10, weight: '600' }, formatter: v => v.toFixed(1) + '%' });
+// Labels skip zero values (they piled up as "0.00" on empty hours and
+// covered axis labels) and hide when they would overlap another label.
+const lblShow = ctx => { const v = ctx.dataset.data[ctx.dataIndex]; return v == null || +v === 0 ? false : 'auto'; };
+const lbl = (fmt, o = {}) => Object.assign({ display: lblShow, anchor: 'end', align: 'end', font: { size: 10, weight: '600' }, color: K, formatter: fmt, clamp: true }, o);
+const pctLbl = () => ({ display: lblShow, align: 'bottom', offset: 6, backgroundColor: 'rgba(255,255,255,.9)', borderRadius: 3, padding: 1, color: K, font: { size: 10, weight: '600' }, formatter: v => v.toFixed(1) + '%' });
 const gridless = { grid: { display: false } };
 
 /** Cross-filter on bar click */
@@ -210,7 +215,7 @@ function combo(id, rows, { vk = 'v', name = 'Value', pctName = '%GT', fmt = mone
   if (!horizontal) {
     ds.push({
       type: 'line', label: pctName, data: rows.map(r => r[vk] / total * 100),
-      borderColor: BLUE, backgroundColor: BLUE, borderWidth: 1.6, pointRadius: 2, tension: .35, yAxisID: 'y1', order: 1,
+      borderColor: BLUE, backgroundColor: BLUE, borderWidth: 1.6, pointRadius: 2, cubicInterpolationMode: 'monotone', yAxisID: 'y1', order: 1,
       datalabels: many ? { display: false } : pctLbl()
     });
     scales.y1 = { position: 'right', beginAtZero: true, grid: { display: false }, ticks: { callback: v => v + '%', maxTicksLimit: 5 } };
@@ -286,13 +291,13 @@ function lineChart(id, labels, series, { fmt = money, smooth = true, fill = fals
       labels,
       datasets: series.map(s => ({
         label: s.name, data: s.data, borderColor: s.color, backgroundColor: s.color, borderWidth: 2,
-        pointRadius: labels.length > 60 ? 0 : 2, tension: smooth ? .35 : 0, fill,
+        pointRadius: labels.length > 60 ? 0 : labels.length < 3 ? 4 : 2, tension: 0, cubicInterpolationMode: smooth ? 'monotone' : 'default', fill,
         datalabels: dl ? lbl(fmt, { align: 'top', anchor: 'end' }) : { display: false }
       }))
     },
     options: baseOpts({
       plugins: { legend: { display: series.length > 1, position: 'top', align: 'start', labels: { boxWidth: 8, boxHeight: 8, font: { size: 10 } } } },
-      scales: { x: { ...gridless, ticks: { maxTicksLimit: 12, font: { size: 10 } } }, y: { beginAtZero: false, ticks: { callback: fmt, maxTicksLimit: 6 }, grid: { color: '#eee' } } }
+      scales: { x: { ...gridless, offset: labels.length < 3, ticks: { maxTicksLimit: 12, font: { size: 10 } } }, y: { beginAtZero: false, ticks: { callback: fmt, maxTicksLimit: 6 }, grid: { color: '#eee' } } }
     })
   });
 }
@@ -921,6 +926,8 @@ const KPI_CLUSTERS = {
   delayed: [['Delays', ['Delayed Orders', 'Total Orders']], ['Rates', ['Delayed %', 'Avg Delay (min)']]],
   commission: [['Commission', ['Total Commission', 'Net after Commission']], ['Rates', ['Blended Commission %', 'Commission % of Gross Sales']], ['Top channel', ['Highest-Commission Channel']]],
   ebitda: [['Profit', ['Net Sales', 'EBITDA', 'EBITDA Margin %']], ['Cost ratios', ['Food Cost %', 'Prime Cost %', 'Portal Commission %', 'Controllable Profit %']], ['Report', ['Download P&L (PDF)']]],
+  // Planning-mode and live-month tile names both listed; only one set shows at a time.
+  targets: [['Target', ['Net Sales Target', 'Status']], ['Progress', ['Projected Net Sales', 'Achieved MTD', 'Projected % of Target', 'Achievement %', 'Gap to Target']], ['Pace', ['Target / Day vs Run-rate / Day', 'Need / Day vs Current / Day', 'Projected Month-End', 'Projected Orders', 'Orders vs Target']]],
   comparison: [['Sales', ['Net Sales Today', 'Net Sales Yesterday']], ['Change', ['Day-over-Day', 'Week-over-Week']], ['Brands', ['Top Gaining Brand', 'Top Declining Brand']]],
   accounting: ACCOUNTING_GROUPS
 };
@@ -1769,7 +1776,7 @@ function renderCancel() {
       labels: tr.map(r => r.k.slice(5)),
       datasets: [
         { type: 'bar', label: val ? 'Orders Value' : 'Cancelled Orders', data: tr.map(mv), backgroundColor: cBarColors, yAxisID: 'y', order: 2, datalabels: tr.length > 32 ? { display: false } : lbl(lbf) },
-        { type: 'line', label: '%GT Cancelled Orders', data: tr.map(r => r.orders / tot * 100), borderColor: BLUE, backgroundColor: BLUE, borderWidth: 1.6, pointRadius: 2, tension: .35, yAxisID: 'y1', order: 1, datalabels: tr.length > 32 ? { display: false } : pctLbl() }
+        { type: 'line', label: '%GT Cancelled Orders', data: tr.map(r => r.orders / tot * 100), borderColor: BLUE, backgroundColor: BLUE, borderWidth: 1.6, pointRadius: 2, cubicInterpolationMode: 'monotone', yAxisID: 'y1', order: 1, datalabels: tr.length > 32 ? { display: false } : pctLbl() }
       ]
     },
     options: cTrendOpts
@@ -2018,7 +2025,7 @@ function renderRatings() {
         labels: rows.map(r => r.k),
         datasets: [
           { type: 'bar', label: rf === 'neg' ? 'Negative Ratings (≤3★)' : rf === 'pos' ? 'Positive Ratings (4-5★)' : 'Total Ratings', data: rows.map(r => r.n), backgroundColor: rf === 'neg' ? '#ee2a5c' : color, yAxisID: 'y', order: 2, datalabels: lbl(v => v) },
-          { type: 'line', label: S.ui.rmode === 'strict' ? 'Average Rating' : 'Avg Rating (ops estimate)', data: rows.map(r => +r.a.toFixed(1)), borderColor: K, backgroundColor: K, borderWidth: 1.6, pointRadius: 2, tension: .3, yAxisID: 'y1', order: 1, datalabels: { display: rows.length < 26, align: 'top', backgroundColor: 'rgba(255,255,255,.85)', borderRadius: 3, padding: 1, font: { size: 10, weight: '600' }, color: K } }
+          { type: 'line', label: S.ui.rmode === 'strict' ? 'Average Rating' : 'Avg Rating (ops estimate)', data: rows.map(r => +r.a.toFixed(1)), borderColor: K, backgroundColor: K, borderWidth: 1.6, pointRadius: 2, cubicInterpolationMode: 'monotone', yAxisID: 'y1', order: 1, datalabels: { display: rows.length < 26, align: 'top', backgroundColor: 'rgba(255,255,255,.85)', borderRadius: 3, padding: 1, font: { size: 10, weight: '600' }, color: K } }
         ]
       },
       options: opts
@@ -2540,7 +2547,7 @@ function renderDelayed() {
         datasets: [
           { type: 'bar', label: isOnlyDelayed ? 'Delayed Orders' : 'Completed Orders', data: rows.map(r => r.c), backgroundColor: isOnlyDelayed ? '#ee2a5c' : Y, yAxisID: 'y', order: 3, datalabels: lbl(v => v) },
           { type: 'bar', label: 'Delayed >10 Minutes', data: rows.map(r => r.d), backgroundColor: GREY, yAxisID: 'y', order: 2, datalabels: lbl(v => v) },
-          { type: 'line', label: '>10 Minutes %', data: rows.map(r => r.c ? r.d / r.c * 100 : 0), borderColor: K, backgroundColor: K, borderWidth: 1.6, pointRadius: 2, tension: .3, yAxisID: 'y1', order: 1, datalabels: { display: rows.length < 20, align: 'top', backgroundColor: 'rgba(255,255,255,.85)', borderRadius: 3, padding: 1, font: { size: 10, weight: '600' }, color: K, formatter: v => v.toFixed(0) + '%' } }
+          { type: 'line', label: '>10 Minutes %', data: rows.map(r => r.c ? r.d / r.c * 100 : 0), borderColor: K, backgroundColor: K, borderWidth: 1.6, pointRadius: 2, cubicInterpolationMode: 'monotone', yAxisID: 'y1', order: 1, datalabels: { display: rows.length < 20, align: 'top', backgroundColor: 'rgba(255,255,255,.85)', borderRadius: 3, padding: 1, font: { size: 10, weight: '600' }, color: K, formatter: v => v.toFixed(0) + '%' } }
         ]
       },
       options: opts
@@ -4261,7 +4268,7 @@ function renderTargets() {
     ['Achievement %', pctTxt, false, noop, false, 'Achieved Net Sales / Net Sales target.', ''],
     ['Gap to Target', gapTxt, false, noop, false, 'Target minus achieved. Negative means the target is already beaten.', ''],
     ['Need / Day vs Current / Day', hasTarget && ach.remainingDays ? `${money(ach.requiredDaily)} / ${money(ach.currentDaily)}` : money(ach.currentDaily), true, noop, false, 'Net Sales per day still needed to hit target, against the current daily run-rate.', ''],
-    ['Projected Month-End', money(ach.projected) + (hasTarget ? ` <span class="muted small">(${pc(ach.projected / tgt.sales, 0)} of target)</span>` : ''), false, noop, false, 'Current daily run-rate x days in month.', ''],
+    ['Projected Month-End', money(ach.projected) + (hasTarget ? `<div class="muted small">(${pc(ach.projected / tgt.sales, 0)} of target)</div>` : ''), false, noop, false, 'Current daily run-rate x days in month.', ''],
     ['Orders vs Target', ordAch.target ? `${cnt(live.length)} / ${cnt(ordAch.target)}` : cnt(live.length), false, noop, false, 'Non-cancelled orders this month against the orders target.', ''],
     ['Status', ragChip(rag), false, noop, false, 'On track: achieved is at least 98% of the pro-rated target for today. At risk: 90% to 98%. Off track: below 90%.', '']
   ];

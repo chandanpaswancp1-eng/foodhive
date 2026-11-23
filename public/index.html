@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>FOOD HIVE · Operations &amp; Sales Dashboard</title>
 <link rel="icon" href="assets/favicon.png">
-<link rel="stylesheet" href="style.css?v=3.34">
+<link rel="stylesheet" href="style.css?v=3.36">
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.2.0/dist/chartjs-plugin-datalabels.min.js"></script>
 <!-- xlsx-js-style: a drop-in SheetJS fork (same XLSX.* API used for CSV/XLSX import)
@@ -34,27 +34,27 @@
 
     <nav id="nav">
       <div class="nav-sec" data-sec="sales"><button type="button" class="nav-sec-h">Sales</button>
-      <a data-page="sales"><img src="assets/sales.png" alt=""><span>Order Details</span></a>
-      <a data-page="comparison"><img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48' width='48' height='48'%3E%3Ccircle cx='24' cy='24' r='20' fill='%23FDCB3C' stroke='%231d1d1d' stroke-width='2.5'/%3E%3Crect x='13' y='24' width='6' height='12' fill='%231d1d1d'/%3E%3Crect x='21' y='18' width='6' height='18' fill='%231d1d1d'/%3E%3Cpolyline points='30,20 35,14 29,14 35,14 35,20' fill='none' stroke='%231d1d1d' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E" alt=""><span>Comparison</span></a>
-      <a data-page="targets"><img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48' width='48' height='48'%3E%3Ccircle cx='24' cy='24' r='20' fill='%23FDCB3C' stroke='%231d1d1d' stroke-width='2.5'/%3E%3Ccircle cx='24' cy='24' r='11' fill='none' stroke='%231d1d1d' stroke-width='2.4'/%3E%3Ccircle cx='24' cy='24' r='4.5' fill='%231d1d1d'/%3E%3C/svg%3E" alt=""><span>Targets &amp; Growth</span></a>
+      <a data-page="sales" href="#sales"><img src="assets/sales.png" alt=""><span>Order Details</span></a>
+      <a data-page="comparison" href="#comparison"><img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48' width='48' height='48'%3E%3Ccircle cx='24' cy='24' r='20' fill='%23FDCB3C' stroke='%231d1d1d' stroke-width='2.5'/%3E%3Crect x='13' y='24' width='6' height='12' fill='%231d1d1d'/%3E%3Crect x='21' y='18' width='6' height='18' fill='%231d1d1d'/%3E%3Cpolyline points='30,20 35,14 29,14 35,14 35,20' fill='none' stroke='%231d1d1d' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E" alt=""><span>Comparison</span></a>
+      <a data-page="targets" href="#targets"><img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48' width='48' height='48'%3E%3Ccircle cx='24' cy='24' r='20' fill='%23FDCB3C' stroke='%231d1d1d' stroke-width='2.5'/%3E%3Ccircle cx='24' cy='24' r='11' fill='none' stroke='%231d1d1d' stroke-width='2.4'/%3E%3Ccircle cx='24' cy='24' r='4.5' fill='%231d1d1d'/%3E%3C/svg%3E" alt=""><span>Targets &amp; Growth</span></a>
       </div>
       <div class="nav-sec" data-sec="operations"><button type="button" class="nav-sec-h">Operations</button>
-      <a data-page="cancel"><img src="assets/cancel.png" alt=""><span>Cancellations</span></a>
-      <a data-page="prep"><img src="assets/prep.png" alt=""><span>Prep Time</span></a>
-      <a data-page="delayed"><img src="assets/delayed.png" alt=""><span>Delayed Orders</span></a>
-      <a data-page="ratings"><img src="assets/ratings.png" alt=""><span>Ratings</span></a>
+      <a data-page="cancel" href="#cancel"><img src="assets/cancel.png" alt=""><span>Cancellations</span></a>
+      <a data-page="prep" href="#prep"><img src="assets/prep.png" alt=""><span>Prep Time</span></a>
+      <a data-page="delayed" href="#delayed"><img src="assets/delayed.png" alt=""><span>Delayed Orders</span></a>
+      <a data-page="ratings" href="#ratings"><img src="assets/ratings.png" alt=""><span>Ratings</span></a>
       </div>
       <div class="nav-sec" data-sec="menu"><button type="button" class="nav-sec-h">Menu</button>
-      <a data-page="items"><img src="assets/items.png" alt=""><span>Items Detail</span></a>
+      <a data-page="items" href="#items"><img src="assets/items.png" alt=""><span>Items Detail</span></a>
       </div>
       <div class="nav-sec" data-sec="finance"><button type="button" class="nav-sec-h">Finance</button>
-      <a data-page="commission"><img src="assets/commission.svg" alt=""><span>Commission</span></a>
-      <a data-page="ebitda"><img src="assets/ebitda.svg" alt=""><span>EBITDA</span></a>
-      <a data-page="accounting"><img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48' width='48' height='48'%3E%3Ccircle cx='24' cy='24' r='20' fill='%23FDCB3C' stroke='%231d1d1d' stroke-width='2.5'/%3E%3Ctext x='24' y='32' font-family='Arial, sans-serif' font-size='23' font-weight='700' text-anchor='middle' fill='%231d1d1d'%3E%24%3C/text%3E%3C/svg%3E" alt=""><span>Accounting</span></a>
+      <a data-page="commission" href="#commission"><img src="assets/commission.svg" alt=""><span>Commission</span></a>
+      <a data-page="ebitda" href="#ebitda"><img src="assets/ebitda.svg" alt=""><span>EBITDA</span></a>
+      <a data-page="accounting" href="#accounting"><img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48' width='48' height='48'%3E%3Ccircle cx='24' cy='24' r='20' fill='%23FDCB3C' stroke='%231d1d1d' stroke-width='2.5'/%3E%3Ctext x='24' y='32' font-family='Arial, sans-serif' font-size='23' font-weight='700' text-anchor='middle' fill='%231d1d1d'%3E%24%3C/text%3E%3C/svg%3E" alt=""><span>Accounting</span></a>
       </div>
       <div class="nav-sec" data-sec="data"><button type="button" class="nav-sec-h">Data</button>
-      <a data-page="sources"><img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48' width='48' height='48'%3E%3Ccircle cx='24' cy='24' r='20' fill='%23FDCB3C' stroke='%231d1d1d' stroke-width='2.5'/%3E%3Cellipse cx='24' cy='16' rx='10' ry='4' fill='none' stroke='%231d1d1d' stroke-width='2.3'/%3E%3Cpath d='M14 16v16c0 2.2 4.5 4 10 4s10-1.8 10-4V16' fill='none' stroke='%231d1d1d' stroke-width='2.3'/%3E%3Cpath d='M14 24c0 2.2 4.5 4 10 4s10-1.8 10-4' fill='none' stroke='%231d1d1d' stroke-width='2.3'/%3E%3C/svg%3E" alt=""><span>Data Sources</span></a>
-      <a data-page="export"><img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48' width='48' height='48'%3E%3Ccircle cx='24' cy='24' r='20' fill='%23FDCB3C' stroke='%231d1d1d' stroke-width='2.5'/%3E%3Cline x1='24' y1='12' x2='24' y2='28' stroke='%231d1d1d' stroke-width='2.6' stroke-linecap='round'/%3E%3Cpolyline points='17,21 24,28 31,21' fill='none' stroke='%231d1d1d' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cpolyline points='13,30 13,36 35,36 35,30' fill='none' stroke='%231d1d1d' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E" alt=""><span>Data Export</span></a>
+      <a data-page="sources" href="#sources"><img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48' width='48' height='48'%3E%3Ccircle cx='24' cy='24' r='20' fill='%23FDCB3C' stroke='%231d1d1d' stroke-width='2.5'/%3E%3Cellipse cx='24' cy='16' rx='10' ry='4' fill='none' stroke='%231d1d1d' stroke-width='2.3'/%3E%3Cpath d='M14 16v16c0 2.2 4.5 4 10 4s10-1.8 10-4V16' fill='none' stroke='%231d1d1d' stroke-width='2.3'/%3E%3Cpath d='M14 24c0 2.2 4.5 4 10 4s10-1.8 10-4' fill='none' stroke='%231d1d1d' stroke-width='2.3'/%3E%3C/svg%3E" alt=""><span>Data Sources</span></a>
+      <a data-page="export" href="#export"><img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48' width='48' height='48'%3E%3Ccircle cx='24' cy='24' r='20' fill='%23FDCB3C' stroke='%231d1d1d' stroke-width='2.5'/%3E%3Cline x1='24' y1='12' x2='24' y2='28' stroke='%231d1d1d' stroke-width='2.6' stroke-linecap='round'/%3E%3Cpolyline points='17,21 24,28 31,21' fill='none' stroke='%231d1d1d' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cpolyline points='13,30 13,36 35,36 35,30' fill='none' stroke='%231d1d1d' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E" alt=""><span>Data Export</span></a>
       </div>
     </nav>
 
@@ -603,6 +603,6 @@
 <script src="ratings.js?v=1.0"></script>
 <script src="atlas.js?v=1.5"></script>
 <script src="growth.js?v=1.5"></script>
-<script src="app.js?v=3.70"></script>
+<script src="app.js?v=3.73"></script>
 </body>
 </html>
