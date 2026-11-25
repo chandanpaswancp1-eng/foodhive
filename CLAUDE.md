@@ -23,7 +23,7 @@ FoodHive Operations & Sales Analytics Dashboard — an exact visual and function
   - Color palette: Primary Yellow (`#FDCB3C`), Dark Charcoal (`#1d1d1d`), Slate Line (`#d9dfe1`), Accent Blue (`#1b2a9b`).
 
 ## 6 Analytics Pages
-1. **Order Details / Sales (`#sales`)**: Net Sales, Receipt Total, Total Orders, AOV, Total Discount, Discount %, Avg RunRate, Projected RR, Top Brand.
+1. **Order Details / Sales (`#sales`)**: Net Sales, Receipt Total, Total Orders, Avg Orders / Day (orders ÷ days the kitchen traded; only date, Branch and Day Name narrow the days), AOV, Total Discount, Discount %, Avg RunRate, Projected RR, Top Brand.
 2. **Cancellations (`#cancel`)**: Cancelled Orders Amount, Total Cancelled Orders, AOV, Reasons, Channel breakdown, Post-cancelled split.
 3. **Prep Time (`#prep`)**: Acc → Started, Started → Prepared, Prepared → STD, STD → Dispatched, Receiving → Dispatched, Received → Delivered, Best vs Worst Brand Location. Interactive stage sliders.
 4. **Ratings (`#ratings`)**: Total Ratings, Negative Ratings, Positive Ratings, Negative Ratings %, Polarity Rate, Star distribution donut, DrillThrough.
