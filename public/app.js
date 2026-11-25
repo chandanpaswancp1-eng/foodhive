@@ -899,7 +899,7 @@ function buildToggles() {
 const KITCHENS = ['Motor City', 'Jaddaf'];
 const KITCHEN_SHORT = { 'Motor City': 'MC', Jaddaf: 'JD' };
 const KPI_ORDER = {
-  sales: ['Gross Sales', 'Net Sales', 'Total Orders', 'AOV', 'Total Discount', 'Discount %', 'Projected Month-End', 'Month-End Total', 'Top Performing Brand'],
+  sales: ['Gross Sales', 'Net Sales', 'Total Orders', 'Avg Orders / Day', 'AOV', 'Total Discount', 'Discount %', 'Projected Month-End', 'Month-End Total', 'Top Performing Brand'],
   cancel: ['Cancelled Orders Amount', 'Total Cancelled Orders', 'Cancel Rate %', 'Cancelled AOV', 'Refund Amount', 'Reverted by Aggregator'],
   prep: ['Receiving → Dispatched', 'Acc → Started', 'Started → Prepared', 'Prepared → STD', 'STD → Dispatched', 'Received → Delivered', 'Best vs Worst Brand Location'],
   ratings: ['Total Ratings', 'Positive Ratings', 'Negative Ratings', 'Negative Ratings %', 'Polarity rate'],
@@ -918,7 +918,7 @@ const ACCOUNTING_GROUPS = [
 // side): what kind of number each one is, at a glance. The cluster lists also
 // set the tile order within the page.
 const KPI_CLUSTERS = {
-  sales: [['Revenue', ['Gross Sales', 'Net Sales', 'AOV']], ['Volume', ['Total Orders']], ['Discounts', ['Total Discount', 'Discount %']], ['Outlook', ['Projected Month-End', 'Month-End Total', 'Top Performing Brand']]],
+  sales: [['Revenue', ['Gross Sales', 'Net Sales', 'AOV']], ['Volume', ['Total Orders', 'Avg Orders / Day']], ['Discounts', ['Total Discount', 'Discount %']], ['Outlook', ['Projected Month-End', 'Month-End Total', 'Top Performing Brand']]],
   cancel: [['Cancellations', ['Cancelled Orders Amount', 'Total Cancelled Orders', 'Cancel Rate %', 'Cancelled AOV']], ['Money returned', ['Refund Amount', 'Reverted by Aggregator']]],
   prep: [['End to end (min)', ['Receiving → Dispatched', 'Received → Delivered']], ['Kitchen stages (min)', ['Acc → Started', 'Started → Prepared', 'Prepared → STD', 'STD → Dispatched']], ['Outlets', ['Best vs Worst Brand Location']]],
   ratings: [['Aggregator ratings', ['Lowest Aggregator Rating', 'Listings Below 4.0★']], ['Ratings', ['Total Ratings', 'Positive Ratings', 'Negative Ratings']], ['Rates', ['Negative Ratings %', 'Polarity rate']]],
@@ -945,14 +945,24 @@ function orderKpis(page, list) {
 
 // Per-kitchen figures for one page: { tile title: { v: number|null, f: formatter, add: additive? } }.
 // Same formulas as the page's own tiles, over base(page, false, kitchen).
+// Trading days behind Avg Orders / Day: days in the date range on which the
+// kitchen (Branch filter, or \`loc\`) had at least one order, cancelled ones
+// included. Only the date, Branch and Day Name filters apply, so a brand,
+// channel or hour filter still divides by every day the kitchen was open
+// and days it sold none of that brand count as zero.
+const tradingDays = loc => {
+  const kitchen = loc == null ? S.f.location : loc;
+  return new Set(S.orders.filter(o => dateOk(o.receivedAt) && eq(o.location, kitchen) && (S.f.day === 'All' || dowOf(o.receivedAt) === S.f.day)).map(o => dkey(o.receivedAt))).size;
+};
 const kAvg = a => (a.length ? a.reduce((s, x) => s + x, 0) / a.length : null);
 const KITCHEN_CALC = {
   sales: loc => {
     const O = base('sales', false, loc).filter(o => !o.cancelled);
     const net = sum(O, o => o.netSales), rec = sum(O, o => o.receiptTotal), disc = sum(O, o => o.discount), n = O.length;
+    const days = tradingDays(loc);
     return {
       'Net Sales': { v: net, f: money, add: true }, 'Gross Sales': { v: rec, f: money, add: true },
-      'Total Orders': { v: n, f: cnt, add: true }, 'AOV': { v: n ? net / n : null, f: x => x.toFixed(2) },
+      'Total Orders': { v: n, f: cnt, add: true }, 'Avg Orders / Day': { v: days ? n / days : null, f: x => x.toFixed(1) }, 'AOV': { v: n ? net / n : null, f: x => x.toFixed(2) },
       'Total Discount': { v: disc, f: money, add: true }, 'Discount %': { v: rec ? disc / rec : null, f: x => pc(x, 1) },
       // Delivery/packaging charges inside Gross and Net Sales. Only Jaddaf
       // (UrbanPiper) reports them; GrubCENTER's figures include them unseen.
@@ -1305,6 +1315,7 @@ function renderItemSalesDrillBody() {
 function renderSales() {
   const all = base('sales'); const O = all.filter(o => !o.cancelled);
   const net = sum(O, o => o.netSales), rec = sum(O, o => o.receiptTotal), disc = sum(O, o => o.discount), n = O.length;
+  const days = tradingDays();
   const top = salesAgg(O, o => o.brand).sort((a, b) => metricOf(b, S.ui.metric) - metricOf(a, S.ui.metric))[0];
   // 'sales' scopes the projection to the active brand/location/channel/
   // payment/partner/day filters -- previously this always read raw
@@ -1378,6 +1389,12 @@ function renderSales() {
       buildToggles();
       renderSales();
     }, m === 'orders', 'Click to view Order Volume counts across all charts'],
+
+    ['Avg Orders / Day', days ? (n / days).toFixed(1) : '0', false, () => {
+      S.ui.metric = 'orders';
+      buildToggles();
+      renderSales();
+    }, false, `${cnt(n)} orders over ${days} trading day${days === 1 ? '' : 's'} (days the kitchen took at least one order). Click to view Order Volume across all charts`],
 
     ['AOV', n ? (net / n).toFixed(2) : '0', false, () => {
       S.ui.metric = (m === 'aov' ? 'sales' : 'aov');
