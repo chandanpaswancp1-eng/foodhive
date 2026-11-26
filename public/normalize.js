@@ -230,7 +230,8 @@
   // not in a snapshot and cannot be recovered from it.
   const SNAPSHOT_SOURCE = 'GrubCENTER Snapshot';
   function snapshotToItemEvents(rows) {
-    return (rows || []).filter(r => r && /^\s*unavailable\s*$/i.test(str(r.status))).map(r => {
+    // GrubCENTER's sandbox fixture brand is dropped here as it is for orders.
+    return (rows || []).filter(r => r && /^\s*unavailable\s*$/i.test(str(r.status)) && str(r.brand) !== 'TEST BRAND').map(r => {
       const raw = str(r.lastItemAvailabilityUpdated);
       const m = raw.match(/^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}(?::\d{2})?)$/);
       const isMod = /modif/i.test(str(r.itemType));
@@ -238,7 +239,9 @@
       return {
         item: (name && name !== '-' ? name : str(r.menuItem) || str(r.modifier)) || '(Blank)',
         brand: str(r.brand) || '(Blank)',
-        cuisine: 'No Cluster',
+        // From the brand, like orders: a fixed 'No Cluster' made any cuisine
+        // filter empty the whole 86 page.
+        cuisine: inferCuisine(str(r.brand)),
         location: str(r.location) || '(Blank)',
         type: isMod ? 'Modifier' : 'Menu Item',
         source: SNAPSHOT_SOURCE,
@@ -246,12 +249,14 @@
       };
     }).filter(x => x.at);
   }
-  // Union of 86 event lists, deduped on item + brand + location + time.
+  // Union of 86 event lists, deduped on item + brand + location + type within
+  // the same minute: a modifier shared by several modifier groups is logged
+  // once per group a second apart, and is still one stock-out.
   function mergeItemEvents(...lists) {
     const seen = new Map();
     for (const list of lists) for (const x of list || []) {
-      if (!x || !x.at) continue;
-      const k = [x.item, x.brand, x.location, x.at].join('|').toLowerCase();
+      if (!x || !x.at || x.brand === 'TEST BRAND') continue;
+      const k = [x.item, x.brand, x.location, x.type, Math.floor(x.at / 60000)].join('|').toLowerCase();
       if (!seen.has(k)) seen.set(k, x);
     }
     return [...seen.values()].sort((a, b) => a.at - b.at);

@@ -434,6 +434,50 @@ function syncFilterUI() {
   });
 }
 
+// Month-end projection for latestDate's (live) month, by weekday seasonality.
+// Food delivery swings hard between weekdays and weekends, and the business
+// grows or shrinks month to month, so the two are kept apart: a weekday INDEX
+// (how busy each weekday runs vs the average, trailing 8 weeks before the
+// month) times this month's own BASE (a weekday-neutral day: complete days'
+// total divided by the sum of their weekday indexes, so a month that so far
+// is mostly Fridays isn't counted as faster and then scaled by Friday again).
+// Only complete days feed the base: when latestDate is today in Dubai it is
+// part-traded, so the rest of today is projected (expected day minus sales so
+// far) on top of the remaining days. Day 1 with no complete day yet uses the
+// trailing 8-week average day. val picks the measure (net sales, or 1 for orders).
+function weekdayProjection(srcOrders, latestDate, val = o => o.netSales) {
+  const monthStart = latestDate.slice(0, 7) + '-01';
+  const [y, m] = monthStart.split('-').map(Number);
+  const daysInMonth = new Date(Date.UTC(y, m, 0)).getUTCDate();
+  const day = +latestDate.slice(8);
+  const latestIsPartial = latestDate === dkey(Date.now());
+  const completeThrough = day - (latestIsPartial ? 1 : 0);
+  const keyOf = d => monthStart.slice(0, 8) + pad(d);
+  const wdOfKey = k => (weekdayOf(k) + 6) % 7;
+  const histStartKey = addDays(monthStart, -56);
+  const histDaily = {}, monthDaily = {};
+  srcOrders.forEach(o => {
+    if (o.cancelled) return;
+    const k = dkey(o.receivedAt);
+    if (k >= histStartKey && k < monthStart) histDaily[k] = (histDaily[k] || 0) + val(o);
+    else if (k >= monthStart && k <= latestDate) monthDaily[k] = (monthDaily[k] || 0) + val(o);
+  });
+  const wdSums = Array(7).fill(0), wdCounts = Array(7).fill(0);
+  Object.entries(histDaily).forEach(([k, v]) => { const w = wdOfKey(k); wdSums[w] += v; wdCounts[w]++; });
+  const histVals = Object.values(histDaily);
+  const histAvg = histVals.length ? histVals.reduce((a, b) => a + b, 0) / histVals.length : 0;
+  const wdIndex = wdSums.map((sv, i) => (wdCounts[i] && histAvg) ? (sv / wdCounts[i]) / histAvg : 1);
+  let idxSum = 0, completeVal = 0;
+  for (let d = 1; d <= completeThrough; d++) { idxSum += wdIndex[wdOfKey(keyOf(d))]; completeVal += monthDaily[keyOf(d)] || 0; }
+  const baseDay = idxSum > 0 ? completeVal / idxSum : histAvg;
+  const mtd = Object.values(monthDaily).reduce((a, b) => a + b, 0);
+  const todaySoFar = latestIsPartial ? (monthDaily[latestDate] || 0) : 0;
+  let remainingProjected = latestIsPartial ? Math.max(0, baseDay * wdIndex[wdOfKey(latestDate)] - todaySoFar) : 0;
+  let remainingDays = 0;
+  for (let d = day + 1; d <= daysInMonth; d++) { remainingProjected += baseDay * wdIndex[wdOfKey(keyOf(d))]; remainingDays++; }
+  return { mtd, completeThrough, baseDay, todaySoFar, latestIsPartial, remainingProjected, remainingDays, daysInMonth, value: mtd + remainingProjected };
+}
+
 function getPeriodStats(page) {
   // `page`, when given, scopes every figure below to the currently active
   // non-date dropdown filters (brand/location/channel/payment/partner/day)
@@ -506,49 +550,14 @@ function getPeriodStats(page) {
   const mtdOrders = srcOrders.filter(o => !o.cancelled && dkey(o.receivedAt) >= viewMonthStart && dkey(o.receivedAt) <= viewMonthEnd);
   const monthToDateNet = sum(mtdOrders, o => o.netSales);
   const daysInMonth = viewDaysInMonth;
-  // ld.getDate() is the day-of-month NUMBER (e.g. 8 on Oct 8), not the elapsed
-  // duration since day 1 -- Oct 1 to Oct 8 is a 7-day span, not 8. Subtract 1.
-  const daysElapsed = isLiveMonth ? (ld.getDate() - 1) : daysInMonth;
-  const avgDaily = daysElapsed ? monthToDateNet / daysElapsed : 0;
-
-  let remainingProjected = 0, remainingDays = 0;
-  if (isLiveMonth) {
-    // Weekday-seasonality projection: food-delivery volume swings hard between
-    // weekdays and weekends, so a single flat daily rate drifts away from
-    // reality fast -- but the business is also growing/shrinking month to
-    // month, so a flat *historical* weekday average goes stale just as fast.
-    // We split the two: a weekday INDEX (the shape -- how much busier Fridays
-    // run vs. the week's average, from the trailing 8 weeks) applied to this
-    // month's own BASE RATE (the level -- avgDaily, already measured from
-    // this month's complete days), so the projection tracks both the current
-    // pace and which days of the week are still left in the month.
-    const histStart = new Date(curMonthStart + 'T00:00:00');
-    histStart.setDate(histStart.getDate() - 56);
-    const histStartKey = dkey(histStart.getTime());
-    const histDaily = {};
-    srcOrders.forEach(o => {
-      if (o.cancelled) return;
-      const k = dkey(o.receivedAt);
-      if (k < histStartKey || k >= curMonthStart) return;
-      if (!histDaily[k]) histDaily[k] = { net: 0, wd: (dubaiDOW(o.receivedAt) + 6) % 7 };
-      histDaily[k].net += o.netSales;
-    });
-    const wdSums = Array(7).fill(0), wdCounts = Array(7).fill(0);
-    Object.values(histDaily).forEach(({ net, wd }) => { wdSums[wd] += net; wdCounts[wd]++; });
-    const histDayVals = Object.values(histDaily);
-    const histOverallAvg = histDayVals.length ? sum(histDayVals, d => d.net) / histDayVals.length : 0;
-    const wdIndex = wdSums.map((s, i) => (wdCounts[i] && histOverallAvg) ? (s / wdCounts[i]) / histOverallAvg : 1);
-
-    for (let d = ld.getDate() + 1; d <= daysInMonth; d++) {
-      const wd = (new Date(ld.getFullYear(), ld.getMonth(), d).getDay() + 6) % 7;
-      remainingProjected += avgDaily * wdIndex[wd];
-      remainingDays++;
-    }
-  }
-  // Past, completed month in view: mtdOrders above already spans the whole
-  // month (day 1 .. viewMonthEnd), so monthToDateNet IS the real final
-  // total -- remainingProjected/remainingDays correctly stay 0, no
-  // extrapolation applied.
+  // Live month: weekday-seasonal projection (weekdayProjection). A past month
+  // in view is already complete: monthToDateNet IS its final total.
+  const proj = isLiveMonth ? weekdayProjection(srcOrders, latestDate) : null;
+  const latestIsPartial = latestDate === dkey(Date.now());
+  const daysElapsed = proj ? proj.completeThrough : daysInMonth;
+  const avgDaily = proj ? proj.baseDay : (daysInMonth ? monthToDateNet / daysInMonth : 0);
+  const remainingProjected = proj ? proj.remainingProjected : 0;
+  const remainingDays = proj ? proj.remainingDays : 0;
   const projectedNet = monthToDateNet + remainingProjected;
 
   // Cross-month context for the Projected Month-End tile's TOOLTIP ONLY --
@@ -580,8 +589,14 @@ function getPeriodStats(page) {
   // a real prior month can legitimately net $0.
   const cmpDay = Math.min(ld.getDate(), prevMonthEndDate.getDate());
   const prevSamePeriodEnd = monthStart.slice(0, 7) + '-' + pad(cmpDay);
+  // When today is only partly traded, last month's day N is cut at the same
+  // time of day, so month-over-month compares equal elapsed time.
+  const DUBAI_MS = 4 * 3600e3;
+  const prevCutMs = latestIsPartial && cmpDay === ld.getDate()
+    ? Date.parse(prevSamePeriodEnd + 'T00:00:00Z') - DUBAI_MS + ((Date.now() + DUBAI_MS) % 86400000)
+    : null;
   const prevSamePeriodNet = hasPriorMonth
-    ? sum(monthOrders.filter(o => dkey(o.receivedAt) <= prevSamePeriodEnd), o => o.netSales)
+    ? sum(monthOrders.filter(o => { const k = dkey(o.receivedAt); return k < prevSamePeriodEnd || (k === prevSamePeriodEnd && (prevCutMs == null || o.receivedAt <= prevCutMs)); }), o => o.netSales)
     : 0;
   const momGrowthPct = (hasPriorMonth && prevSamePeriodNet > 0)
     ? (monthToDateNet - prevSamePeriodNet) / prevSamePeriodNet
@@ -970,25 +985,27 @@ const KITCHEN_CALC = {
     };
   },
   cancel: loc => {
-    const all = base('cancel', false, loc), C = all.filter(o => o.cancelled);
+    const { C, rateBase } = cancelFigures(loc);
     const amt = sum(C, o => o.receiptTotal), n = C.length;
     return {
       'Cancelled Orders Amount': { v: amt, f: money, add: true }, 'Total Cancelled Orders': { v: n, f: cnt, add: true },
-      'Cancel Rate %': { v: all.length ? n / all.length : null, f: x => pc(x, 2) }, 'Cancelled AOV': { v: n ? amt / n : null, f: x => x.toFixed(2) }
+      'Cancel Rate %': { v: rateBase ? n / rateBase : null, f: x => pc(x, 2) }, 'Cancelled AOV': { v: n ? amt / n : null, f: x => x.toFixed(2) }
     };
   },
   prep: loc => {
-    const O = base('prep', false, loc).filter(o => !o.cancelled).map(o => stageVals(o));
+    // Same slider filter as the page tiles, so the Group column matches them.
+    const O = base('prep', false, loc).filter(o => !o.cancelled).map(o => stageVals(o)).filter(rngPass);
     return Object.fromEntries(STAGES.map(([k, l]) => [l, { v: kAvg(O.map(v => v[k]).filter(v => v != null)), f: x => x.toFixed(2) }]));
   },
   ratings: loc => {
     let R = base('ratings', false, loc).filter(o => !o.cancelled).map(o => ({ ...o, rating: orderRating(o) })).filter(o => o.rating != null);
     if (S.selBrands.size) R = R.filter(o => S.selBrands.has(o.brand));
+    if (S.selLocs.size) R = R.filter(o => S.selLocs.has(o.location));
     if (S.f.star && S.f.star !== 'All') R = R.filter(o => Math.round(o.rating) === +S.f.star);
     const n = R.length, neg = R.filter(o => o.rating <= 3).length, pos = n - neg;
     return {
       'Total Ratings': { v: n, f: cnt, add: true }, 'Positive Ratings': { v: pos, f: cnt, add: true }, 'Negative Ratings': { v: neg, f: cnt, add: true },
-      'Negative Ratings %': { v: n ? neg / n : null, f: x => pc(x, 2) }, 'Polarity rate': { v: n ? pos / n : null, f: x => pc(x, 2) }
+      'Negative Ratings %': { v: n ? neg / n : null, f: x => pc(x, 2) }, 'Polarity rate': { v: n ? (pos - neg) / n : null, f: x => pc(x, 2) }
     };
   },
   items: loc => {
@@ -1010,7 +1027,7 @@ const KITCHEN_CALC = {
     const net = sum(O, o => o.netSales), gross = sum(O, o => o.receiptTotal), com = sum(O, o => FHCommission.commissionForOrder(o));
     return {
       'Total Commission': { v: com, f: money, add: true }, 'Net after Commission': { v: net - com, f: money, add: true },
-      'Blended Commission %': { v: net ? com / net : null, f: x => pc(x, 1) }, 'Commission % of Gross Sales': { v: gross ? com / gross : null, f: x => pc(x, 1) }
+      'Blended Commission %': { v: net ? com / net : null, f: x => pc(x, 1) }, 'Commission % of Gross Sales': { v: gross ? com / (gross / 1.05) : null, f: x => pc(x, 1) }
     };
   },
   ebitda: loc => {
@@ -1316,7 +1333,9 @@ function renderSales() {
   const all = base('sales'); const O = all.filter(o => !o.cancelled);
   const net = sum(O, o => o.netSales), rec = sum(O, o => o.receiptTotal), disc = sum(O, o => o.discount), n = O.length;
   const days = tradingDays();
-  const top = salesAgg(O, o => o.brand).sort((a, b) => metricOf(b, S.ui.metric) - metricOf(a, S.ui.metric))[0];
+  // Always the best seller by Net Sales: ranking by the metric toggle named the
+  // brand with the most discount, or a one-order brand with a high AOV.
+  const top = salesAgg(O, o => o.brand).sort((a, b) => b.sales - a.sales)[0];
   // 'sales' scopes the projection to the active brand/location/channel/
   // payment/partner/day filters -- previously this always read raw
   // S.orders, so Projected Month-End showed the same whole-company figure
@@ -1354,7 +1373,7 @@ function renderSales() {
   const projTooltip = !stats
     ? 'Weekday-seasonal month-end Net Sales projection'
     : liveMonth
-      ? `Weekday-seasonal projection: Month-to-date Net Sales (${money(stats.projection.mtdNet)}) thru ${stats.latestDate} + ${stats.projection.remainingDays} remaining day${stats.projection.remainingDays === 1 ? '' : 's'} in ${stats.projection.daysInMonth}-day month, each projected from this month's own daily pace scaled by that weekday's historical share of the week (trailing 8 weeks), = ${money(stats.projection.value)} (~${effAvgDailyStr}/day avg). Not a true forecast.${monthTrendStr} Click to jump back to month-to-date (${stats.curMonthStart} → ${stats.latestDate}).`
+      ? `Weekday-seasonal projection: Month-to-date Net Sales (${money(stats.projection.mtdNet)}) thru ${stats.latestDate} + ${stats.projection.remainingDays} remaining day${stats.projection.remainingDays === 1 ? '' : 's'} in ${stats.projection.daysInMonth}-day month, plus the rest of today, each projected from this month's complete days (weekday-adjusted) scaled by that weekday's historical share of the week (trailing 8 weeks), = ${money(stats.projection.value)} (~${effAvgDailyStr}/day avg). Not a true forecast.${monthTrendStr} Click to jump back to month-to-date (${stats.curMonthStart} → ${stats.latestDate}).`
       : `${stats.projection.viewMonthStart.slice(0, 7)} is a completed month: actual Net Sales for the full month (${stats.projection.viewMonthStart} → ${stats.projection.viewMonthEnd}) = ${money(stats.projection.value)}. No projection applied (month already elapsed).${monthTrendStr} Click to jump back to the live month-to-date (${stats.curMonthStart} → ${stats.latestDate}).`;
 
   const m = S.ui.metric;
@@ -1577,16 +1596,25 @@ function renderSales() {
   if (n) { combo('c-hour', hr, { name: mname, pctName: '%GT Total Orders', filterKey: 'hour', fmt: mf }); patchPct('c-hour', hr.map(h => ({ orders: h.o })), n); }
   else mk('c-hour', { __empty: true });
 
-  const byDow = new Map(salesAgg(O, o => (dubaiDOW(o.receivedAt) + 6) % 7).map(r => [r.k, r]));
-  const dw = DOW.map((d, i) => { const r = byDow.get(i); return { k: d, v: r ? metricOf(r, m) : 0, o: r ? r.orders : 0 }; });
+  // Average per day of each weekday, not a total: a range with four Mondays
+  // and three Fridays made Friday look ~25% weaker purely by count. Today's
+  // part-day is left out. Ratio metrics (AOV, Discount %) are per bucket already.
+  const todayKey = dkey(Date.now());
+  const Odow = O.filter(o => dkey(o.receivedAt) !== todayKey);
+  const dowDays = Array.from({ length: 7 }, () => new Set());
+  Odow.forEach(o => dowDays[(dubaiDOW(o.receivedAt) + 6) % 7].add(dkey(o.receivedAt)));
+  const additive = ['sales', 'gross', 'receipt', 'orders', 'disc'].includes(m);
+  const byDow = new Map(salesAgg(Odow, o => (dubaiDOW(o.receivedAt) + 6) % 7).map(r => [r.k, r]));
+  const dw = DOW.map((d, i) => { const r = byDow.get(i), days = dowDays[i].size || 1; return { k: d, v: r ? metricOf(r, m) / (additive ? days : 1) : 0, o: r ? r.orders : 0 }; });
   // dw is always 7 slots long (even with zero orders) -- same reasoning as c-hour above.
-  if (n) { combo('c-dow', dw, { name: mname, pctName: '%GT Total Orders', filterKey: 'day', fmt: mf }); patchPct('c-dow', dw.map(d => ({ orders: d.o })), n); }
+  if (Odow.length) { combo('c-dow', dw, { name: mname + (additive ? ' (avg per day)' : ''), pctName: '%GT Total Orders', filterKey: 'day', fmt: mf }); patchPct('c-dow', dw.map(d => ({ orders: d.o })), Odow.length); }
   else mk('c-dow', { __empty: true });
 
   const dc = salesAgg(O, o => o.channel).filter(r => r.disc > 0).sort((a, b) => b.disc - a.disc).map(r => ({ k: r.k, v: r.disc }));
   donut('c-disc', dc, { legend: 'left', filterKey: 'channel' });
   const discGrossPct = rec ? pc(disc / rec, 1) : '0%';
-  const discNetPct = net ? pc(disc / net, 1) : '0%';
+  // Both sides ex-VAT: discount is VAT-inclusive, net sales are not.
+  const discNetPct = net ? pc(disc / 1.05 / net, 1) : '0%';
   $('#discTotal').innerHTML = `${money(disc)}<div style="font-size:9.5px;font-weight:600;color:#555;margin-top:2px;">${discGrossPct} Gross · ${discNetPct} Net</div>`;
 }
 
@@ -1602,8 +1630,29 @@ function patchPct(id, rows, totalOrders) {
 // excluded -- no money ever changed hands for those, so cancelling one isn't
 // a real refund, unlike the "Cancelled Orders Amount" KPI above which sums
 // every cancelled order's receiptTotal regardless of payment method.
+// "Duplicated order" cancellations are the same order entered twice and then
+// voided, not a lost sale: 35 of the first 64 cancellations. They are left out
+// of every Cancellations figure unless the Reason filter picks them, and are
+// never counted as real orders in the Cancel Rate denominator.
+const DUP_REASON = 'Duplicated order';
+const isDupCancel = o => o.cancelled && o.reason === DUP_REASON;
+const dupPicked = () => { const r = S.f.reason; return r !== 'All' && (Array.isArray(r) ? r.includes(DUP_REASON) : r === DUP_REASON); };
+// Cancelled orders for the page's filters (duplicates out unless picked), the
+// duplicates left out, and the order base for Cancel Rate: the same date,
+// brand, kitchen, cuisine and channel filters but NOT the Reason / Post
+// filters (non-cancelled orders have no reason, so with those on the rate
+// read 100%), and without duplicates.
+function cancelFigures(loc) {
+  const all = base('cancel', false, loc).filter(o => o.cancelled);
+  const keepDup = dupPicked();
+  const C = keepDup ? all : all.filter(o => !isDupCancel(o));
+  const f = S.f, kitchen = loc == null ? f.location : loc;
+  const scope = S.orders.filter(o => dateOk(o.receivedAt) && eq(o.brand, f.brand) && eq(o.location, kitchen) && eq(o.cuisine, f.cuisine) && eq(o.channel, f.channel) && !isDupCancel(o));
+  return { C, dupsExcluded: all.length - C.length, rateBase: scope.length + (keepDup ? all.filter(isDupCancel).length : 0) };
+}
+
 function refundChannelAgg() {
-  const C = base('cancel').filter(o => o.cancelled && (o.payment === 'PREPAID' || o.payment === 'CARD'));
+  const C = cancelFigures().C.filter(o => o.payment === 'PREPAID' || o.payment === 'CARD');
   const amt = sum(C, o => o.receiptTotal), n = C.length;
   const chanAgg = groupBy(C, o => o.channel).map(g => ({ k: g.k, amount: sum(g.rows, o => o.receiptTotal), orders: g.rows.length }));
   return { amt, n, chanAgg };
@@ -1719,7 +1768,7 @@ function renderAggregatorRevertDrillBody() {
 }
 
 function renderCancel() {
-  const C = base('cancel').filter(o => o.cancelled);
+  const { C, dupsExcluded, rateBase } = cancelFigures();
   const amt = sum(C, o => o.receiptTotal), n = C.length;
   const val = S.ui.cmetric === 'value';
   const mv = r => (val ? r.receipt : r.orders);
@@ -1727,19 +1776,21 @@ function renderCancel() {
   const refund = refundChannelAgg();
   const reverted = aggregatorRevertChannelAgg();
   kpis('kpi-cancel', [
-    ['Cancelled Orders Amount', money(amt), false, () => { S.ui.cmetric = 'value'; buildToggles(); renderCancel(); }, val, 'Click to view Cancelled Orders Value in AED across all charts'],
-    ['Total Cancelled Orders', cnt(n), false, () => { S.ui.cmetric = 'orders'; buildToggles(); renderCancel(); }, !val, 'Click to view Cancelled Orders Count volume across all charts'],
-    ['Cancel Rate %', base('cancel').length ? pc(n / base('cancel').length, 2) : '0%', false, null, false, 'Cancelled orders as a share of all orders in the same filters (Total Cancelled Orders / all orders).'],
-    ['Cancelled AOV', n ? (amt / n).toFixed(2) : '0', false, null, false, 'Average Order Value of cancelled orders (Cancelled Orders Amount / Total Cancelled Orders). Use the "Post Cancelled" filter above to isolate direct kitchen food waste.'],
-    ['Refund Amount', money(refund.amt), false, openRefundDrillModal, false, 'Cancelled orders paid by PREPAID or CARD only (money already captured at order time) — excludes CASH-on-delivery and FOC (free) orders, since no money changed hands for those. Click for the channel breakdown.', 'drill'],
-    ['Reverted by Aggregator', money(reverted.amt), false, openAggregatorRevertDrillModal, false, 'Net Sales of cancelled orders attributed to the aggregator/delivery partner (platform-cancelled, rider not found, captain delay) — excludes "Duplicated order" and other non-aggregator reasons. Click for the channel breakdown.', 'drill']
+    ['Cancelled Orders Amount', money(amt), false, () => { S.ui.cmetric = 'value'; buildToggles(); renderCancel(); }, val, 'Gross value (receipt total, VAT-inclusive) of cancelled orders, duplicated orders excluded. Click to view Cancelled Orders Value in AED across all charts'],
+    ['Total Cancelled Orders', cnt(n) + (dupsExcluded ? `<div class="muted small">${cnt(dupsExcluded)} duplicate${dupsExcluded === 1 ? '' : 's'} excluded</div>` : ''), false, () => { S.ui.cmetric = 'orders'; buildToggles(); renderCancel(); }, !val, 'Cancelled orders, excluding "Duplicated order" (the same order entered twice and voided, not a lost sale); pick that reason in the Reason filter to see them. Click to view Cancelled Orders Count volume across all charts'],
+    ['Cancel Rate %', rateBase ? pc(n / rateBase, 2) : '0%', false, null, false, 'Cancelled orders / all orders for the same date, brand, branch and channel (the Reason and Post Cancelled filters narrow the cancellations only, not the order base). Duplicated orders are not counted as orders.'],
+    ['Cancelled AOV', n ? (amt / n).toFixed(2) : '0', false, null, false, 'Gross (VAT-inclusive) value per cancelled order: Cancelled Orders Amount / Total Cancelled Orders. Not comparable to the Net Sales AOV on Order Details. Use the "Post Cancelled" filter above to isolate direct kitchen food waste.'],
+    ['Refund Amount', money(refund.amt), false, openRefundDrillModal, false, 'Gross (VAT-inclusive) value of cancelled orders paid by PREPAID or CARD only (money already captured at order time) — excludes CASH-on-delivery and FOC (free) orders, since no money changed hands for those, and duplicated orders. Click for the channel breakdown.', 'drill'],
+    ['Reverted by Aggregator', money(reverted.amt), false, openAggregatorRevertDrillModal, false, 'Net Sales (ex-VAT, after discount) of cancelled orders attributed to the aggregator/delivery partner (platform-cancelled, rider not found, captain delay) — excludes "Duplicated order" and other non-aggregator reasons. Click for the channel breakdown.', 'drill']
   ]);
 
-  const mkRows = (kf, lim) => { const rr = salesAgg(C, kf).sort((a, b) => mv(b) - mv(a)); const tot = sum(rr, r => r.orders); return { rows: rr.slice(0, lim), tot }; };
+  // The %GT line follows the bars: share of cancelled value in value mode,
+  // share of cancelled orders in count mode.
+  const mkRows = (kf, lim) => { const rr = salesAgg(C, kf).sort((a, b) => mv(b) - mv(a)); const tot = sum(rr, mv); return { rows: rr.slice(0, lim), tot }; };
   const fill = (id, kf, lim, filterKey) => {
     const { rows, tot } = mkRows(kf, lim);
-    combo(id, rows.map(r => ({ k: r.k, v: mv(r) })), { name: val ? 'Orders Value' : 'Cancelled Orders', pctName: '%GT Cancelled Orders', fmt: lbf, filterKey });
-    const c = charts[id]; if (c && c.data.datasets[1]) { c.data.datasets[1].data = rows.map(r => (tot ? r.orders / tot * 100 : 0)); c.update('none'); }
+    combo(id, rows.map(r => ({ k: r.k, v: mv(r) })), { name: val ? 'Orders Value' : 'Cancelled Orders', pctName: val ? '%GT Cancelled Value' : '%GT Cancelled Orders', fmt: lbf, filterKey });
+    const c = charts[id]; if (c && c.data.datasets[1]) { c.data.datasets[1].data = rows.map(r => (tot ? mv(r) / tot * 100 : 0)); c.update('none'); }
   };
   kitchenCompareTable('kc-cancel', 'cancel');
   fill('c-cchan', o => o.channel, 8, 'channel');
@@ -1887,13 +1938,24 @@ function initRanges() {
   });
 }
 
+// Prep stage sliders. An end left at its full-range position is no limit:
+// the range is set at page load, so a slower order arriving after a refresh
+// (above the old maximum) was silently dropped from every average.
+function rngPass(vals) {
+  return STAGES.every(([k]) => {
+    const v = vals[k], r = S.rng && S.rng[k];
+    if (v == null || !r) return true;
+    const minOn = !isNaN(r.min) && r.min > r.lo + 1e-9, maxOn = !isNaN(r.max) && r.max < r.hi - 1e-9;
+    return (!minOn || v >= r.min - 1e-9) && (!maxOn || v <= r.max + 1e-9);
+  });
+}
+
 function renderPrep() {
   let O = base('prep').filter(o => !o.cancelled).map(o => ({ o, v: stageVals(o) }));
-  O = O.filter(x => STAGES.every(([k]) => {
-    const v = x.v[k], r = S.rng[k];
-    return v == null || !r || ((isNaN(r.min) || v >= r.min - 1e-9) && (isNaN(r.max) || v <= r.max + 1e-9));
-  }));
+  O = O.filter(x => rngPass(x.v));
   const avgOf = (arr, k) => avg(arr.map(x => x.v[k]).filter(v => v != null));
+  // No timing for a stage (e.g. Jaddaf has no Started / STD times) reads "–", not 0.00 min.
+  const hasStage = (arr, k) => arr.some(x => x.v[k] != null);
   const stageTarget = {
     acc: 'c-pb-acc',
     prep: 'c-pb-prep',
@@ -1923,7 +1985,7 @@ function renderPrep() {
 
   const kp = STAGES.map(([k, l]) => [
     l,
-    avgOf(O, k).toFixed(2),
+    hasStage(O, k) ? avgOf(O, k).toFixed(2) : '–',
     false,
     () => focusStage(k),
     S.ui.activeStage === k,
@@ -2019,7 +2081,7 @@ function renderRatings() {
     ['Negative Ratings', cnt(neg), false, () => { S.f.ratingFilter = (rf === 'neg' ? 'all' : 'neg'); S.f.star = 'All'; renderRatings(); }, rf === 'neg', 'Click to filter and drill down into Negative Ratings (≤3★) across brands and locations'],
     ['Positive Ratings', cnt(pos), false, () => { S.f.ratingFilter = (rf === 'pos' ? 'all' : 'pos'); S.f.star = 'All'; renderRatings(); }, rf === 'pos', 'Click to filter and inspect Positive Ratings (4-5★) across brands and locations'],
     ['Negative Ratings %', n ? pc(neg / n, 2) : '0%', false, () => { S.f.ratingFilter = (rf === 'neg' ? 'all' : 'neg'); S.f.star = 'All'; renderRatings(); }, rf === 'neg', 'Click to isolate negative feedback rate drivers'],
-    ['Polarity rate', n ? pc(pos / n, 2) : '0%', false, () => { S.f.ratingFilter = (rf === 'pos' ? 'all' : 'pos'); S.f.star = 'All'; renderRatings(); }, rf === 'pos', 'Click to isolate customer satisfaction polarity'],
+    ['Polarity rate', n ? pc((pos - neg) / n, 2) : '0%', false, () => { S.f.ratingFilter = (rf === 'pos' ? 'all' : 'pos'); S.f.star = 'All'; renderRatings(); }, rf === 'pos', 'Net sentiment: (Positive − Negative) / Total ratings, from −100% (all negative) to +100% (all positive). Click to isolate positive ratings.'],
     ...aggRatingKpis()
   ]);
   renderAggRatings();
@@ -2121,7 +2183,7 @@ function renderAggRatings() {
     return;
   }
   const cell = (x, brand, ch) => x
-    ? `<td class="agg-cell ${FHRatings.band(x.rating)}" data-b="${esc(brand)}" data-c="${esc(ch)}" title="${esc(brand)} on ${esc(aggChName(ch))}: click for details"><span class="r">${x.rating.toFixed(1)}★</span><span class="c">${x.count ? cnt(x.count) + ' ratings' : '&nbsp;'}</span></td>`
+    ? `<td class="agg-cell ${FHRatings.band(x.rating)}" data-b="${esc(brand)}" data-c="${esc(ch)}" title="${esc(brand)} on ${esc(aggChName(ch))}: click for details"><span class="r">${x.rating.toFixed(2)}★</span><span class="c">${x.count ? cnt(x.count) + ' ratings' : '&nbsp;'}</span></td>`
     : '<td>–</td>';
   el.innerHTML = `<thead><tr><th>Brand</th>${chs.map(c => `<th>${esc(aggChName(c))}</th>`).join('')}<th>All aggregators</th></tr></thead>
     <tbody>${rows.map(r => `<tr><td>${esc(r.brand)}</td>${chs.map(c => cell(r.per[c], r.brand, c)).join('')}${r.overall ? `<td class="${FHRatings.band(r.overall.rating)}"><span class="r">${r.overall.rating.toFixed(2)}★</span><span class="c">${r.overall.count ? cnt(r.overall.count) + ' ratings' : '&nbsp;'}</span></td>` : '<td>–</td>'}</tr>`).join('')}</tbody>
@@ -2134,15 +2196,18 @@ function aggRatingKpis() {
   const notYet = ['Lowest Aggregator Rating', '–<div class="muted small" style="font-size:11px;font-weight:500;margin-top:2px">Not imported yet · click to add</div>', false, () => openAggUpdateModal(), false, 'No aggregator ratings imported yet. Capture them from the Talabat, Deliveroo, Careem, Keeta or Noon partner portal. Click to add them.'];
   if (!S.brandRatings) return [notYet, ['Listings Below 4.0★', '–', false, () => openAggUpdateModal(), false, 'Appears once aggregator ratings are imported.']];
   const { rows } = aggMatrix();
-  const cells = rows.flatMap(r => FHRatings.CHANNELS.filter(c => r.per[c]).map(c => ({ brand: r.brand, ch: c, ...r.per[c] })));
+  // Per store listing (brand x kitchen x aggregator), not the brand's blended
+  // cell: a weak Jaddaf store (3.6 on 50 ratings) was hidden inside a green
+  // brand average carried by its Motor City store.
+  const cells = rows.flatMap(r => FHRatings.CHANNELS.filter(c => r.per[c]).flatMap(c => (r.per[c].rows || []).map(x => ({ brand: r.brand, ch: c, location: x.location, store: x.store, rating: x.rating, count: x.count }))));
   const scroll = () => { const p = $('.agg-panel'); if (p) p.scrollIntoView({ behavior: 'smooth', block: 'start' }); };
   if (!cells.length) return [notYet, ['Listings Below 4.0★', '–', false, () => openAggUpdateModal(), false, 'Appears once aggregator ratings are imported.']];
   const low = cells.reduce((a, b) => (b.rating < a.rating ? b : a));
   const below = cells.filter(c => c.rating < 4);
   const tied = cells.filter(c => c.rating === low.rating).length;
   return [
-    ['Lowest Aggregator Rating', `${low.rating.toFixed(1)}★<div class="muted small" style="font-size:11px;font-weight:500;margin-top:2px">${esc(low.brand)} · ${esc(aggChName(low.ch))}${tied > 1 ? ` · ${tied} listings at ${low.rating.toFixed(1)}★` : ''}</div>`, false, () => openAggCellModal(low.brand, low.ch), false, 'Lowest store rating of any brand on any aggregator, from the partner portals. Click for details.'],
-    ['Listings Below 4.0★', cnt(below.length), false, scroll, false, `Brand-on-aggregator listings rated under 4.0 out of ${cells.length}. Click to see the full table.`]
+    ['Lowest Aggregator Rating', `${low.rating.toFixed(2)}★<div class="muted small" style="font-size:11px;font-weight:500;margin-top:2px">${esc(low.brand)}${low.location ? ' (' + esc(low.location) + ')' : ''} · ${esc(aggChName(low.ch))}${tied > 1 ? ` · ${tied} stores at ${low.rating.toFixed(2)}★` : ''}</div>`, false, () => openAggCellModal(low.brand, low.ch), false, 'Lowest rating of any single store (brand, kitchen and aggregator) from the partner portals. Click for details.'],
+    ['Listings Below 4.0★', cnt(below.length), false, scroll, false, `Store listings (brand, kitchen and aggregator) rated under 4.0, out of ${cells.length}. Click to see the full table.`]
   ];
 }
 
@@ -2474,7 +2539,7 @@ function renderItemSales() {
       S.f.item = (S.f.item === topItem.k ? 'All' : topItem.k);
       syncFilterUI(); renderItemSales();
     }, isItemActive, topItem ? (isItemActive ? `Currently showing "${topItem.k}" (click to reset)` : `Click to filter Item Sales for "${topItem.k}"`) : ''],
-    ['Items Net Sales', money(totalRevenue), false, () => { openItemSalesDrillModal(); }, false, 'Sum of item price net of item-level discount, excluding cancelled orders and modifier lines. Click to view the daily breakdown.', 'drill'],
+    ['Items Net Sales', money(totalRevenue), false, () => { openItemSalesDrillModal(); }, false, 'Each menu line\'s share of its order\'s Net Sales (ex-VAT, after discount), so paid modifiers and delivery/packaging charges are spread over the order\'s items. Lines whose order is not loaded fall back to their own line total (VAT-inclusive). Cancelled orders and modifier lines excluded. Click to view the daily breakdown.', 'drill'],
     ['Avg Items per Order', orderCount ? (totalQty / orderCount).toFixed(2) : '0', false, () => { openItemSalesDrillModal(); }, false, 'Total items sold ÷ distinct orders containing at least one sold item. Click to view the daily breakdown.', 'drill']
   ]);
 
@@ -2540,7 +2605,7 @@ function renderDelayed() {
       S.f.onlyDelayed = !S.f.onlyDelayed;
       renderDelayed();
     }, isOnlyDelayed, 'Share of orders delayed more than 10 minutes past their estimated prep time. Click to toggle the delayed-only view.'],
-    ['Avg Delay (min)', delayed.length ? (sum(delayed, x => x.delay - DELAY_LIMIT) / delayed.length).toFixed(1) : '0', false, null, false, 'For delayed orders: average minutes beyond the 10-minute allowance.']
+    ['Avg Delay (min)', delayed.length ? (sum(delayed, x => x.delay - DELAY_LIMIT) / delayed.length).toFixed(1) : '0', false, null, false, 'For delayed orders: average minutes beyond the 10-minute allowance over the estimated prep time (15 min when the platform sends none). Motor City prep is Started → Prepared; Jaddaf (UrbanPiper) has no Started time, so its prep is Accepted → Ready and includes queue time.']
   ]);
 
   const O = isOnlyDelayed ? delayed : allOrders;
@@ -2597,7 +2662,10 @@ function renderDelayed() {
   const rk = groupBy(O.filter(x => x.delay != null), x => `${gk(x.o, S.ui.dgroup)}|${x.o.location}`).map(g => ({
     name: S.ui.dgroup === 'brand' ? `${g.rows[0].o.brand}, ${g.rows[0].o.location}` : g.rows[0].o.cuisine + ', ' + g.rows[0].o.location,
     targetKey: S.ui.dgroup === 'brand' ? g.rows[0].o.brand : g.rows[0].o.cuisine,
-    d: avg(g.rows.map(x => x.delay)),
+    // Same definition as the Avg Delay tile: minutes past the allowance,
+    // over the delayed orders only (0 when none was delayed).
+    d: (() => { const dl = g.rows.filter(x => x.delay > DELAY_LIMIT); return dl.length ? avg(dl.map(x => x.delay - DELAY_LIMIT)) : 0; })(),
+    late: g.rows.filter(x => x.delay > DELAY_LIMIT).length,
     count: g.rows.length
   })).sort((a, b) => b.d - a.d);
   // Heat scale: only POSITIVE delays are bad. The previous denominator was
@@ -2610,11 +2678,11 @@ function renderDelayed() {
   const thPrefix = isOnlyDelayed ? '🚨 Delayed Outlets (>10m)' : (S.ui.dgroup === 'brand' ? 'Brand' : 'Cuisine');
   const curTargetKey = S.f[S.ui.dgroup === 'brand' ? 'brand' : 'cuisine'];
   const filterField = S.ui.dgroup === 'brand' ? 'brand' : 'cuisine';
-  $('#delayTable').innerHTML = `<thead><tr><th style="text-align:left">${thPrefix}</th><th>Orders</th><th>Avg Delay (min)</th></tr></thead><tbody>${rk.map((r, i) => {
+  $('#delayTable').innerHTML = `<thead><tr><th style="text-align:left">${thPrefix}</th><th>Orders</th><th>Delayed</th><th>Avg Delay (min)</th></tr></thead><tbody>${rk.map((r, i) => {
     const t = r.d <= 0 ? 0 : Math.min(1, r.d / maxPositive);
     const heat = r.d <= 0 ? '#eef7ee' : `hsl(4,85%,${Math.max(40, 94 - t * 40)}%)`;
     const isRowActive = curTargetKey === r.targetKey;
-    return `<tr style="cursor:pointer;background:${isRowActive ? '#FFFDF2' : (i % 2 ? '#111' : '#fff')};color:${isRowActive ? '#000' : (i % 2 ? '#fff' : '#111')};outline:${isRowActive ? '2px solid #b38600' : 'none'}" onclick="(() => { S.f['${filterField}'] = (S.f['${filterField}'] === '${esc(r.targetKey)}' ? 'All' : '${esc(r.targetKey)}'); syncFilterUI(); render(); })()"><td>${isRowActive ? '✓ ' : ''}${esc(r.name)}</td><td>${r.count}</td><td style="background:${heat};color:#111;font-weight:700">${r.d.toFixed(2)}</td></tr>`;
+    return `<tr style="cursor:pointer;background:${isRowActive ? '#FFFDF2' : (i % 2 ? '#111' : '#fff')};color:${isRowActive ? '#000' : (i % 2 ? '#fff' : '#111')};outline:${isRowActive ? '2px solid #b38600' : 'none'}" onclick="(() => { S.f['${filterField}'] = (S.f['${filterField}'] === '${esc(r.targetKey)}' ? 'All' : '${esc(r.targetKey)}'); syncFilterUI(); render(); })()"><td>${isRowActive ? '✓ ' : ''}${esc(r.name)}</td><td>${r.count}</td><td>${r.late}</td><td style="background:${heat};color:#111;font-weight:700">${r.d.toFixed(2)}</td></tr>`;
   }).join('')}</tbody>`;
 }
 
@@ -2650,9 +2718,9 @@ function renderCommission() {
       openCommissionDrillModal();
     }, false, 'Total Commission / Net Sales across all channels. Click to view the full per-channel breakdown.', 'drill'],
 
-    ['Commission % of Gross Sales', gross ? pc(commission / gross, 1) : '0%', false, () => {
+    ['Commission % of Gross Sales', gross ? pc(commission / (gross / 1.05), 1) : '0%', false, () => {
       openCommissionDrillModal();
-    }, false, 'Total Commission / Gross Sales (receipt total, VAT-inclusive, before discount). Click to view the full per-channel breakdown.', 'drill'],
+    }, false, 'Total Commission / Gross Sales excluding VAT (receipt total / 1.05, before discount), so both sides are ex-VAT. Click to view the full per-channel breakdown.', 'drill'],
 
     ['Highest-Commission Channel', topComm ? esc(topComm.k) : '–', true, () => {
       if (!topComm) return;
@@ -2822,19 +2890,24 @@ function renderCostsBuilder(commission) {
   // once instead).
   const hasAnyCost = COST_CATEGORIES.some(c => (manualCosts[c.key] || []).some(r => +r.amount > 0));
   const banner = $('#costsRangeBanner');
+  // The costs are one company-wide lump sum. With a channel, brand, branch or
+  // other order filter on, Net Sales shrink to that slice but every cost is
+  // still taken off, so EBITDA understates (e.g. one channel's 40k net against
+  // 120k of company costs reads -80k).
+  const f = S.f, set = v => v != null && v !== 'All' && !(Array.isArray(v) && !v.length);
+  const slice = [['channel', 'Channel'], ['brand', 'Brand'], ['location', 'Branch'], ['cuisine', 'Cuisine'], ['payment', 'Payment'], ['partner', 'Partner'], ['day', 'Day'], ['slot', 'Time slot'], ['hour', 'Hour']].filter(([k]) => set(f[k])).map(([, l]) => l);
+  const sliceMsg = hasAnyCost && slice.length ? `⚠ ${esc(slice.join(', '))} filter on: Net Sales cover only that slice, but the costs entered are for the whole company, so EBITDA and the cost % here are understated. Clear those filters, or enter only that slice's costs.` : '';
   if (banner) {
-    if (!hasAnyCost) {
-      banner.hidden = true;
-    } else if (!costsRange) {
+    let rangeMsg = '';
+    if (hasAnyCost && !costsRange) {
       costsRange = { from: S.f.from, to: S.f.to };
       saveCostsRange();
-      banner.hidden = true;
-    } else if (S.f.from && S.f.to && (costsRange.from !== S.f.from || costsRange.to !== S.f.to)) {
-      banner.hidden = false;
-      banner.innerHTML = `⚠ These costs were last saved for <b>${esc(costsRange.from)} to ${esc(costsRange.to)}</b> — your current filter is <b>${esc(S.f.from)} to ${esc(S.f.to)}</b>. The EBITDA figures below use that older lump sum as-is and may be wrong for this range. Edit/re-save any amount to apply it to the current range.`;
-    } else {
-      banner.hidden = true;
+    } else if (hasAnyCost && S.f.from && S.f.to && (costsRange.from !== S.f.from || costsRange.to !== S.f.to)) {
+      rangeMsg = `⚠ These costs were last saved for <b>${esc(costsRange.from)} to ${esc(costsRange.to)}</b> — your current filter is <b>${esc(S.f.from)} to ${esc(S.f.to)}</b>. The EBITDA figures below use that older lump sum as-is and may be wrong for this range. Edit/re-save any amount to apply it to the current range.`;
     }
+    const msgs = [rangeMsg, sliceMsg].filter(Boolean);
+    banner.hidden = !msgs.length;
+    banner.innerHTML = msgs.join('<br>');
   }
   return totals;
 }
@@ -2876,7 +2949,10 @@ async function downloadPLPdf() {
   if (!lastPL) return;
   if (!window.jspdf || !window.jspdf.jsPDF) { alert('PDF library failed to load (offline?) -- use the CSV download instead.'); return; }
   const { gross, disc, vat, net, cogs, grossProfit, labor, commission, controllable, occupancy, ga, eb, primeCost, from, to, channel, brand, location } = lastPL;
+  // Cost lines are shown as positive shares of Net Sales; profit lines keep
+  // their sign, so a loss prints as a negative % instead of a positive one.
   const pctOf = v => net ? (Math.abs(v) / net * 100).toFixed(1) + '%' : '0.0%';
+  const pctSigned = v => net ? (v / net * 100).toFixed(1) + '%' : '0.0%';
   const fmtAmt = v => (v < 0 ? '(' + Math.abs(v).toFixed(2) + ')' : v.toFixed(2));
   const ded = v => fmtAmt(-Math.abs(v));
   const opexTotal = labor + commission + controllable + occupancy + ga;
@@ -2912,7 +2988,7 @@ async function downloadPLPdf() {
     ['Revenue', 'Net Sales (Total)', net.toFixed(2), '100.0%'],
     ['COST OF GOODS SOLD (COGS)', '', '', ''],
     ['COGS', 'Food & Beverage Cost', ded(cogs), pctOf(cogs)],
-    ['GROSS PROFIT', '', fmtAmt(grossProfit), pctOf(grossProfit)],
+    ['GROSS PROFIT', '', fmtAmt(grossProfit), pctSigned(grossProfit)],
     ['OPERATING EXPENSES', '', '', ''],
     ['Expenses', 'Labor Cost', ded(labor), pctOf(labor)],
     ['Expenses', 'Portal / Aggregator Commission', ded(commission), pctOf(commission)],
@@ -2920,7 +2996,7 @@ async function downloadPLPdf() {
     ['Expenses', 'Occupancy Costs', ded(occupancy), pctOf(occupancy)],
     ['Expenses', 'General & Administrative', ded(ga), pctOf(ga)],
     ['Expenses', 'Total', ded(opexTotal), pctOf(opexTotal)],
-    ['EBITDA', '', fmtAmt(eb), pctOf(eb)]
+    ['EBITDA', '', fmtAmt(eb), pctSigned(eb)]
   ];
   const sectionRows = [0, 5, 8], highlightRows = [7, 15], subtotalRows = [14];
 
@@ -3119,8 +3195,10 @@ function comparisonWindows(orders) {
   // null means the latest day is complete and no cut applies.
   const nowMs = Date.now();
   const yesterdayCutMs = latestDate === dkey(nowMs) ? nowMs - 24 * 3600 * 1000 : null;
+  // Same for Week-over-Week: last week's same weekday is cut at now minus 7 days.
+  const lastWeekCutMs = latestDate === dkey(nowMs) ? nowMs - 7 * 24 * 3600 * 1000 : null;
 
-  return { latestDate, yesterdayKey, sameDayLastWeekKey, yesterdaySameDayLastWeekKey, thisWeekStart, lastWeekStart, lastWeekEnd, yesterdayCutMs };
+  return { latestDate, yesterdayKey, sameDayLastWeekKey, yesterdaySameDayLastWeekKey, thisWeekStart, lastWeekStart, lastWeekEnd, yesterdayCutMs, lastWeekCutMs };
 }
 
 // null (never Infinity/NaN) when there's no prior-period sales to compare
@@ -3185,7 +3263,7 @@ function channelDeltaRows() {
   const ydayM = byKey(salesAgg(inWin(w.yesterdayKey, w.yesterdayKey), o => o.channel));
   const ydayToNowM = byKey(salesAgg(O.filter(o => dkey(o.receivedAt) === w.yesterdayKey && (w.yesterdayCutMs == null || o.receivedAt <= w.yesterdayCutMs)), o => o.channel));
   const thisWkM = byKey(salesAgg(inWin(w.thisWeekStart, w.latestDate), o => o.channel));
-  const lastWkM = byKey(salesAgg(inWin(w.lastWeekStart, w.lastWeekEnd), o => o.channel));
+  const lastWkM = byKey(salesAgg(inWin(w.lastWeekStart, w.lastWeekEnd).filter(o => w.lastWeekCutMs == null || o.receivedAt <= w.lastWeekCutMs), o => o.channel));
   // The channel list comes from the structural view, not from O: with a brand
   // selected, deriving it from O dropped every other channel, so examining one
   // brand collapsed this comparison table too (Bagel Bloom sells on a single
@@ -3568,7 +3646,7 @@ function renderAccountingTrendDrillBody() {
   const body = $('#kpiModalBody');
   const z = S.zoho;
   if (!body || !z) return;
-  const { byMonth, coverageStart } = grubCenterNetSalesByMonth();
+  const { byMonth, coverageStart, partialMonth, firstDay } = grubCenterNetSalesByMonth();
   const rows = (z.trend || []).slice().reverse();
   body.innerHTML = `
     <div class="a-ratecard">
@@ -3577,10 +3655,11 @@ function renderAccountingTrendDrillBody() {
         <tbody>
           ${rows.map(r => {
             const noData = !coverageStart || r.key < coverageStart;
+            const partial = r.key === partialMonth;
             const income = noData ? null : (byMonth[r.key] || 0);
             const netProfit = noData ? null : income - r.expenses;
-            return `<tr${noData ? ' style="color:#999;font-style:italic"' : ''}>
-            <td style="font-weight:600">${esc(r.label)}</td>
+            return `<tr${noData || partial ? ' style="color:#999;font-style:italic"' : ''}>
+            <td style="font-weight:600">${esc(r.label)}${partial ? ` <span class="muted small">(sales from ${esc(firstDay.slice(8))} only)</span>` : ''}</td>
             <td style="text-align:right">${income == null ? 'no GrubCENTER data' : money(income)}</td>
             <td style="text-align:right">${money(r.expenses)}</td>
             <td style="text-align:right;font-weight:600">${netProfit == null ? 'no GrubCENTER data' : money(netProfit)}</td>
@@ -3588,7 +3667,7 @@ function renderAccountingTrendDrillBody() {
           </tr>`; }).join('')}
         </tbody>
       </table>
-      <div class="pl-memo">Income is GrubCENTER Net Sales for that month; Net Profit is Income − Expenses, before Portal Commission (Zoho Books never records sales invoices for this business, so neither uses Zoho's own income). Expenses are Zoho's own booked figures. Months marked "no GrubCENTER data" are outside this dashboard's cached order history (a rolling ~45-day window) -- not zero revenue.</div>
+      <div class="pl-memo">Income is GrubCENTER Net Sales for that month; Net Profit is Income − Expenses, before Portal Commission. Neither uses Zoho's own income: Zoho holds some aggregator sales invoices, and using both would count sales twice. Expenses are Zoho's own booked figures. A month marked "sales from DD only" has orders for part of the month against a full month of expenses, so its profit is understated. Months marked "no GrubCENTER data" are outside this dashboard's cached order history (a rolling ~45-day window) -- not zero revenue.</div>
     </div>`;
 }
 
@@ -3669,7 +3748,7 @@ function renderAccountingOverdueDrillBody(kind) {
   // "outstanding" filter just above.
   const todayKey = dkey(Date.now());
   const records = ((kind === 'invoices' ? z.invoices : z.bills) || [])
-    .filter(x => (+x.balance || 0) > 0 && x.due_date && x.due_date < todayKey)
+    .filter(x => (+x.balance || 0) > 0 && x.due_date && x.due_date < todayKey && x.status !== 'draft' && x.status !== 'void')
     .sort((a, b) => (a.due_date || '').localeCompare(b.due_date || ''));
   const who = kind === 'invoices' ? 'Customer' : 'Vendor';
   const numberLabel = kind === 'invoices' ? 'Invoice #' : 'Bill #';
@@ -3810,14 +3889,19 @@ function liveCurrentMonthKey() {
 // (e.g. "–") rather than a misleading hard 0.
 function grubCenterNetSalesByMonth() {
   const byMonth = {};
-  let minKey = null;
+  let minKey = null, firstDay = null;
   S.orders.forEach(o => {
-    const k = dkey(o.receivedAt).slice(0, 7);
+    const d = dkey(o.receivedAt), k = d.slice(0, 7);
     if (minKey === null || k < minKey) minKey = k;
+    if (firstDay === null || d < firstDay) firstDay = d;
     if (o.cancelled) return;
     byMonth[k] = (byMonth[k] || 0) + (o.netSales || 0);
   });
-  return { byMonth, coverageStart: minKey };
+  // The first loaded month is only partly covered when the order history
+  // starts after its 1st: its income is part-month against a full month of
+  // Zoho expenses, so its profit must not be read as that month's result.
+  const partialMonth = minKey && firstDay > minKey + '-01' ? minKey : null;
+  return { byMonth, coverageStart: minKey, partialMonth, firstDay };
 }
 
 // GrubCENTER's own Net Sales and portal commission for the current month --
@@ -3837,16 +3921,30 @@ function openTrueProfitDrillModal() {
   renderTrueProfitDrillBody();
   openKpiModal('True Net Profit — GrubCENTER Revenue + Zoho Expenses', 'Blends this month\'s real GrubCENTER sales with Zoho\'s actual booked operating expenses.');
 }
+// Aggregator vendors whose Zoho bills are commission statements (e.g. talabat
+// "Commission Adjt"). True Net Profit already subtracts the dashboard's own
+// commission per order, so these bills are taken back out of Zoho's expenses
+// or commission would be counted twice. Bill totals carry 5% VAT (talabat
+// 6,070.05 = 5,781.00 x 1.05) while the P&L expense is ex-VAT, hence / 1.05.
+const AGGREGATOR_VENDOR_RE = /talabat|delivery hero|deliveroo|careem|keeta|noon food/i;
+function aggregatorBillsInMonth(z) {
+  const mk = z && z.currentMonthKey;
+  const rows = ((z && z.bills) || []).filter(b => mk && (b.date || '').slice(0, 7) === mk && b.status !== 'draft' && b.status !== 'void' && AGGREGATOR_VENDOR_RE.test(b.vendor_name || ''));
+  return { rows, exVat: rows.reduce((s, b) => s + (+b.total || 0), 0) / 1.05 };
+}
+
 function renderTrueProfitDrillBody() {
   const body = $('#kpiModalBody');
   const z = S.zoho;
   if (!body || !z) return;
   const grub = grubCenterMonthFigures();
-  const trueNetProfit = grub.netSales - grub.commission - z.expenses;
+  const aggBills = aggregatorBillsInMonth(z);
+  const trueNetProfit = grub.netSales - grub.commission - (z.expenses - aggBills.exVat);
   const rows = [
-    { label: 'GrubCENTER Net Sales', amount: grub.netSales, cls: '' },
-    { label: '(−) GrubCENTER Commission', amount: -grub.commission, cls: '' },
-    { label: '(−) Zoho Operating Expenses (vendor bills)', amount: -z.expenses, cls: '' },
+    { label: 'Order Net Sales (both kitchens)', amount: grub.netSales, cls: '' },
+    { label: '(−) Portal Commission (per order)', amount: -grub.commission, cls: '' },
+    { label: '(−) Zoho Expenses', amount: -z.expenses, cls: '' },
+    ...(aggBills.rows.length ? [{ label: `(+) Aggregator bills in Zoho, ex-VAT (${aggBills.rows.map(b => b.vendor_name).join(', ')}): already in the commission line`, amount: aggBills.exVat, cls: '' }] : []),
     { label: '= True Net Profit', amount: trueNetProfit, cls: 'pl-total' }
   ];
   const staleMonth = z.currentMonthKey && z.currentMonthKey !== liveCurrentMonthKey();
@@ -3859,7 +3957,7 @@ function renderTrueProfitDrillBody() {
           ${rows.map(r => `<tr class="${r.cls}"><td>${esc(r.label)}</td><td class="cost-amt">${money(r.amount)}</td></tr>`).join('')}
         </tbody>
       </table>
-      <div class="pl-memo">Zoho's own "Total Income" shows AED 0 this month because this business doesn't book sales invoices in Zoho -- all real revenue is tracked in GrubCENTER instead.</div>
+      <div class="pl-memo">Revenue comes from the order data (GrubCENTER and UrbanPiper), not Zoho's own income: Zoho holds some aggregator sales invoices, and using both would count sales twice.</div>
     </div>`;
 }
 
@@ -3909,7 +4007,7 @@ function renderAccounting() {
   // beside, unlike True Net Profit below which additionally subtracts
   // commission.
   const netProfit = has ? grub.netSales - z.expenses : 0;
-  const trueNetProfit = has ? grub.netSales - grub.commission - z.expenses : 0;
+  const trueNetProfit = has ? grub.netSales - grub.commission - (z.expenses - aggregatorBillsInMonth(z).exVat) : 0;
   const bankOnly = has ? (z.bankAccounts || []).filter(a => a.type === 'bank').reduce((s, a) => s + (+a.balance || 0), 0) : 0;
   const cashOnly = has ? (z.bankAccounts || []).filter(a => a.type === 'cash').reduce((s, a) => s + (+a.balance || 0), 0) : 0;
   // Excludes draft (not yet finalized/confirmed with the vendor) and void
@@ -3918,7 +4016,7 @@ function renderAccounting() {
   const totalProcurement = has ? (z.bills || []).filter(b => b.status !== 'draft' && b.status !== 'void').reduce((s, b) => s + (+b.total || 0), 0) : 0;
 
   kpis('kpi-accounting', [
-    ['Total Income', has ? money(grub.netSales) : '–', false, drill(openAccountingTrendDrillModal), false, 'GrubCENTER Net Sales for the current month -- the real revenue source, since Zoho Books never records sales invoices for this business. Click for the full month-by-month history.', 'drill'],
+    ['Total Income', has ? money(grub.netSales) : '–', false, drill(openAccountingTrendDrillModal), false, 'Order Net Sales (both kitchens) for the current month. Zoho\'s own income is not used: it holds only some aggregator sales invoices, and adding it would count sales twice. Click for the full month-by-month history.', 'drill'],
     ['Total Expenses', has ? money(z.expenses) : '–', false, drill(openAccountingTrendDrillModal), false, 'Cost of Goods Sold + Operating + Non-Operating Expenses for the current month. Click for the full month-by-month history.', 'drill'],
     ['Net Profit', has ? money(netProfit) : '–', false, drill(openAccountingTrendDrillModal), false, 'Total Income (GrubCENTER Net Sales) − Total Expenses (Zoho Operating Expenses) for the current month -- before Portal Commission. See True Net Profit below for the commission-inclusive version.', 'drill'],
     ['Net Margin %', has && grub.netSales ? pc(netProfit / grub.netSales, 1) : (has ? '0%' : '–'), false, drill(openAccountingTrendDrillModal), false, 'Net Profit / Total Income. Click for the full month-by-month history.', 'drill'],
@@ -3932,9 +4030,9 @@ function renderAccounting() {
     ['Total Invoices', has ? cnt(z.invoices.length) : '–', false, drill(() => show('export')), false, 'All Zoho Books invoices, any status. Click to open Data Export and download the full list.', 'nav'],
     ['Total Bills', has ? cnt(z.bills.length) : '–', false, drill(() => show('export')), false, 'All Zoho Books bills, any status. Click to open Data Export and download the full list.', 'nav'],
     ['Top Vendor Owed', has ? topVendorOwedLabel(z) : '–', true, drill(() => openAccountingAgingDrillModal('ap')), false, 'The vendor with the highest total outstanding balance across all their bills. Click for the full A/P breakdown.', 'drill'],
-    ['Sales Net (orders)', money(grub.netSales), false, () => show('ebitda'), false, 'Net Sales for the current month, from GrubCENTER order data (the real revenue source -- Zoho Books never records sales invoices for this business). Click to see the full P&L on the EBITDA page.', 'nav'],
+    ['Sales Net (orders)', money(grub.netSales), false, () => show('ebitda'), false, 'Net Sales for the current month, from the order data (both kitchens). Zoho\'s income is not used, to avoid counting sales twice. Click to see the full P&L on the EBITDA page.', 'nav'],
     ['Portal Commission', money(grub.commission), false, () => show('commission'), false, 'Portal/aggregator commission for the current month, computed from order data. Click to see the full channel breakdown on the Commission page.', 'nav'],
-    ['True Net Profit', has ? money(trueNetProfit) : '–', false, drill(openTrueProfitDrillModal), false, 'Order Net Sales (both kitchens) − Portal Commission − Zoho Operating Expenses, for the current month. Click for the full breakdown.', 'drill'],
+    ['True Net Profit', has ? money(trueNetProfit) : '–', false, drill(openTrueProfitDrillModal), false, 'Order Net Sales (both kitchens) − Portal Commission − Zoho Expenses (less any aggregator commission bills, already counted in Portal Commission), for the current month. Click for the full breakdown.', 'drill'],
     ['Total Assets', has && z.balanceSheet ? money(z.balanceSheet.totalAssets) : '–', false, (has && z.balanceSheet) ? openBalanceSheetDrillModal : null, false, 'Total assets on the balance sheet, as of today (Zoho Books). Click for the full breakdown.', 'drill'],
     ['Total Liabilities', has && z.balanceSheet ? money(z.balanceSheet.totalLiabilities) : '–', false, (has && z.balanceSheet) ? openBalanceSheetDrillModal : null, false, 'Total liabilities on the balance sheet, as of today (Zoho Books). Click for the full breakdown.', 'drill'],
     ['Total Equity', has && z.balanceSheet ? money(z.balanceSheet.totalEquity) : '–', false, (has && z.balanceSheet) ? openBalanceSheetDrillModal : null, false, "Total equity on the balance sheet, as of today (Zoho Books' own Total Equities figure, cross-checked against Assets − Liabilities). Click for the full breakdown.", 'drill']
@@ -3946,19 +4044,19 @@ function renderAccounting() {
     return;
   }
 
-  const { byMonth, coverageStart } = grubCenterNetSalesByMonth();
+  const { byMonth, coverageStart, partialMonth } = grubCenterNetSalesByMonth();
   const labels = z.trend.map(t => t.label);
   lineChart('c-acctrend', labels, [
     // null (not 0) for months before coverageStart -- S.orders only holds a
     // rolling ~45-day GrubCENTER window, so those months genuinely have no
     // data rather than zero revenue; null leaves a gap in the line instead
     // of a misleading dip to 0.
-    { name: 'Income', color: Y, data: z.trend.map(t => (!coverageStart || t.key < coverageStart) ? null : (byMonth[t.key] || 0)) },
+    { name: 'Income', color: Y, data: z.trend.map(t => (!coverageStart || t.key < coverageStart || t.key === partialMonth) ? null : (byMonth[t.key] || 0)) },
     { name: 'Expenses', color: '#e53935', data: z.trend.map(t => t.expenses) },
     // Same GrubCENTER-Income-minus-Zoho-Expenses basis as the Net Profit
     // tile above, not Zoho's own t.netProfit -- same null-for-no-coverage
     // treatment as the Income line, for the same reason.
-    { name: 'Net Profit', color: BLUE, data: z.trend.map(t => (!coverageStart || t.key < coverageStart) ? null : (byMonth[t.key] || 0) - t.expenses) }
+    { name: 'Net Profit', color: BLUE, data: z.trend.map(t => (!coverageStart || t.key < coverageStart || t.key === partialMonth) ? null : (byMonth[t.key] || 0) - t.expenses) }
   ], { fmt: money });
 
   hbar('c-araging', (z.arAging || []).map(b => ({ k: b.label, v: b.amount })), { fmt: money, color: Y, name: 'A/R' });
@@ -4046,6 +4144,12 @@ function recomputeSplit(mKey, resetManual = false) {
   const asOfMs = Math.max(...S.orders.map(o => o.receivedAt));
   Object.keys(sales30).forEach(ch => { commissionRates[ch] = FHCommission.rateForChannel(ch, asOfMs); });
   const split = FHGrowth.splitTarget({ total: mt.company.sales, orderTotal: mt.company.orders, sales30, orders30, commissionRates });
+  // Unlocked channels with no sales in the window get no share: left as they
+  // were, an old target made the channels add up to more than the company.
+  Object.keys(mt.channels).forEach(ch => {
+    const row = mt.channels[ch];
+    if (!row.manual && !split[ch]) { row.sales = 0; row.orders = 0; delete row.basis; }
+  });
   Object.keys(split).forEach(ch => {
     const row = mt.channels[ch] || (mt.channels[ch] = { sales: 0, orders: 0, manual: false });
     if (row.manual) return;
@@ -4111,13 +4215,13 @@ function monthLabel(mKey) {
 
 // Per-channel rows, worst first. In planning mode the figures are projections.
 // Row click filters the page to that channel.
-function channelAchievementTable(valueByCh, mt, elapsed, totalDays, commissionRates, planning) {
+function channelAchievementTable(valueByCh, mt, elapsed, totalDays, commissionRates, planning, partialDay = false, todayByCh = {}) {
   const keys = uniq([...S.orders.map(o => o.channel), ...Object.keys(mt.channels)]).filter(Boolean);
   const active = S.f.channel;
   const rows = keys.map(k => {
     const achieved = valueByCh[k] || 0;
     const t = mt.channels[k] || { sales: 0, orders: 0 };
-    const a = FHGrowth.achievement({ achieved, target: +t.sales || 0, elapsedDays: planning ? 0 : elapsed, totalDays });
+    const a = FHGrowth.achievement({ achieved, target: +t.sales || 0, elapsedDays: planning ? 0 : elapsed, totalDays, partialDay: !planning && partialDay, todaySoFar: todayByCh[k] || 0 });
     const rag = t.sales > 0 ? (planning ? FHGrowth.projectedRag(achieved, +t.sales) : a.rag) : 'none';
     return { k, t, a, achieved, rag, isActive: active === k };
   }).filter(r => r.t.sales > 0 || r.achieved > 0);
@@ -4178,7 +4282,7 @@ function planCard(p, remaining) {
       <div class="cp-pmeta">KPI: ${esc(p.campaign.kpis.join(', '))} · Effort: ${esc(p.campaign.effort)}</div>
       ${p.aboveCap ? '<div class="cp-guard">Budget override is above the auto cap: extra spend is not counted in uplift.</div>' : ''}
     </div>` : ''}
-    <div class="cp-stats">Target AED ${money(p.target)} · ${p.planning ? 'Projected' : 'Achieved'} AED ${money(p.achieved)} (${p.pct == null ? '–' : pc(p.pct, 0)}) · Gap AED ${money(p.gap)}</div>
+    <div class="cp-stats">Target AED ${money(p.target)} · ${p.planning ? 'Projected' : 'Achieved'} AED ${money(p.achieved)} (${p.pct == null ? '–' : pc(p.pct, 0)}) · ${p.planning ? 'Gap' : 'Gap at current pace'} AED ${money(p.gap)}</div>
     <div class="cp-stats muted small">Commission ${p.commissionPct}% · Discount ${p.discPct}% · AOV AED ${p.aov} · Cancel rate ${p.cancelRate}%</div>
     ${p.guard ? `<div class="cp-guard">${esc(p.guard)}</div>` : ''}
     <ol class="cp-promos">${promos}</ol>
@@ -4232,16 +4336,24 @@ function renderTargets() {
   const elapsed = asOf ? +asOf.slice(8) : 0;
   const inThisMonth = o => dkey(o.receivedAt).slice(0, 7) === mKey;
 
-  // Last 30 days of orders: the run-rate that projects a month that has not started.
-  const from30 = latest ? FHGrowth.addDaysKey(latest, -29) : '';
-  const trailing = S.orders.filter(o => latest && dkey(o.receivedAt) >= from30 && dkey(o.receivedAt) <= latest);
+  // Last 30 complete days of orders: the run-rate that projects a month that
+  // has not started. Today's part-day is left out, and each kitchen's sales
+  // are divided by the days it actually traded in the window (Jaddaf went live
+  // on 10 Nov), not a flat 30, so a newer kitchen isn't understated.
+  const todayKey = dkey(Date.now());
+  const runEnd = latest && latest === todayKey ? FHGrowth.addDaysKey(latest, -1) : latest;
+  const from30 = runEnd ? FHGrowth.addDaysKey(runEnd, -29) : '';
+  const trailing = S.orders.filter(o => runEnd && dkey(o.receivedAt) >= from30 && dkey(o.receivedAt) <= runEnd);
   const trailingLive = trailing.filter(o => !o.cancelled);
+  const kitchenDays = {};
+  trailing.forEach(o => { (kitchenDays[o.location] = kitchenDays[o.location] || new Set()).add(dkey(o.receivedAt)); });
+  const daysOf = loc => (kitchenDays[loc] && kitchenDays[loc].size) || 30;
   const forecastByCh = {}, ordersByCh = {};
   trailingLive.forEach(o => {
-    forecastByCh[o.channel] = (forecastByCh[o.channel] || 0) + o.netSales / 30 * totalDays;
-    ordersByCh[o.channel] = (ordersByCh[o.channel] || 0) + totalDays / 30;
+    forecastByCh[o.channel] = (forecastByCh[o.channel] || 0) + o.netSales / daysOf(o.location) * totalDays;
+    ordersByCh[o.channel] = (ordersByCh[o.channel] || 0) + totalDays / daysOf(o.location);
   });
-  const dailyRunRate = sum(trailingLive, o => o.netSales) / 30;
+  const dailyRunRate = sum(trailingLive, o => o.netSales / daysOf(o.location));
 
   const scoped = tgtOrders();
   const inMonth = scoped.filter(inThisMonth);
@@ -4256,8 +4368,17 @@ function renderTargets() {
   const selSum = map => sum(selKeys, k => map[k] || 0);
   const achievedSel = planning ? selSum(forecastByCh) : sum(live, o => o.netSales);
   const ordersSel = planning ? selSum(ordersByCh) : live.length;
-  const ach = FHGrowth.achievement({ achieved: achievedSel, target: tgt.sales, elapsedDays: planning ? 0 : elapsed, totalDays });
-  const ordAch = FHGrowth.achievement({ achieved: ordersSel, target: tgt.orders, elapsedDays: planning ? 0 : elapsed, totalDays });
+  // Today is still trading when the month's last data day is today: pace is
+  // then measured on complete days and today counts as a day still to come.
+  const partialDay = !planning && asOf === todayKey;
+  const liveToday = partialDay ? live.filter(o => dkey(o.receivedAt) === todayKey) : [];
+  // Same weekday-seasonal month-end projection as the Sales page, when the
+  // month is the live one (a past month is complete: projected = achieved).
+  const liveMonthOfData = !planning && asOf === latest;
+  const projSales = liveMonthOfData ? weekdayProjection(scoped, asOf).value : undefined;
+  const projOrders = liveMonthOfData ? weekdayProjection(scoped, asOf, () => 1).value : undefined;
+  const ach = FHGrowth.achievement({ achieved: achievedSel, target: tgt.sales, elapsedDays: planning ? 0 : elapsed, totalDays, partialDay, todaySoFar: sum(liveToday, o => o.netSales), projected: projSales });
+  const ordAch = FHGrowth.achievement({ achieved: ordersSel, target: tgt.orders, elapsedDays: planning ? 0 : elapsed, totalDays, partialDay, todaySoFar: liveToday.length, projected: projOrders });
   const hasTarget = tgt.sales > 0;
   const rag = hasTarget ? (planning ? FHGrowth.projectedRag(achievedSel, tgt.sales) : ach.rag) : 'none';
   const gapTxt = hasTarget ? (ach.gap > 0 ? money(ach.gap) : 'Ahead by ' + money(-ach.gap)) : '–';
@@ -4284,10 +4405,10 @@ function renderTargets() {
     ['Achieved MTD', money(achievedSel), false, noop, false, 'Net Sales for the selected month to date, excluding cancelled orders.', ''],
     ['Achievement %', pctTxt, false, noop, false, 'Achieved Net Sales / Net Sales target.', ''],
     ['Gap to Target', gapTxt, false, noop, false, 'Target minus achieved. Negative means the target is already beaten.', ''],
-    ['Need / Day vs Current / Day', hasTarget && ach.remainingDays ? `${money(ach.requiredDaily)} / ${money(ach.currentDaily)}` : money(ach.currentDaily), true, noop, false, 'Net Sales per day still needed to hit target, against the current daily run-rate.', ''],
-    ['Projected Month-End', money(ach.projected) + (hasTarget ? `<div class="muted small">(${pc(ach.projected / tgt.sales, 0)} of target)</div>` : ''), false, noop, false, 'Current daily run-rate x days in month.', ''],
+    ['Need / Day vs Current / Day', hasTarget && ach.remainingDays ? `${money(ach.requiredDaily)} / ${money(ach.currentDaily)}` : money(ach.currentDaily), true, noop, false, 'Net Sales per day still needed to hit target (from today, today included), against the average of the complete days so far.', ''],
+    ['Projected Month-End', money(ach.projected) + (hasTarget ? `<div class="muted small">(${pc(ach.projected / tgt.sales, 0)} of target)</div>` : ''), false, noop, false, 'Same weekday-seasonal projection as Order Details: this month\'s complete days, weekday-adjusted, carried over the rest of today and the remaining days.', ''],
     ['Orders vs Target', ordAch.target ? `${cnt(live.length)} / ${cnt(ordAch.target)}` : cnt(live.length), false, noop, false, 'Non-cancelled orders this month against the orders target.', ''],
-    ['Status', ragChip(rag), false, noop, false, 'On track: achieved is at least 98% of the pro-rated target for today. At risk: 90% to 98%. Off track: below 90%.', '']
+    ['Status', ragChip(rag), false, noop, false, 'Pace on complete days: achieved through yesterday against the target pro-rated to yesterday (today counts once it is over). On track at 98% or more, At risk 90% to 98%, Off track below 90%.', '']
   ];
   // kpis() stops propagation on tile clicks, so each tile opens its detail through its own handler.
   kpiList.forEach(k => { k[3] = () => openTgtDetail('kpi:' + k[0]); });
@@ -4297,7 +4418,7 @@ function renderTargets() {
     ['Scope', tgt.scope],
     ['Month', monthLabel(mKey)],
     ['Days in month', totalDays],
-    ['Days with data', planning ? '0 (month not started)' : elapsed],
+    ['Days with data', planning ? '0 (month not started)' : elapsed + (partialDay ? ` (${ach.completeDays} complete + today so far)` : '')],
     ['Target (AED)', hasTarget ? money(tgt.sales) : '–'],
     [planning ? 'Projected (AED)' : 'Achieved (AED)', money(achievedSel)],
     ['Gap (AED)', gapTxt],
@@ -4313,9 +4434,10 @@ function renderTargets() {
   live.forEach(o => { const k = dkey(o.receivedAt); perDay.set(k, (perDay.get(k) || 0) + o.netSales); });
   let run = 0;
   const actual = dayKeys.map((k, i) => { if (i + 1 > elapsed) return null; run += perDay.get(k) || 0; return +run.toFixed(2); });
+  const actualAtAsOf = elapsed ? (actual[elapsed - 1] || 0) : 0;
   const projected = dayKeys.map((_, i) => planning
     ? +(achievedSel / totalDays * (i + 1)).toFixed(2)
-    : (i + 1 < elapsed ? null : +(ach.currentDaily * (i + 1)).toFixed(2)));
+    : (i + 1 < elapsed ? null : +(actualAtAsOf + (ach.projected - actualAtAsOf) * (totalDays > elapsed ? (i + 1 - elapsed) / (totalDays - elapsed) : 0)).toFixed(2)));
   tgtChartDays = dayKeys.map((k, i) => ({ k, target: targetPath[i], actual: planning ? null : actual[i], projected: projected[i] }));
   if (planning) {
     lineChart('c-tgtpace', dayKeys.map(k => k.slice(8)), [
@@ -4335,14 +4457,16 @@ function renderTargets() {
   uniq([...S.orders.map(o => o.channel), ...Object.keys(mt.channels)]).filter(Boolean).forEach(ch => { commissionRates[ch] = FHCommission.rateForChannel(ch, asOfMs); });
 
   renderTargetSetup(mKey, mt);
-  $('#tgtChannelTable').innerHTML = channelAchievementTable(planning ? forecastByCh : achievedByCh, mt, elapsed, totalDays, commissionRates, planning);
+  const todayByCh = {};
+  if (partialDay) allLive.filter(o => dkey(o.receivedAt) === todayKey).forEach(o => { todayByCh[o.channel] = (todayByCh[o.channel] || 0) + o.netSales; });
+  $('#tgtChannelTable').innerHTML = channelAchievementTable(planning ? forecastByCh : achievedByCh, mt, elapsed, totalDays, commissionRates, planning, partialDay, todayByCh);
 
   // Channel promotion plans. History is the last 30 days, cancelled orders included.
   const history = trailing.map(o => ({
     key: dkey(o.receivedAt), channel: o.channel, netSales: o.netSales, receiptTotal: o.receiptTotal,
     discount: o.discount, cancelled: o.cancelled, hour: dubaiHour(o.receivedAt)
   }));
-  const monthRows = planning ? [] : allMonth.map(o => ({ channel: o.channel, cancelled: o.cancelled, netSales: o.netSales }));
+  const monthRows = planning ? [] : allMonth.map(o => ({ key: dkey(o.receivedAt), channel: o.channel, cancelled: o.cancelled, netSales: o.netSales }));
   const targets = {};
   Object.keys(mt.channels).forEach(ch => { targets[ch] = { sales: +mt.channels[ch].sales || 0, orders: +mt.channels[ch].orders || 0 }; });
   // Brands per channel and net per brand over the last 30 days: feeds requirements and assortment.
@@ -4358,7 +4482,7 @@ function renderTargets() {
   const { plans, baseline } = FHGrowth.channelPlans({
     history, monthRows, targets, commissionRates,
     forecast: planning ? forecastByCh : undefined,
-    elapsedDays: elapsed, totalDays, remainingDays: ach.remainingDays, monthKey: mKey, asOfDay: elapsed,
+    elapsedDays: elapsed, totalDays, remainingDays: ach.remainingDays, monthKey: mKey, asOfDay: elapsed, partialDay, todayKey,
     brandsByCh, brandNet, budgets
   });
   const cal = FHGrowth.promoCalendar(plans, { monthKey: mKey, totalDays, asOfDay: elapsed });
@@ -4806,9 +4930,18 @@ function alignLineBrands(lines) {
   lines.forEach(x => { const b = brandOf.get(x.orderId) || brandOf.get('up_' + x.orderId); if (b && x.brand !== b) x.brand = b; });
   return lines;
 }
+// 86 events: one per stock-out (deduped like mergeItemEvents), no sandbox
+// brand, and each event's cuisine taken from its brand's own orders, so the
+// shared cuisine filter narrows the 86 log the same way it narrows orders.
+function cleanItemEvents(items) {
+  const cuisineOf = new Map();
+  S.orders.forEach(o => { if (o.brand && o.cuisine && !cuisineOf.has(o.brand)) cuisineOf.set(o.brand, o.cuisine); });
+  return NZ.mergeItemEvents(items).map(x => ({ ...x, cuisine: cuisineOf.get(x.brand) || (x.cuisine && x.cuisine !== 'No Cluster' ? x.cuisine : NZ.inferCuisine(x.brand)) }));
+}
+
 function setData(orders, items, lineItems, source, label, opts = {}) {
   if (orders) S.orders = orders;
-  if (items) S.items = items;
+  if (items || orders) S.items = cleanItemEvents(items || S.items || []);
   if (lineItems) S.lineItems = lineItems;
   if (orders || lineItems) alignLineBrands(S.lineItems);
   S.source = source;
