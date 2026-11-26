@@ -23,12 +23,12 @@ FoodHive Operations & Sales Analytics Dashboard — an exact visual and function
   - Color palette: Primary Yellow (`#FDCB3C`), Dark Charcoal (`#1d1d1d`), Slate Line (`#d9dfe1`), Accent Blue (`#1b2a9b`).
 
 ## 6 Analytics Pages
-1. **Order Details / Sales (`#sales`)**: Net Sales, Receipt Total, Total Orders, Avg Orders / Day (orders ÷ days the kitchen traded; only date, Branch and Day Name narrow the days), AOV, Total Discount, Discount %, Avg RunRate, Projected RR, Top Brand.
-2. **Cancellations (`#cancel`)**: Cancelled Orders Amount, Total Cancelled Orders, AOV, Reasons, Channel breakdown, Post-cancelled split.
+1. **Order Details / Sales (`#sales`)**: Projected Month-End (`weekdayProjection`, also used by Targets) works from complete days only: base = complete days' net ÷ the sum of their weekday indexes (trailing 8 weeks), carried over the rest of today and the remaining days. Top Performing Brand always ranks by Net Sales. The day-of-week chart shows the average per day of each weekday, excluding today. Net Sales, Receipt Total, Total Orders, Avg Orders / Day (orders ÷ days the kitchen traded; only date, Branch and Day Name narrow the days), AOV, Total Discount, Discount %, Avg RunRate, Projected RR, Top Brand.
+2. **Cancellations (`#cancel`)**: Cancelled Orders Amount, Total Cancelled Orders, AOV, Reasons, Channel breakdown, Post-cancelled split. "Duplicated order" cancellations are left out of every figure unless the Reason filter picks them (`cancelFigures`). Cancel Rate divides by all orders for the same date, brand, branch and channel; the Reason and Post filters narrow the cancellations only. Amount, AOV and Refund are gross (VAT-inclusive); Reverted by Aggregator is net.
 3. **Prep Time (`#prep`)**: Acc → Started, Started → Prepared, Prepared → STD, STD → Dispatched, Receiving → Dispatched, Received → Delivered, Best vs Worst Brand Location. Interactive stage sliders.
-4. **Ratings (`#ratings`)**: Total Ratings, Negative Ratings, Positive Ratings, Negative Ratings %, Polarity Rate, Star distribution donut, DrillThrough.
+4. **Ratings (`#ratings`)**: Total Ratings, Negative Ratings, Positive Ratings, Negative Ratings %, Polarity Rate = (Positive − Negative) ÷ Total, Star distribution donut, DrillThrough.
 5. **Items Detail (`#items`)**: 86 Items, Brand with Most 86 Items, Location with Most 86 Items, Distribution by Source & Type.
-6. **Delayed Orders (`#delayed`)**: Orders taking > 10 min prep, Delayed orders %, Vendor Prep vs Estimated Prep times, Color-coded Delay table.
+6. **Delayed Orders (`#delayed`)**: an order is delayed when its prep runs more than 10 min (`DELAY_LIMIT`) past its estimated prep (`EST_DEFAULT` 15 min when the platform sends none). Avg Delay = minutes past that allowance over delayed orders only, on the tile and in the table. Motor City prep is Started → Prepared; Jaddaf has no Started time, so its prep is Accepted → Ready. Delayed orders %, Vendor Prep vs Estimated Prep times, Color-coded Delay table.
 
 ## Quick Start
 ```bash
@@ -72,6 +72,8 @@ http://localhost:3000
 - Targets are entered per month in Target Setup and kept per browser (localStorage `fh_targets_v1`, keyed `YYYY-MM`). Editing the company target auto-splits it across channels by last-30-day sales share, adjusted for commission (`FHGrowth.splitTarget`). Editing a channel locks it as Manual; "Re-split automatically" clears the locks.
 - The page defaults to next month. Before a month starts, figures are projections from the last 30 days (Planning mode). Once it starts, they are achieved to date against a pro-rated target.
 - Status (RAG): On track at 98% or more of the pro-rated target (or projection), At risk 90% to 98%, Off track below 90%.
+- While today is still trading, pace and the daily rate use complete days only (`achievement({ partialDay, todaySoFar })` in `public/growth.js`); today counts as a day still to come. Run-rates for planning use the last 30 complete days, each kitchen divided by the days it traded. Promotions are sized on the shortfall at the current pace (`shortfall`), not target minus sales to date. Auto-split sets unlocked channels with no recent sales to 0.
+- True Net Profit (Accounting) takes aggregator commission bills (talabat, Deliveroo, Careem, Keeta, Noon vendors, ex-VAT) back out of Zoho expenses, since Portal Commission already covers them (`aggregatorBillsInMonth`). Overdue bills and invoices exclude draft and void. Keeta's AED 6 minimum applies to the 25% commission; the 2% bank fee is on top.
 - Channel promotion plans (`FHGrowth.channelPlans`): per-channel stance (Push volume, Protect margin, Fix first, Balanced), promotions with budget caps and estimated uplift. Estimates only, built from stated assumptions.
 - Promotion calendar (`FHGrowth.promoCalendar`): Monday-start weeks for the remaining days of the month.
 - Company-wide actions (`FHGrowth.playbook`): cancellations, rating risk, and menu items. Logic is in `public/growth.js`; thresholds are in `CONFIG`.

@@ -59,20 +59,32 @@
   // ---------- target vs achievement ----------
   // Achieved is compared with the target pro-rated to today, so a month that
   // is 10/31 done with 10/31 of the target achieved reads as on pace.
-  function achievement({ achieved, target, elapsedDays, totalDays }) {
-    const expectedToDate = target * (elapsedDays / totalDays);
-    const remainingDays = Math.max(0, totalDays - elapsedDays);
+  // partialDay: the last elapsed day is today and still trading. Pace and the
+  // daily rate are then measured on complete days only (today's sales so far,
+  // todaySoFar, still count in achieved), and today counts as a day still to
+  // come. Counting a part-day as a full one read an on-pace month as At risk.
+  // projected may be passed in (the weekday-seasonal projection the Sales
+  // page uses) so both pages show the same month-end figure.
+  function achievement({ achieved, target, elapsedDays, totalDays, partialDay = false, todaySoFar = 0, projected: projectedIn }) {
+    const completeDays = Math.max(0, elapsedDays - (partialDay ? 1 : 0));
+    const achievedComplete = achieved - (partialDay ? todaySoFar : 0);
+    const expectedToDate = target * (completeDays / totalDays);
+    const remainingDays = Math.max(0, totalDays - completeDays);
     const gap = target - achieved;
     const pct = target > 0 ? achieved / target : null;
-    const paceRatio = expectedToDate > 0 ? achieved / expectedToDate : null;
-    const currentDaily = elapsedDays > 0 ? achieved / elapsedDays : 0;
-    const requiredDaily = remainingDays > 0 ? Math.max(0, gap) / remainingDays : 0;
-    const projected = currentDaily * totalDays;
+    const paceRatio = expectedToDate > 0 ? achievedComplete / expectedToDate : null;
+    const currentDaily = completeDays > 0 ? achievedComplete / completeDays : 0;
+    const requiredDaily = remainingDays > 0 ? Math.max(0, target - achievedComplete) / remainingDays : 0;
+    const flatProjected = achievedComplete + (partialDay ? Math.max(todaySoFar, currentDaily) : 0) + currentDaily * Math.max(0, totalDays - elapsedDays);
+    const projected = projectedIn != null ? projectedIn : flatProjected;
+    // What the month will still miss at the current pace: the part promotions
+    // need to close (the gap to date also holds sales the run-rate brings in).
+    const shortfall = Math.max(0, target - projected);
     let rag = 'none';
     if (target > 0 && paceRatio != null) {
       rag = paceRatio >= CONFIG.ragOnTrack ? 'on' : paceRatio >= CONFIG.ragAtRisk ? 'risk' : 'off';
     }
-    return { target, achieved, pct, gap, expectedToDate, paceRatio, currentDaily, requiredDaily, projected, remainingDays, rag };
+    return { target, achieved, pct, gap, shortfall, expectedToDate, paceRatio, currentDaily, requiredDaily, projected, remainingDays, completeDays, rag };
   }
 
   // Projected RAG for a month that has not started (no pace to measure).
@@ -198,6 +210,9 @@
   function channelPlans(ctx) {
     const hist = ctx.history || [];
     const baseline = channelProfile(hist, CONFIG.statsDays);
+    // Days the history actually covers (complete days with orders), so per-day
+    // rates aren't understated when the window holds fewer than 30 days.
+    const histDays = new Set(hist.map(r => r.key)).size || CONFIG.statsDays;
     const companyDisc = baseline.discPct;
     const companyCancel = baseline.cancelRate;
 
@@ -222,10 +237,15 @@
       const planning = !!ctx.forecast;
       const monthLive = (ctx.monthRows || []).filter(r => r.channel === ch && !r.cancelled);
       const achieved = planning ? (ctx.forecast[ch] || 0) : sumBy(monthLive, r => r.netSales);
-      const ach = achievement({ achieved, target: t.sales || 0, elapsedDays: ctx.elapsedDays, totalDays: ctx.totalDays });
+      const todaySoFar = ctx.partialDay ? sumBy(monthLive.filter(r => r.key === ctx.todayKey), r => r.netSales) : 0;
+      const ach = achievement({ achieved, target: t.sales || 0, elapsedDays: ctx.elapsedDays, totalDays: ctx.totalDays, partialDay: !planning && !!ctx.partialDay, todaySoFar });
+      // The amount promotions have to close. Planning: target minus forecast.
+      // In progress: target minus the projection at the current pace, not
+      // minus sales to date (that also holds sales the run-rate will bring).
+      const need = planning ? Math.max(0, ach.gap) : ach.shortfall;
       const c = (ctx.commissionRates || {})[ch] || 0;
       const aov = prof.aov;
-      const perDayWindow = CONFIG.statsDays;
+      const perDayWindow = histDays;
 
       const cancelFlag = prof.cancelRate >= Math.max(CONFIG.cancelFlagMin, companyCancel * CONFIG.cancelFlagMultiple);
       let stance = 'Balanced';
@@ -279,25 +299,25 @@
       }
 
       // 4. Visibility push for a behind-pace channel with a low commission.
-      if (ach.gap > 0 && c > 0 && c <= 0.25 && stance !== 'Fix first') {
+      if (need > 0 && c > 0 && c <= 0.25 && stance !== 'Fix first') {
         const peak = prof.dowAvg.indexOf(Math.max(...prof.dowAvg));
         promos.push({
           title: 'Sponsored placement on the channel\'s peak days',
           mechanic: 'Boost visibility only where orders already come in',
           when: peak >= 0 ? DOW[peak] + ' and busiest days' : 'Peak days', effort: 'Medium',
-          uplift: ach.gap * CONFIG.channelCapture, counts: true,
-          assumption: `${CONFIG.channelCapture * 100}% of the AED ${round(ach.gap)} gap recovered`
+          uplift: need * CONFIG.channelCapture, counts: true,
+          assumption: `${CONFIG.channelCapture * 100}% of the AED ${round(need)} gap recovered`
         });
       }
 
       // 5. Self-pickup steer for 0%-commission channels.
-      if (ach.gap > 0 && c === 0) {
+      if (need > 0 && c === 0) {
         promos.push({
           title: 'Self-pickup incentive and reorder offer',
           mechanic: 'Reward pickup and repeat orders; no platform commission applies',
           when: 'All days', effort: 'Medium',
-          uplift: ach.gap * CONFIG.channelCapture, counts: true,
-          assumption: `${CONFIG.channelCapture * 100}% of the AED ${round(ach.gap)} gap recovered`
+          uplift: need * CONFIG.channelCapture, counts: true,
+          assumption: `${CONFIG.channelCapture * 100}% of the AED ${round(need)} gap recovered`
         });
       }
 
@@ -324,9 +344,9 @@
           title: `Add ${missingBrands.length} top-selling brands`,
           mechanic: 'Bring brands that sell well on other channels onto this one',
           when: 'All days', effort: 'High',
-          uplift: missingBrands.length * avgNetPerBrand * (remaining / CONFIG.statsDays) * CONFIG.assortmentRamp,
+          uplift: missingBrands.length * avgNetPerBrand * (remaining / histDays) * CONFIG.assortmentRamp,
           counts: true,
-          assumption: `${missingBrands.length} brands x channel average net per brand AED ${round(avgNetPerBrand)} x ${remaining}/${CONFIG.statsDays} of a month x ${CONFIG.assortmentRamp * 100}% month-one ramp (assumption)`
+          assumption: `${missingBrands.length} brands x channel average net per brand AED ${round(avgNetPerBrand)} x ${remaining}/${histDays} days of history x ${CONFIG.assortmentRamp * 100}% month-one ramp (assumption)`
         });
       }
 
@@ -334,7 +354,7 @@
       const shownAll = promos.sort((a, b) => b.uplift - a.uplift).slice(0, 5)
         .map(p => ({ ...p, uplift: round(p.uplift), budget: p.counts && p.uplift > 0 ? round(p.uplift * (1 - c) * CONFIG.promoBudgetShare) : 0 }));
       // Counted uplift never exceeds the channel gap: scale all promotions down together first.
-      const gapNow = Math.max(0, ach.gap);
+      const gapNow = need;
       const countedRaw = sumBy(shownAll.filter(p => p.counts), p => p.uplift);
       const gapCap = gapNow > 0 && countedRaw > gapNow ? gapNow / countedRaw : 1;
       const baseShown = shownAll.map(p => ({ ...p, uplift: round(p.uplift * gapCap, 2), budget: round(p.budget * gapCap, 2) }));
@@ -347,7 +367,7 @@
       const promoBudget = sumBy(shown, p => p.budget);
       const effBudget = override > 0 ? override : autoBudget;
       const aboveCap = override > 0 && override > autoBudget;
-      const gap = Math.max(0, ach.gap);
+      const gap = need;
       const campaign = campaignBrief({ channel: ch, stance, cancelFlag, gap, commissionPct: round(c * 100, 1), budget: round(effBudget), uplift: round(uplift) },
         reqByCh[ch] || { aovVsCompany: 0, orderSharePct: 100, discountGapPts: 0, brandRatio: 1, peakHours: [], weakDay: '–', floorSharePct: 0, p75Basket: 0 },
         { missingBrands, companyDisc, aboveCap, autoBudget: round(autoBudget) });

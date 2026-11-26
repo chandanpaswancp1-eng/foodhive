@@ -268,7 +268,8 @@ async function syncOnceInner() {
   // 'partially_paid' once any payment lands, even if it's still outstanding
   // and past due, so a status==='overdue' filter alone silently drops those
   // records.
-  const isOverdue = x => (+x.balance || 0) > 0 && x.due_date && x.due_date < toDate;
+  // Drafts and voids are not yet (or no longer) owed, so never overdue -- same rule as Total Procurement.
+  const isOverdue = x => (+x.balance || 0) > 0 && x.due_date && x.due_date < toDate && x.status !== 'draft' && x.status !== 'void';
   const overdueInvoices = allInvoices.filter(isOverdue);
   const overdueBills = allBills.filter(isOverdue);
 

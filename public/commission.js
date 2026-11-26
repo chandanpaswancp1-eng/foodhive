@@ -24,7 +24,8 @@
    - Each contract's always-on payment/processing fee is folded into one
      blended rate per channel, since orders have no reliable card-type/COD
      split to apply it selectively.
-   - Keeta's AED 6/order minimum fee is applied as a floor, uncapped: a
+   - Keeta's AED 6/order minimum applies to the 25% commission, with the 2%
+     bank fee added on top (net 15: max(3.75, 6) + 0.30 = 6.30). It is a floor, uncapped: a
      per-order minimum is owed in full even on a small order where it
      exceeds that order's own net sales (e.g. AED 6 owed on a AED 3 order)
      - that's how contractual per-order minimums work, not a reason to
@@ -88,7 +89,8 @@
     'Deliveroo': { tiers: DELIVEROO_TIERS },
     'Careem': { rate: 0.3045 },
     'Noon': { rate: 0.22 },
-    'Keeta 2.0': { rate: 0.25 + 0.02, minFee: 6 }
+    // AED 6 is the minimum for the 25% commission; the 2% bank fee is charged on top.
+    'Keeta 2.0': { rate: 0.25, feeRate: 0.02, minFee: 6 }
   };
 
   function rateForChannel(channel, atMs) {
@@ -99,7 +101,7 @@
       const t = cfg.tiers.find(t => dubaiMs >= t.from && dubaiMs < t.to);
       return t ? t.rate : 0;
     }
-    return cfg.rate || 0;
+    return (cfg.rate || 0) + (cfg.feeRate || 0);
   }
 
   function minFeeForChannel(channel) {
@@ -112,8 +114,11 @@
     if (net <= 0) return 0;
     const rate = rateForChannel(order.channel, order.receivedAt);
     if (rate <= 0) return 0;
-    const raw = rate * net;
-    return Math.max(raw, minFeeForChannel(order.channel));
+    const cfg = CHANNEL_RATES[order.channel] || {};
+    // A per-order minimum floors the commission part only; a separate
+    // processing/bank fee (feeRate) is charged on top of it, not inside it.
+    const feeRate = cfg.feeRate || 0;
+    return Math.max((rate - feeRate) * net, minFeeForChannel(order.channel)) + feeRate * net;
   }
 
   function ebitda(netSales, commission, otherCosts) {
@@ -127,7 +132,7 @@
     { channel: 'Deliveroo', structure: 'Core Services Fee on GMV: 0% → 10% (23 Sep 2026) → 28% (24 Oct 2026)', note: 'Platform Fee AED 50/site/mo from 1 Dec 2026 (not applied, outside current data window)', verified: '2026-10-11 — Stamped/signed Service Pack contract (dates corrected this pass)' },
     { channel: 'Careem', structure: '30.45% all-in (user rate sheet, 2026-11-03); contract lists 23% Standard Commission + 2% Processing Fee', note: 'Careem Plus AED 3/order (not applied, loyalty flag not tracked); 4%/mo Marketing Commitment is merchant ad spend, excluded entirely', verified: '2026-11-03 — rate sheet from user; Restaurant Enrollment Agreement on file (2026-10-11)' },
     { channel: 'Noon', structure: '22% all-in (user rate sheet, 2026-11-03); contract lists 19% Noon Food Fee + 2% Payment Processing Fee', note: 'noon one loyalty AED 3/order (not applied, loyalty flag not tracked); 2.8%/3.4% intl/Amex card variance not tracked', verified: '2026-11-03 — rate sheet from user; Noon Food Merchant Agreement + Annex on file (2026-10-11)' },
-    { channel: 'Keeta 2.0', structure: '25% Commission Rate + 2% Bank Fee Rate = 27%, AED 6/order minimum', note: 'AED 500/device one-time POS fee not applied (fixed overhead); AED 4 merchant-funded delivery subsidy (orders >= AED 25) not applied', verified: '2026-11-03 — re-read Merchant Agreement No. AEWM-SE-E3-20028083 (rate unchanged)' },
+    { channel: 'Keeta 2.0', structure: '25% Commission Rate (AED 6/order minimum) + 2% Bank Fee Rate on top = 27%', note: 'AED 500/device one-time POS fee not applied (fixed overhead); AED 4 merchant-funded delivery subsidy (orders >= AED 25) not applied', verified: '2026-11-03 — re-read Merchant Agreement No. AEWM-SE-E3-20028083 (rate unchanged)' },
     { channel: 'Take Away / Direct', structure: '0% — no aggregator', note: 'Pickup, Dine in, and any other non-aggregator channel default to 0%', verified: 'n/a — no contract (no aggregator involved)' }
   ];
 

@@ -967,7 +967,8 @@ async function syncZoho() {
     // and past due, so a status==='overdue' filter alone silently drops those
     // records.
     const todayKey = today();
-    const isOverdue = x => (+x.balance || 0) > 0 && x.due_date && x.due_date < todayKey;
+    // Drafts and voids are not yet (or no longer) owed, so never overdue.
+    const isOverdue = x => (+x.balance || 0) > 0 && x.due_date && x.due_date < todayKey && x.status !== 'draft' && x.status !== 'void';
     const overdueInvoices = allInvoices.filter(isOverdue);
     const overdueBills = allBills.filter(isOverdue);
 
