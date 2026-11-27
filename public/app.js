@@ -4940,7 +4940,12 @@ function cleanItemEvents(items) {
 }
 
 function setData(orders, items, lineItems, source, label, opts = {}) {
-  if (orders) S.orders = orders;
+  if (orders) {
+    // Orders keep the cuisine worked out at sync. Re-infer the ones saved as
+    // unclassified so a rule fix shows at once, without waiting for a resync.
+    orders.forEach(o => { if (!o.cuisine || o.cuisine === 'Other' || o.cuisine === 'No Cluster' || o.cuisine === '(Blank)') o.cuisine = NZ.inferCuisine(o.brand, o.cuisine); });
+    S.orders = orders;
+  }
   if (items || orders) S.items = cleanItemEvents(items || S.items || []);
   if (lineItems) S.lineItems = lineItems;
   if (orders || lineItems) alignLineBrands(S.lineItems);
