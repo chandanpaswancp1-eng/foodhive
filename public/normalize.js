@@ -98,6 +98,7 @@
     'theburgercompany': 'American / Fried', 'simplyburgers': 'American / Fried', 'thekrispyburger': 'American / Fried',
     'thecheeseburgerkitchen': 'American / Fried', 'thecheeseburgerco': 'American / Fried', 'burgero': 'American / Fried',
     'burgerhq': 'American / Fried', 'burgercom': 'American / Fried', 'naughtybird': 'American / Fried',
+    'smashstack': 'American / Fried',
     'healthy': 'Healthy', 'healthfull': 'Healthy', 'acaiboost': 'Healthy', 'acailuv': 'Healthy',
     'fitgrillhouse': 'Healthy', 'grillproteinbowls': 'Healthy', 'grillbeastchicken': 'Healthy', 'grillflexco': 'Healthy',
     'musclegrillgreens': 'Healthy', 'muscleproteinco': 'Healthy', 'proteinflex': 'Healthy', 'purelyhealthybowls': 'Healthy',
@@ -113,7 +114,10 @@
     for (const k in BRAND_CUISINES) {
       if (bk.includes(k) || k.includes(bk)) return BRAND_CUISINES[k];
     }
-    if (/manak|manoosh|fatay|levant|falafel|shawarma|zaatar|arabic|leban/i.test(brand)) return 'Levantine';
+    // Levantine bakeries: manakeesh / mankousha / manoushe, fatayer / fateera,
+    // and "furn" (bakery) brands like Furn Al-Dar. Mankousha, Manoushe Oven,
+    // Furn Al-Dar and Furn Al-Hajar used to fall through to 'Other'.
+    if (/manak|mank|manoosh|manoush|fatay|fatee|furn|levant|falafel|shawarma|zaatar|zaat|arabic|leban/i.test(brand)) return 'Levantine';
     if (/pizza|pasta|italian|lasag/i.test(brand)) return 'Italian';
     if (/burger|fry|fried|chicken|crispy|wings/i.test(brand)) return 'American / Fried';
     if (/health|diet|grill|salad|protein|macro|vital|acai/i.test(brand)) return 'Healthy';
